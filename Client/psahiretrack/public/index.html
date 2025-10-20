@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" href="%PUBLIC_URL%/System.ico" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#000000" />
+    <meta
+      name="description"
+      content="PSA Kalinga Hired Tracking System"
+    />
+    <link rel="apple-touch-icon" href="%PUBLIC_URL%/logo192.png" />
+    <link rel="manifest" href="%PUBLIC_URL%/manifest.json" />
+
+    <title>PSA HireTrack</title>
+  </head>
+  <body>
+    <script>
+      (function () {
+        function applyTheme(dark) {
+          if (dark) {
+            document.documentElement.classList.add("dark");
+            document.body.style.backgroundColor = "#111827"; // Tailwind gray-900
+          } else {
+            document.documentElement.classList.remove("dark");
+            document.body.style.backgroundColor = "#ffffff";
+          }
+        }
+
+        // 1️⃣ Initial load
+        try {
+          const isDarkMode = window.electronAPI?.initialDarkMode;
+          const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+          const dark = isDarkMode === true || (isDarkMode == null && prefersDark);
+          applyTheme(dark);
+        } catch (e) {
+          console.error("Failed to set initial theme", e);
+          if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
+            applyTheme(true);
+          }
+        }
+
+        // 2️⃣ Live updates from Electron
+        try {
+          window.electronAPI?.onDarkModeChange((dark) => {
+            applyTheme(dark);
+          });
+        } catch (e) {
+          console.warn("Dark mode change listener not available", e);
+        }
+      })();
+    </script>
+
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <div id="root"></div>
+  </body>
+</html>

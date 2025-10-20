@@ -1,0 +1,8 @@
+node_modules/
+Client/node_modules/
+Client/psahiretrack/node_modules/
+Client/psahiretrack/build/
+Server/node_modules/
+installer.nsi
+server.exe
+.env

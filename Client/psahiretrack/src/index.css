@@ -1,0 +1,47 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Add this to your global CSS file, like index.css */
+
+/* For Webkit-based browsers (Chrome, Safari, Edge) */
+::-webkit-scrollbar {
+  width: 8px; /* Width of the entire scrollbar */
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1; /* Color of the tracking area */
+}
+
+/* First, hide the default browser outline on all elements */
+*:focus {
+  outline: none;
+}
+
+/* * 1. DEFAULT (LIGHT MODE) STYLE
+ * This applies a custom blue outline for keyboard navigation.
+ */
+*:focus-visible {
+  outline: 3px solid #60A5FA; /* A nice, visible blue for light mode */
+  outline-offset: 2px;
+  border-radius: 0.375rem;
+  /* Add a transition for a smoother effect */
+  transition: outline-color 0.2s ease-in-out;
+}
+
+/* * 2. DARK MODE OVERRIDE
+ * When the '.dark' class is present on a parent element,
+ * this changes the outline to a lighter color for better contrast.
+ */
+.dark *:focus-visible {
+  outline-color: #A5B4FC; /* A lighter, softer indigo for dark mode */
+}
+
+::-webkit-scrollbar-thumb {
+  background: #a8a8a8; /* Color of the scroll thumb */
+  border-radius: 6px; /* Roundness of the scroll thumb */
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #888; /* Color of the scroll thumb on hover */
+}
