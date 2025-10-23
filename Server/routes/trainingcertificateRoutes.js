@@ -4,6 +4,7 @@ const PDFDocument = require('pdfkit');
 const path = require('path');
 const archiver = require('archiver');
 const stream = require('stream');
+require('dotenv').config();
 
 // Correctly import your database pool from your db.js file
 // Note: You may need to adjust this path based on your folder structure
@@ -128,10 +129,31 @@ doc.text(givenDateText, { align: 'center' });
 const signatureY = doc.page.height - 200;
 const leftMargin = 72;
 const writableWidth = doc.page.width - (leftMargin * 2);
+
+// Watermark text
+doc.save();
+doc.fillOpacity(0.05);
+doc.fontSize(52);
+doc.font(timesBold);
+
+// Rotate and position the watermark
+doc.translate(doc.page.width / 2, doc.page.height / 2);
+doc.rotate(-45);
+doc.text('PSA OFFICIAL DOCUMENT', -doc.page.width/2, -20, {
+  align: 'center',
+  width: doc.page.width
+});
+
+// Reset transformations and opacity
+doc.restore();
+doc.fillOpacity(1);
+
 doc.font(timesBold).fontSize(22).text('MARIBEL M. DALAYDAY', leftMargin, signatureY, { width: writableWidth, align: 'center' });
+
 const sigLineWidth = 260;
 const sigLineX = (doc.page.width - sigLineWidth) / 2;
 doc.moveTo(sigLineX, signatureY + 25).lineTo(sigLineX + sigLineWidth, signatureY + 25).stroke();
+
 doc.font(timesRoman).fontSize(14).text('Chief Statistical Specialist', leftMargin, signatureY + 30, { width: writableWidth, align: 'center' });
 };
 
@@ -144,7 +166,26 @@ const data = req.body;
 if (data.type !== 'Training') {
  return res.status(400).send('This endpoint only supports Training certificates.');
 }
-const doc = new PDFDocument({ size: 'A4', margin: 72 });
+const doc = new PDFDocument({
+  size: 'A4',
+  margin: 72,
+  ownerPassword: process.env.PDF_OWNER_PASSWORD,
+  pdfVersion: '1.7ext3',
+  encryption: {
+    v: 4,
+    r: 4,
+    length: 128
+  },
+  permissions: {
+    printing: 'highResolution',
+    modifying: false,
+    copying: false,
+    annotating: false,
+    fillingForms: false,
+    contentAccessibility: false,
+    documentAssembly: false
+  }
+});
 res.setHeader('Content-Type', 'application/pdf');
 res.setHeader('Content-Disposition', `attachment; filename="Certificate-${data.name}.pdf"`);
 doc.pipe(res);
@@ -158,7 +199,26 @@ router.post('/generate-batch-training-certificate', (req, res) => {
     if (!trainings || !Array.isArray(trainings) || trainings.length === 0) {
       return res.status(400).send('No training data provided for batch generation.');
     }
-    const doc = new PDFDocument({ size: 'A4', margin: 72 });
+    const doc = new PDFDocument({
+      size: 'A4',
+      margin: 72,
+      ownerPassword: process.env.PDF_OWNER_PASSWORD,
+      pdfVersion: '1.7ext3',
+      encryption: {
+        v: 4,
+        r: 4,
+        length: 128
+      },
+      permissions: {
+        printing: 'highResolution',
+        modifying: false,
+        copying: false,
+        annotating: false,
+        fillingForms: false,
+        contentAccessibility: false,
+        documentAssembly: false
+      }
+    });
     const safeName = (name || 'employee').replace(/[<>:"/\\|?*]+/g, "_");
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="Batch-Training-Certificates-${safeName}.pdf"`);
@@ -212,7 +272,26 @@ router.post('/generate-certificates-by-training', async (req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename="Certificates by Training-${safeTitle}.pdf"`);
 
     // STEP 3: Create ONE PDF document that will contain all pages.
-    const doc = new PDFDocument({ size: 'A4', margin: 72 });
+    const doc = new PDFDocument({
+      size: 'A4',
+      margin: 72,
+      ownerPassword: process.env.PDF_OWNER_PASSWORD,
+      pdfVersion: '1.7ext3',
+      encryption: {
+        v: 4,
+        r: 4,
+        length: 128
+      },
+      permissions: {
+        printing: 'highResolution',
+        modifying: false,
+        copying: false,
+        annotating: false,
+        fillingForms: false,
+        contentAccessibility: false,
+        documentAssembly: false
+      }
+    });
     doc.pipe(res); // Pipe the document directly to the response.
 
     // STEP 4: Loop through each participant and add their certificate to the document.

@@ -3,6 +3,7 @@ Client/node_modules/
 Client/psahiretrack/node_modules/
 Client/psahiretrack/build/
 Server/node_modules/
+Server/mariadb/
 installer.nsi
 server.exe
 .env

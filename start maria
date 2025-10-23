@@ -1,0 +1,1 @@
+.\mariadbd.exe --defaults-file="C:\Users\admin\Desktop\PSA-HireTrack\Server\mariadb\data\my.ini" --console
