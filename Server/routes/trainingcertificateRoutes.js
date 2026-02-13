@@ -224,7 +224,11 @@ router.post('/generate-batch-training-certificate', (req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename="Batch-Training-Certificates-${safeName}.pdf"`);
     doc.pipe(res);
     trainings.forEach((training, index) => {
-      const certificateData = { name: name, ...training };
+      const certificateData = { 
+        name: name, 
+        ...training,
+        thours: training.hours || training.thours
+      };
       drawCertificate(doc, certificateData);
       if (index < trainings.length - 1) {
         doc.addPage();

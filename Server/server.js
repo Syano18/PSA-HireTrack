@@ -14,7 +14,6 @@ app.use(express.json({ limit: '10mb' }));
 
 // --- IMPORT ROUTE FILES ---
 const authRoutes = require('./routes/auth');
-const userRoutes = require('./routes/users');
 const locationRoutes = require('./routes/locations');
 const employeeRoutes = require('./routes/employees');
 const trainingRoutes = require('./routes/trainings');
@@ -30,7 +29,6 @@ const databaseRoutes = require('./routes/database');
 
 // --- USE ROUTES ---
 app.use('/api', authRoutes);
-app.use('/api/users', userRoutes);
 app.use('/api', locationRoutes);
 app.use('/api/employees', employeeRoutes);
 app.use('/api/trainings', trainingRoutes);
