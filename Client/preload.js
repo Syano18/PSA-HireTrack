@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setLoginState: (state) => ipcRenderer.invoke('set-login-state', state),
   clearLoginState: () => ipcRenderer.invoke('clear-login-state'),
   login: (credentials) => ipcRenderer.invoke('login', credentials),
+  fetchUserDetails: (email) => ipcRenderer.invoke('fetch-user-details', email),
 
   // ADD THIS LINE
   handleSessionExpired: () => ipcRenderer.invoke('session-expired'),

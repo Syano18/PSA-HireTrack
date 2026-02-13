@@ -4,13 +4,12 @@ import { FiPlus } from 'react-icons/fi';
 import { parseISO, format } from 'date-fns';
 import ProgressModal from '../components/Progress';
 import { apiFetch } from '../components/API';
-import { useSettings } from '../context/SettingsContext'; // 1. IMPORT THE HOOK
+import { useSettings } from '../context/SettingsContext';
 
-// Helper function to calculate age
 const calculateAge = (dobString) => {
   if (!dobString) return 'N/A';
   try {
-    const birthDate = parseISO(dobString); // Use parseISO
+    const birthDate = parseISO(dobString);
     const today = new Date();
     let age = today.getFullYear() - birthDate.getFullYear();
     const m = today.getMonth() - birthDate.getMonth();
@@ -23,7 +22,6 @@ const calculateAge = (dobString) => {
   }
 };
 
-// Custom hook to handle clicks outside a specified element
 const useClickOutside = (ref, handler) => {
   useEffect(() => {
     const listener = (event) => {
@@ -39,7 +37,6 @@ const useClickOutside = (ref, handler) => {
   }, [ref, handler]);
 };
 
-// Helper function for CSV parsing
 const parseCSV = (text) => {
   const lines = text.split(/\r\n|\n/).filter(line => line.trim() !== '');
   if (lines.length < 2) return [];
@@ -60,7 +57,6 @@ const parseCSV = (text) => {
   return data;
 };
 
-// Helper function for date formatting
 const formatDateForExport = (dateString) => {
   if (!dateString) return '';
   try {
@@ -71,7 +67,6 @@ const formatDateForExport = (dateString) => {
   }
 };
 
-// Initial state for the employee form
 const initialFormState = {
   employee_id: '',
   first_name: '',
@@ -89,8 +84,7 @@ const initialFormState = {
 };
 
 const Employees = () => {
-  // --- STATE MANAGEMENT ---
-  const { serverIp, isLoading: isSettingsLoading } = useSettings(); // 2. USE THE HOOK
+  const { serverIp, isLoading: isSettingsLoading } = useSettings();
   const [employees, setEmployees] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -140,30 +134,29 @@ const Employees = () => {
       setCsvData([]);
   }, []);
 
-  // --- DATA FETCHING & EFFECTS ---
   const fetchEmployees = useCallback(async () => {
-    if (!serverIp) return; // Wait for serverIp
+    if (!serverIp) return;
     setIsLoading(true);
     try {
-      const data = await apiFetch('employees', serverIp); // 3. PASS serverIp
+      const data = await apiFetch('employees', serverIp);
       setEmployees(data);
     } catch (err) {
       setError(err.message);
     } finally {
       setIsLoading(false);
     }
-  }, [serverIp]); // 4. ADD serverIp dependency
+  }, [serverIp]);
 
   const fetchMunicipalities = useCallback(async () => {
-    if (!serverIp) return; // Wait for serverIp
+    if (!serverIp) return;
     try {
-      const data = await apiFetch('municipalities', serverIp); // 3. PASS serverIp
+      const data = await apiFetch('municipalities', serverIp);
       setMunicipalities(data);
     } catch (err) {
       console.error("Failed to fetch municipalities:", err);
       setError("Could not load location data.");
     }
-  }, [serverIp]); // 4. ADD serverIp dependency
+  }, [serverIp]);
 
   useEffect(() => {
     const getSession = async () => {
@@ -187,7 +180,6 @@ const Employees = () => {
   }, []);
 
   useEffect(() => {
-    // 5. UPDATE data fetch trigger
     if (sessionState && !isSettingsLoading) { 
       fetchEmployees();
       fetchMunicipalities();
@@ -195,10 +187,10 @@ const Employees = () => {
   }, [sessionState, isSettingsLoading, fetchEmployees, fetchMunicipalities]);
   
   useEffect(() => {
-    if (selectedMunicipalityId && serverIp) { // Check for serverIp
+    if (selectedMunicipalityId && serverIp) {
       const fetchBarangays = async () => {
         try {
-          const data = await apiFetch(`barangays/${selectedMunicipalityId}`, serverIp); // 3. PASS serverIp
+          const data = await apiFetch(`barangays/${selectedMunicipalityId}`, serverIp);
           setBarangays(data);
         } catch (err) {
           console.error("Failed to fetch barangays for form:", err);
@@ -208,7 +200,7 @@ const Employees = () => {
     } else {
       setBarangays([]);
     }
-  }, [selectedMunicipalityId, serverIp]); // 4. ADD serverIp dependency
+  }, [selectedMunicipalityId, serverIp]);
 
   const employeesWithAge = useMemo(() => {
     return employees.map(emp => ({
@@ -265,8 +257,6 @@ const Employees = () => {
   const indexOfFirstItem = indexOfLastItem - rowsPerPage;
   const currentItems = sortedEmployees.slice(indexOfFirstItem, indexOfLastItem);
   
-  // --- HANDLER FUNCTIONS ---
-  // 6. UPDATE initial loading condition
   if (!sessionState || isLoading || isSettingsLoading) { 
     return (
       <div className="p-4 sm:p-6 lg:p-8">
@@ -479,7 +469,7 @@ const Employees = () => {
   const confirmDelete = async () => {
     if (!employeeToDelete || !sessionState) return;
     try {
-      await apiFetch(`employees/${employeeToDelete.id}`, serverIp, { // 3. PASS serverIp
+      await apiFetch(`employees/${employeeToDelete.id}`, serverIp, {
         method: 'DELETE',
         body: JSON.stringify({ actingUserId: sessionState.user.id })
       });
@@ -505,7 +495,7 @@ const Employees = () => {
     const body = { ...formData, actingUserId: sessionState?.user?.id };
 
     try {
-      await apiFetch(endpoint, serverIp, { // 3. PASS serverIp
+      await apiFetch(endpoint, serverIp, {
         method,
         body: JSON.stringify(body)
       });
@@ -561,7 +551,6 @@ const Employees = () => {
     handleCsvDownload(csvContent, fileName);
   };
 
-  // --- RENDER LOGIC ---
   return (
     <div>
       <div className="flex items-center justify-between mb-4">

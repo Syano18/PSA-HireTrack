@@ -4,9 +4,8 @@ import { parseISO, format } from 'date-fns';
 import { FaSort, FaSortUp, FaSortDown } from 'react-icons/fa';
 import ProgressModal from '../components/Progress';
 import { apiFetch } from '../components/API';
-import { useSettings } from '../context/SettingsContext'; // 1. IMPORT THE HOOK
+import { useSettings } from '../context/SettingsContext';
 
-// --- Constants & Helpers ---
 const INITIAL_FORM_STATE = { employee_id: '', training_title_id: '', start_date: '', end_date: '', hours: '', venue: '' };
 const MANAGABLE_ROLES = ['Super_Admin', 'Admin', 'PACD'];
 
@@ -47,10 +46,85 @@ const formatDateForInput = (dateString) => {
     }
 };
 
-// --- Component Definition ---
+const SearchableDropdown = ({ options, value, onChange, placeholder, id, required, disabled = false }) => {
+    const [isOpen, setIsOpen] = useState(false);
+    const [searchTerm, setSearchTerm] = useState('');
+    const dropdownRef = useRef(null);
+  
+    useClickOutside(dropdownRef, () => setIsOpen(false));
+  
+    const selectedOption = useMemo(() => {
+      return options.find((option) => option.value === value) || null;
+    }, [options, value]);
+  
+    const filteredOptions = useMemo(
+      () =>
+        options.filter((option) =>
+          option.label.toLowerCase().includes(searchTerm.toLowerCase())
+        ),
+      [options, searchTerm]
+    );
+  
+    const displayValue = isOpen ? searchTerm : selectedOption?.label || '';
+  
+    const handleSelectOption = (option) => {
+      onChange(option.value);
+      setSearchTerm(option.label);
+      setIsOpen(false);
+    };
+  
+    return (
+      <div className="relative" ref={dropdownRef}>
+        <input
+          id={id}
+          type="text"
+          className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100 dark:disabled:bg-gray-700/50"
+          value={displayValue}
+          onChange={(e) => {
+            if (disabled) return;
+            setSearchTerm(e.target.value);
+            if (!isOpen) setIsOpen(true);
+          }}
+          onFocus={() => {
+            if (disabled) return;
+            setIsOpen(true);
+            setSearchTerm('');
+          }}
+          placeholder={placeholder}
+          required={required && !value}
+          disabled={disabled}
+        />
+  
+        {isOpen && !disabled && (
+          <div className="absolute z-10 mt-1 w-full rounded-md border border-gray-300 bg-white shadow-lg dark:bg-gray-700">
+            {filteredOptions.length > 0 ? (
+              <ul className="max-h-60 overflow-y-auto">
+                {filteredOptions.map((option) => (
+                  <li
+                    key={option.value}
+                    className={`cursor-pointer px-4 py-2 text-gray-800 dark:text-gray-200 hover:bg-blue-500 hover:text-white ${
+                      option.value === value ? 'bg-blue-100 dark:bg-blue-600' : ''
+                    }`}
+                    onClick={() => handleSelectOption(option)}
+                  >
+                    {option.label}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <div className="px-4 py-2 text-gray-500 dark:text-gray-400">
+                No options found.
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+
 const Trainings = () => {
-    // --- State Management ---
-    const { serverIp, isLoading: isSettingsLoading } = useSettings(); // 2. USE THE HOOK
+    const { serverIp, isLoading: isSettingsLoading } = useSettings();
     const [trainings, setTrainings] = useState([]);
     const [employees, setEmployees] = useState([]);
     const [trainingTitles, setTrainingTitles] = useState([]);
@@ -101,13 +175,13 @@ const Trainings = () => {
     }, []);
 
     const fetchData = useCallback(async () => {
-        if (!serverIp || !sessionState) return; // Wait for serverIp and session
+        if (!serverIp || !sessionState) return;
         setIsLoading(true);
         setError(null);
         try {
-            const requests = [apiFetch('trainings', serverIp)]; // 3. PASS serverIp
+            const requests = [apiFetch('trainings', serverIp)];
             if (MANAGABLE_ROLES.includes(sessionState.user.role)) {
-                requests.push(apiFetch('employees', serverIp), apiFetch('trainings/titles', serverIp)); // 3. PASS serverIp
+                requests.push(apiFetch('employees', serverIp), apiFetch('trainings/titles', serverIp));
             }
 
             const [trainingsData, employeesData, titlesData] = await Promise.all(requests);
@@ -121,7 +195,7 @@ const Trainings = () => {
         } finally {
             setIsLoading(false);
         }
-    }, [sessionState, serverIp]); // 4. ADD serverIp dependency
+    }, [sessionState, serverIp]);
 
     useEffect(() => {
         const getSession = async () => {
@@ -141,7 +215,6 @@ const Trainings = () => {
     }, []);
 
     useEffect(() => {
-        // 5. UPDATE data fetch trigger
         if (sessionState && !isSettingsLoading) {
             fetchData();
         }
@@ -180,7 +253,20 @@ const Trainings = () => {
         return processedData;
     }, [trainings, filters.query, sortConfig]);
 
-    // 6. UPDATE initial loading condition
+    const employeeOptions = useMemo(() =>
+        employees.map(emp => ({
+            value: emp.id,
+            label: `${emp.first_name} ${emp.middle_initial || ''} ${emp.last_name} ${emp.suffix || ''}`.replace(/\s+/g, ' ').trim()
+        })).sort((a, b) => a.label.localeCompare(b.label)),
+    [employees]);
+
+    const trainingTitleOptions = useMemo(() =>
+        trainingTitles.map(title => ({
+            value: title.id,
+            label: title.title
+        })).sort((a, b) => a.label.localeCompare(b.label)),
+    [trainingTitles]);
+
     if (!sessionState || isLoading || isSettingsLoading) {
         return (
           <div className="p-4 sm:p-6 lg:p-8">
@@ -276,7 +362,7 @@ const Trainings = () => {
     const confirmDelete = async () => {
         if (!trainingToDelete) return;
         try {
-            await apiFetch(`trainings/${trainingToDelete.id}`, serverIp, { // 3. PASS serverIp
+            await apiFetch(`trainings/${trainingToDelete.id}`, serverIp, {
                 method: 'DELETE',
                 body: JSON.stringify({ actingUserId: sessionState?.user?.id })
             });
@@ -288,8 +374,7 @@ const Trainings = () => {
         }
     };
     
-    const handleTitleChange = (e) => {
-        const titleId = e.target.value;
+    const handleTitleChange = (titleId) => {
         const selectedTitle = trainingTitles.find(t => t.id === parseInt(titleId, 10));
 
         setFormData(prev => ({ ...prev, training_title_id: titleId }));
@@ -310,7 +395,7 @@ const Trainings = () => {
         if (csvData.length === 0) return;
         setImportResults({ status: 'importing', message: 'Importing, please wait...' });
         try {
-            const result = await apiFetch('trainings/import', serverIp, { // 3. PASS serverIp
+            const result = await apiFetch('trainings/import', serverIp, {
                 method: 'POST',
                 body: JSON.stringify({ actingUserId: sessionState?.user?.id, trainings: csvData })
             });
@@ -426,9 +511,6 @@ const Trainings = () => {
 
     return (
         <div>
-            {/* ... All your JSX ... */}
-            {/* NOTE: No changes are needed in the JSX, only in the logic above. */}
-            {/* The full JSX is omitted here for brevity but is included in the copy-paste block. */}
             <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
                 <h1 className="text-3xl font-bold text-gray-800 dark:text-white">Training Records</h1>
                 <div className="relative">
@@ -535,23 +617,26 @@ const Trainings = () => {
                             {error && <div className="p-3 text-red-800 bg-red-100 dark:bg-red-900/50 dark:text-red-300 rounded-lg">{typeof error === 'object' ? error.title : error}</div>}
                             <div>
                                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Employee Name*</label>
-                                <select name="employee_id" value={formData.employee_id} onChange={handleInputChange} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" disabled={!!editingTraining}>
-                                    <option value="" disabled>Select an employee</option>
-                                    {employees.map(emp => <option key={emp.id} value={emp.id}>{`${emp.first_name} ${emp.middle_initial} ${emp.last_name} ${emp.suffix || ''}`}</option>)}
-                                </select>
+                                <SearchableDropdown
+                                    id="employee_id"
+                                    options={employeeOptions}
+                                    value={formData.employee_id}
+                                    onChange={(value) => setFormData(prev => ({ ...prev, employee_id: value }))}
+                                    placeholder="Search or Select Employee"
+                                    required
+                                    disabled={!!editingTraining}
+                                />
                             </div>
                             <div>
                                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Training Title*</label>
-                                <select 
-                                    name="training_title_id" 
-                                    value={formData.training_title_id} 
+                                <SearchableDropdown
+                                    id="training_title_id"
+                                    options={trainingTitleOptions}
+                                    value={formData.training_title_id}
                                     onChange={handleTitleChange}
-                                    required 
-                                    className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
-                                >
-                                    <option value="" disabled>Select a training title</option>
-                                    {trainingTitles.map(title => <option key={title.id} value={title.id}>{title.title}</option>)}
-                                </select>
+                                    placeholder="Search or Select a Training Title"
+                                    required
+                                />
                             </div>
 
                             <div className="grid grid-cols-2 gap-4">
@@ -571,14 +656,14 @@ const Trainings = () => {
                             <div>
                                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Duration (hours)*</label>
                                 <input type="number" name="hours" value={formData.hours} onChange={handleInputChange} required 
-                                      disabled
-                                      className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
+                                        disabled
+                                        className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
                             </div>
                             <div>
                                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Venue*</label>
                                 <input type="text" name="venue" value={formData.venue} onChange={handleInputChange} required 
-                                      disabled
-                                      className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
+                                        disabled
+                                        className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
                             </div>
                         </form>
                         <div className="flex-shrink-0 flex justify-end px-6 py-4 space-x-2 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-200 dark:border-gray-700">
@@ -648,7 +733,7 @@ const Trainings = () => {
                 statusMessage={progressMessage}
                 isComplete={isProgressComplete}
                 filePath={savedFilePath}
-              />
+            />
             {isImportModalOpen && (
                 <div className="fixed inset-0 z-40 flex items-center justify-center p-4 bg-black bg-opacity-50">
                     <div className="z-50 w-full max-w-4xl p-6 bg-white rounded-lg shadow-2xl dark:bg-gray-800">

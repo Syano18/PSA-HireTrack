@@ -6,12 +6,10 @@ import { SettingsProvider } from './context/SettingsContext';
 
 // --- Page & Layout Imports ---
 import LoginPage from './pages/LoginPage';
-import ForceChangePasswordPage from './pages/ForceChangePasswordPage';
 import Dashboard from './pages/Dashboard';
 import Employees from './pages/Employees';
 import Employments from './pages/Employments';
 import Trainings from './pages/Trainings';
-import Accounts from './pages/Accounts';
 import Certificates from './pages/Certificates';
 import Utilities from './pages/Utilities';
 import AppLayout from './layouts/AppLayout';
@@ -19,21 +17,24 @@ import AppLayout from './layouts/AppLayout';
 // --- Role Constants ---
 const ADMIN_ROLES = ['Super_Admin', 'Admin', 'PACD'];
 
+// --- Helper Components ---
+const LoadingScreen = ({ message = "Loading..." }) => (
+    <div className="flex h-screen items-center justify-center dark:bg-gray-900 dark:text-white">
+        {message}
+    </div>
+);
+
 // --- Wrapper & Route Components ---
 
 const ProtectedRoute = ({ allowedRoles }) => {
     const { session, isLoading } = useAuth();
 
     if (isLoading) {
-        return <div className="flex h-screen items-center justify-center dark:bg-gray-900 dark:text-white">Loading session...</div>;
+        return <LoadingScreen message="Loading session..." />;
     }
 
     if (!session?.user) {
         return <Navigate to="/login" replace />;
-    }
-    
-    if (session.user.force_password_change) {
-        return <Navigate to="/force-change-password" replace />;
     }
 
     if (allowedRoles && !allowedRoles.includes(session.user.role)) {
@@ -46,20 +47,9 @@ const ProtectedRoute = ({ allowedRoles }) => {
 const LoginPageWrapper = () => {
     const { session, isLoading } = useAuth();
     if (isLoading) {
-        return <div className="flex h-screen items-center justify-center dark:bg-gray-900 dark:text-white">Loading...</div>;
+        return <LoadingScreen />;
     }
     return session ? <Navigate to="/dashboard" /> : <LoginPage />;
-};
-
-const ForceChangePasswordWrapper = () => {
-    const { session, isLoading, onPasswordChanged, logout } = useAuth();
-    if (isLoading) {
-        return <div className="flex h-screen items-center justify-center dark:bg-gray-900 dark:text-white">Loading...</div>;
-    }
-    if (!session?.user?.force_password_change) {
-        return <Navigate to="/dashboard" />;
-    }
-    return <ForceChangePasswordPage user={session.user} onPasswordChanged={onPasswordChanged} onLogout={logout} />;
 };
 
 
@@ -70,7 +60,6 @@ const App = () => {
     return (
         <Routes>
             <Route path="/login" element={<LoginPageWrapper />} />
-            <Route path="/force-change-password" element={<ForceChangePasswordWrapper />} />
 
             <Route element={<ProtectedRoute />}>
                 <Route path="/" element={<Navigate to="/dashboard" replace />} />
@@ -81,7 +70,6 @@ const App = () => {
             </Route>
             
             <Route element={<ProtectedRoute allowedRoles={ADMIN_ROLES} />}>
-                <Route path="accounts" element={<Accounts />} />
                 <Route path="certificates" element={<Certificates />} />
                 <Route path="utilities" element={<Utilities />} />
             </Route>

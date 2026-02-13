@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { FaSort, FaSortUp, FaSortDown, FaExclamationTriangle } from 'react-icons/fa';
 import ProgressModal from '../components/Progress';
 import { apiFetch } from '../components/API';
-import { useSettings } from '../context/SettingsContext'; // 1. IMPORT THE HOOK
+import { useSettings } from '../context/SettingsContext';
 
 const apiEndpoints = {
   Training: { download: 'generate-certificate' },
@@ -12,7 +12,7 @@ const apiEndpoints = {
   ByTrainingTitle: { download: 'generate-certificates-by-training' }
 };
 const Certificates = () => {
-  const { serverIp, isLoading: isSettingsLoading } = useSettings(); // 2. USE THE HOOK
+  const { serverIp, isLoading: isSettingsLoading } = useSettings();
   const [employees, setEmployees] = useState([]);
   const [trainings, setTrainings] = useState([]);
   const [employments, setEmployments] = useState([]);
@@ -37,14 +37,14 @@ const Certificates = () => {
   const [savedFilePath, setSavedFilePath] = useState(null);
 
   const fetchData = useCallback(async () => {
-    if (!serverIp) return; // Wait for serverIp
+    if (!serverIp) return;
     setIsLoading(true);
     setError(null);
     try {
       const [employeesData, trainingsData, employmentsData] = await Promise.all([
-        apiFetch('employees', serverIp),     // 3. PASS serverIp
-        apiFetch('trainings', serverIp),      // 3. PASS serverIp
-        apiFetch('employments', serverIp)    // 3. PASS serverIp
+        apiFetch('employees', serverIp),
+        apiFetch('trainings', serverIp),
+        apiFetch('employments', serverIp)
       ]);
 
       setEmployees(employeesData);
@@ -56,7 +56,7 @@ const Certificates = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [serverIp]); // 4. ADD serverIp dependency
+  }, [serverIp]);
 
   useEffect(() => {
     const getSession = async () => {
@@ -72,7 +72,6 @@ const Certificates = () => {
   }, []);
 
   useEffect(() => {
-    // 5. UPDATE data fetch trigger
     if (sessionState && !isSettingsLoading) {
       fetchData();
     }
@@ -240,7 +239,7 @@ const Certificates = () => {
   };
 
   const fetchFile = async (endpointPath, payload, fileName, fileType = 'pdf') => {
-    if (!serverIp) { // Check for serverIp
+    if (!serverIp) {
       setError({ type: 'download', message: 'Server IP is not available.' });
       return false;
     }
@@ -252,7 +251,7 @@ const Certificates = () => {
 
     try {
       const API_PORT = 3001;
-      const fullUrl = `http://${serverIp}:${API_PORT}/api/${endpointPath}`; // Use serverIp from context
+      const fullUrl = `http://${serverIp}:${API_PORT}/api/${endpointPath}`;
 
       const finalFileName = `${fileName}.${fileType}`;
       const prepareResponse = await window.electronAPI.prepareDownload({
@@ -403,7 +402,6 @@ const Certificates = () => {
     setGlobalSearchTerm('');
   };
 
-  // 6. UPDATE initial loading condition
   if (isLoading || isSettingsLoading) {
     return (
       <div className="p-4 sm:p-6 lg:p-8">
@@ -428,9 +426,6 @@ const Certificates = () => {
 
   return (
     <div>
-      {/* ... All your JSX ... */}
-      {/* NOTE: No changes are needed in the JSX, only in the logic above. */}
-      {/* The full JSX is omitted here for brevity but is included in the copy-paste block. */}
       <div className="flex flex-col items-start justify-between gap-4 mb-6 md:flex-row md:items-center">
         <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">Generate Certificates</h1>
         <div className="flex items-center gap-4 w-full md:w-auto">

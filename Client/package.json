@@ -6,7 +6,7 @@
   "main": "main.js",
   "homepage": "./",
   "scripts": {
-    "server": "npm run dev --prefix server",
+    "server": "npm run dev --prefix ../Server",
     "client": "npm start --prefix psahiretrack",
     "electron": "wait-on http://localhost:3000 && electron .",
     "frontend": "concurrently \"npm run client\" \"npm run electron\"",
@@ -32,7 +32,7 @@
   },
   "build": {
     "appId": "com.psa.hired",
-    "productName": "PSA Hired Client",
+    "productName": "PSA Kalinga HireTrack",
     "files": [
       "psahiretrack/build/**/*",
       "main.js",

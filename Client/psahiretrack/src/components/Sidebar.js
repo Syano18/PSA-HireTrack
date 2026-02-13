@@ -24,11 +24,10 @@ const Sidebar = ({ onLogout, user }) => {
         { name: 'Employment', icon: FiBriefcase, path: '/employments' },
         { name: 'Certificate', icon: FiAward, path: '/certificates' },
         { name: 'Utilities', icon: FiTool, path: '/utilities'},
-        { name: 'Account', icon: FiUser, path: '/accounts' },
     ];
 
     const visibleLinks = navLinks.filter(link => {
-        if (['Account', 'Utilities', 'Certificate'].includes(link.name)) {
+        if (['Utilities', 'Certificate'].includes(link.name)) {
             return ['Super_Admin', 'Admin', 'PACD'].includes(user.role);
         }
         return true;

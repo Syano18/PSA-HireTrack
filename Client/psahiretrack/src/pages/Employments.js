@@ -4,7 +4,7 @@ import { FiPlus } from 'react-icons/fi';
 import { parseISO, format } from 'date-fns';
 import ProgressModal from '../components/Progress';
 import { apiFetch } from '../components/API';
-import { useSettings } from '../context/SettingsContext'; // 1. IMPORT THE HOOK
+import { useSettings } from '../context/SettingsContext';
 
 const INITIAL_FORM_STATE = {
   employee_id: '',
@@ -16,7 +16,7 @@ const INITIAL_FORM_STATE = {
   rating: '',
   remarks: ''
 };
-// Custom hook to handle clicks outside a specified element
+
 const useClickOutside = (ref, handler) => {
   useEffect(() => {
     const listener = (event) => {
@@ -31,6 +31,81 @@ const useClickOutside = (ref, handler) => {
     };
   }, [ref, handler]);
 };
+
+const SearchableDropdown = ({ options, value, onChange, placeholder, id, required }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const dropdownRef = useRef(null);
+
+  useClickOutside(dropdownRef, () => setIsOpen(false));
+
+  const selectedOption = useMemo(() => {
+    return options.find((option) => option.value === value) || null;
+  }, [options, value]);
+
+  const filteredOptions = useMemo(
+    () =>
+      options.filter((option) =>
+        option.label.toLowerCase().includes(searchTerm.toLowerCase())
+      ),
+    [options, searchTerm]
+  );
+
+  const displayValue = isOpen ? searchTerm : selectedOption?.label || '';
+
+  const handleSelectOption = (option) => {
+    onChange(option.value);
+    setSearchTerm(option.label);
+    setIsOpen(false);
+  };
+
+  return (
+    <div className="relative" ref={dropdownRef}>
+      <input
+        id={id}
+        type="text"
+        className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
+        value={displayValue}
+        onChange={(e) => {
+          setSearchTerm(e.target.value);
+          if (!isOpen) setIsOpen(true);
+        }}
+        onFocus={() => {
+          setIsOpen(true);
+          setSearchTerm('');
+        }}
+        placeholder={placeholder}
+        required={required && !value}
+      />
+
+      {isOpen && (
+        <div className="absolute z-10 mt-1 w-full rounded-md border border-gray-300 bg-white shadow-lg dark:bg-gray-700">
+          {filteredOptions.length > 0 ? (
+            <ul className="max-h-60 overflow-y-auto">
+              {filteredOptions.map((option) => (
+                <li
+                  key={option.value}
+                  className={`cursor-pointer px-4 py-2 text-gray-800 dark:text-gray-200 hover:bg-blue-500 hover:text-white ${
+                    option.value === value ? 'bg-blue-100 dark:bg-blue-600' : ''
+                  }`}
+                  onClick={() => handleSelectOption(option)}
+                >
+                  {option.label}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div className="px-4 py-2 text-gray-500 dark:text-gray-400">
+              No options found.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+
 const parseCSV = (text) => {
   const lines = text.split(/\r\n|\n/).filter(line => line.trim() !== '');
   if (lines.length < 2) return [];
@@ -62,8 +137,7 @@ const formatDateForExport = (dateString) => {
 };
 
 const Employments = () => {
-  // --- STATE MANAGEMENT ---
-  const { serverIp, isLoading: isSettingsLoading } = useSettings(); // 2. USE THE HOOK
+  const { serverIp, isLoading: isSettingsLoading } = useSettings();
   const [employments, setEmployments] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [positions, setPositions] = useState([]);
@@ -133,17 +207,16 @@ const Employments = () => {
       setError(null);
   }, []);
 
-   // --- DATA FETCHING (MODIFIED) ---
   const fetchData = useCallback(async () => {
-    if (!serverIp) return; // Wait for serverIp
+    if (!serverIp) return;
     setIsLoading(true);
     try {
       const [empData, posData, fpData, recordsData, surveysData] = await Promise.all([
-        apiFetch('employees', serverIp),                     // 3. PASS serverIp
-        apiFetch('employments/positions', serverIp),        // 3. PASS serverIp
-        apiFetch('employments/focal-persons', serverIp),    // 3. PASS serverIp
-        apiFetch('employments', serverIp),                  // 3. PASS serverIp
-        apiFetch('employments/surveys', serverIp)           // 3. PASS serverIp
+        apiFetch('employees', serverIp),
+        apiFetch('employments/positions', serverIp),
+        apiFetch('employments/focal-persons', serverIp),
+        apiFetch('employments', serverIp),
+        apiFetch('employments/surveys', serverIp)
       ]);
 
       setEmployees(empData);
@@ -221,7 +294,7 @@ const Employments = () => {
     const { user } = sessionState || {};
 
     if (userPermissions.isFocalPerson && focalPersonView === 'assigned') {
-      dataToShow = dataToShow.filter(rec => rec.focal_person_id === user.id);
+      dataToShow = dataToShow.filter(rec => rec.focal_person_id === user.id && !rec.rating);
     }
 
     const query = filters.query.toLowerCase();
@@ -244,6 +317,37 @@ const Employments = () => {
     });
   }, [accessibleEmployments, filters.query, sortConfig, userPermissions.isFocalPerson, focalPersonView, sessionState]);
 
+  // --- MEMOIZED OPTIONS FOR SEARCHABLE DROPDOWNS ---
+  const employeeOptions = useMemo(() =>
+    employees.map(emp => ({
+      value: emp.id,
+      label: `${emp.first_name} ${emp.middle_initial || ''} ${emp.last_name} ${emp.suffix || ''}`.replace(/\s+/g, ' ').trim()
+    })).sort((a, b) => a.label.localeCompare(b.label)),
+  [employees]);
+
+  const positionOptions = useMemo(() =>
+    positions.map(pos => ({
+      value: pos.id,
+      label: pos.position_title
+    })).sort((a, b) => a.label.localeCompare(b.label)),
+  [positions]);
+
+  const surveyOptions = useMemo(() =>
+    surveys.map(survey => ({
+      value: survey.id,
+      label: survey.name
+    })).sort((a, b) => a.label.localeCompare(b.label)),
+  [surveys]);
+
+  const focalPersonOptions = useMemo(() =>
+    focalPersons.map(fp => ({
+      value: fp.id,
+      label: `${fp.first_name} ${fp.middle_initial || ''} ${fp.last_name} ${fp.suffix || ''}`.replace(/\s+/g, ' ').trim()
+    })).sort((a, b) => a.label.localeCompare(b.label)),
+  [focalPersons]);
+  // --- END OF MEMOIZED OPTIONS ---
+
+
   const rowsPerPage = 9;
   const totalItems = spreadsheetList.length;
   const totalPages = Math.ceil(totalItems / rowsPerPage);
@@ -256,28 +360,8 @@ const Employments = () => {
   const handleNextPage = () => setCurrentPage(prev => Math.min(prev + 1, totalPages));
   const handlePreviousPage = () => setCurrentPage(prev => Math.max(prev - 1, 1));
     
-    const handleSurveyChange = (e) => {
-        const surveyId = e.target.value;
-        const selectedSurvey = surveys.find(s => s.id === parseInt(surveyId));
-
-        if (selectedSurvey) {
-            setFormData(prev => ({
-                ...prev,
-                survey_id: surveyId,
-                contract_start_date: selectedSurvey.contract_start_date || '',
-                contract_end_date: selectedSurvey.contract_end_date || '',
-                focal_person_id: selectedSurvey.focal_person_id || ''
-            }));
-        } else {
-            setFormData(prev => ({
-                ...prev,
-                survey_id: '',
-                contract_start_date: '',
-                contract_end_date: '',
-                focal_person_id: ''
-            }));
-        }
-    };
+  // THIS FUNCTION IS NO LONGER NEEDED, LOGIC WILL BE MOVED INLINE
+  // const handleSurveyChange = (e) => { ... };
 
   const requestSort = (key) => {
     let direction = 'ascending';
@@ -409,12 +493,12 @@ const Employments = () => {
       handleCloseAddEditModal();
       fetchData();
     } catch (err) {
-            try {
-                const parsedError = JSON.parse(err.message);
-                setError(parsedError.error || parsedError.message || "An unknown error occurred.");
-            } catch (e) {
-                setError(err.message);
-            }
+          try {
+              const parsedError = JSON.parse(err.message);
+              setError(parsedError.error || parsedError.message || "An unknown error occurred.");
+          } catch (e) {
+              setError(err.message);
+          }
         }
     };
 
@@ -553,10 +637,6 @@ const Employments = () => {
 
   return (
     <div>
-      {/* ... All your JSX ... */}
-      {/* NOTE: No changes are needed in the JSX, only in the logic above. */}
-      {/* The full JSX is omitted here for brevity but is included in the copy-paste block. */}
-      {/* --- Toolbar --- */}
       <div className="flex flex-col md:flex-row items-center justify-between mb-4 gap-4">
         <h1 className="text-3xl font-bold text-gray-800 dark:text-white">Employment Records</h1>
         <div className="flex items-center gap-4">
@@ -671,27 +751,57 @@ const Employments = () => {
               <div className="grid grid-cols-1 gap-x-6 gap-y-4 md:grid-cols-2">
                 <div>
                   <label htmlFor="employee_id" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Employee*</label>
-                  <select id="employee_id" name="employee_id" value={formData.employee_id} onChange={handleInputChange} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
-                    <option value="" disabled>Select Employee</option>
-                    {employees.map(emp => (<option key={emp.id} value={emp.id}>{`${emp.first_name} ${emp.middle_initial} ${emp.last_name} ${emp.suffix || ''}`}</option>))}
-                  </select>
+                  <SearchableDropdown
+                    id="employee_id"
+                    options={employeeOptions}
+                    value={formData.employee_id}
+                    onChange={(value) => setFormData(prev => ({ ...prev, employee_id: value }))}
+                    placeholder="Search or Select Employee"
+                    required
+                  />
                 </div>
                 <div>
                   <label htmlFor="position_id" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Position Title*</label>
-                  <select id="position_id" name="position_id" value={formData.position_id} onChange={handleInputChange} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
-                    <option value="" disabled>Select Position</option>
-                    {positions.map(pos => (<option key={pos.id} value={pos.id}>{pos.position_title}</option>))}
-                  </select>
+                  <SearchableDropdown
+                    id="position_id"
+                    options={positionOptions}
+                    value={formData.position_id}
+                    onChange={(value) => setFormData(prev => ({ ...prev, position_id: value }))}
+                    placeholder="Search or Select Position"
+                    required
+                  />
                 </div>
 
                 <div className="md:col-span-2">
                   <label htmlFor="survey_id" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Name of Census/Survey*</label>
-                  <select id="survey_id" name="survey_id" value={formData.survey_id} 
-                    onChange={handleSurveyChange}
-                    required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
-                    <option value="" disabled>Select Survey</option>
-                    {surveys.map(survey => (<option key={survey.id} value={survey.id}>{survey.name}</option>))}
-                  </select>
+                  <SearchableDropdown
+                    id="survey_id"
+                    options={surveyOptions}
+                    value={formData.survey_id}
+                    onChange={(value) => {
+                      // This is the logic from your old handleSurveyChange
+                      const selectedSurvey = surveys.find(s => s.id === parseInt(value));
+                      if (selectedSurvey) {
+                        setFormData(prev => ({
+                          ...prev,
+                          survey_id: value,
+                          contract_start_date: selectedSurvey.contract_start_date || '',
+                          contract_end_date: selectedSurvey.contract_end_date || '',
+                          focal_person_id: selectedSurvey.focal_person_id || ''
+                        }));
+                      } else {
+                        setFormData(prev => ({
+                          ...prev,
+                          survey_id: '',
+                          contract_start_date: '',
+                          contract_end_date: '',
+                          focal_person_id: ''
+                        }));
+                      }
+                    }}
+                    placeholder="Search or Select Survey"
+                    required
+                  />
                 </div>
                 <div>
                   <label htmlFor="contract_start_date" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Contract Start Date*</label>
@@ -709,13 +819,14 @@ const Employments = () => {
                 </div>
                 <div>
                   <label htmlFor="focal_person_id" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Focal Person*</label>
-                  <select id="focal_person_id" name="focal_person_id" value={formData.focal_person_id || ''} 
-                    onChange={handleInputChange} required 
-                    disabled={!editingRecord}
-                    className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100 dark:disabled:bg-gray-700/50">
-                    <option value="" disabled>Select</option>
-                    {focalPersons.map(fp => (<option key={fp.id} value={fp.id}>{`${fp.first_name} ${fp.middle_initial} ${fp.last_name} ${fp.suffix || ''}`}</option>))}
-                  </select>
+                  <SearchableDropdown
+                    id="focal_person_id"
+                    options={focalPersonOptions}
+                    value={formData.focal_person_id}
+                    onChange={(value) => setFormData(prev => ({ ...prev, focal_person_id: value }))}
+                    placeholder="Search or Select Focal Person"
+                    required
+                  />
                 </div>
                 <div>
                 <label htmlFor="rating" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -728,7 +839,7 @@ const Employments = () => {
                   onChange={handleInputChange}
                   disabled={userPermissions.isHrDesignate}
                   className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 
-                        rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 disabled:opacity-50"
+                          rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 disabled:opacity-50"
                 >
                   <option value="">N/A</option>
                   <option>Outstanding</option>

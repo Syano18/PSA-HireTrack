@@ -10,7 +10,13 @@ export const apiFetch = async (endpoint, serverIp, options = {}) => {
   const session = await window.electronAPI.getLoginState();
   const token = session?.token;
   
-  const url = `http://${serverIp}:${API_PORT}/api/${endpoint}`;
+  // Handle custom ports (e.g., 192.168.1.1:8080)
+  let baseUrl = serverIp;
+  if (!baseUrl.includes(':')) {
+      baseUrl = `${baseUrl}:${API_PORT}`;
+  }
+  
+  const url = `http://${baseUrl}/api/${endpoint}`;
 
   const headers = {
     'Content-Type': 'application/json',

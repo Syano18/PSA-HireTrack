@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const { exec } = require('child_process');
 const os = require('os');
+const crypto = require('crypto'); // Required for Google Auth
 
 // Declare variables outside the async function
 let store;
@@ -58,14 +59,22 @@ async function startApp() {
     mainWindow.show();
 
     mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
-        const serverIp = store.get('serverIpAddress') || '127.0.0.1';
-        const serverPort = 3001;
+        const rawServerIp = store.get('serverIpAddress') || '127.0.0.1';
+        let serverIp = rawServerIp;
+        let serverPort = 3001;
+
+        // Handle custom ports in the IP address (e.g., 192.168.1.50:8080)
+        if (rawServerIp.includes(':') && !rawServerIp.includes('[')) { 
+             const parts = rawServerIp.split(':');
+             serverIp = parts[0];
+             serverPort = parts[1];
+        }
 
         callback({
             responseHeaders: {
                 ...details.responseHeaders,
                 'Content-Security-Policy': [
-                    `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://localhost:${serverPort} http://127.0.0.1:${serverPort} http://${serverIp}:${serverPort}`
+                    `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' http://localhost:3001 http://127.0.0.1:3001 http://${serverIp}:${serverPort} https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://sheets.googleapis.com https://firebasestorage.googleapis.com https://www.googleapis.com`
                 ]
             }
         });
@@ -76,6 +85,7 @@ async function startApp() {
       'get-login-state','set-login-state','clear-login-state','session-expired',
       'get-dark-mode','set-dark-mode',
       'get-server-ip','set-server-ip','restart-app','get-local-ip',
+      'fetch-user-details', // Add new handler
       'login','prepare-download','save-file','open-file',
       'backup-database','restore-database','save-csv-file'
     ];
@@ -94,6 +104,88 @@ async function startApp() {
     ipcMain.handle('clear-login-state', () => {
         store.delete('loginState');
         if (mainWindow) mainWindow.webContents.send('onLoginStateChange');
+    });
+
+    // --- Google Sheets Service Account Logic ---
+    ipcMain.handle('fetch-user-details', async (event, email) => {
+        // TODO: PASTE YOUR SERVICE ACCOUNT CREDENTIALS HERE
+        // Open the JSON file you downloaded from Google Cloud Console.
+        const SERVICE_ACCOUNT = {
+            client_email: "digitallogbook@digital-logbook-484909.iam.gserviceaccount.com",
+            // REPLACE THIS STRING with the "private_key" from your JSON file.
+            // It looks like "-----BEGIN PRIVATE KEY-----\nMIIEv..."
+            private_key: "-----BEGIN PRIVATE KEY-----\nMIIEvwIBADANBgkqhkiG9w0BAQEFAASCBKkwggSlAgEAAoIBAQDO8eoHHNBAJaD+\njzFDU2ExEb2fDXt2dT92Kcl3HaB13M4IABJkwSIJb+Jg5spGoZ9B4nlnegsgZuPw\naG0H78SYZlgAw+JbVCAzc0yOArkF9BHaNRZdR5GWQ7aBBJOlG288vqe3ebryzBz9\nv/wTLYJPCkCNEfmqWbk1cYKAzWkxkcC9vcW9dPefSpSu2FQFYfxxE7mqY0gnpdFJ\nM19zD24XUyNY3/rn66sBXM9LGeDjlMYIGhCfLp6sfmKxUkXR4wbQxwkRMDosx7vX\n/lyNXHpVpIGhfx4/giFSZekabBt6msiMxUnDFZvYZHzxPp4+G7ECiFjgCJWxcPw5\nRWy29C87AgMBAAECggEAMFdIUMMFToa7tdsjKdP3VywKvHW8ym4XFfYq7p1IF2At\n7KZ/pXOMDOJK4lHnHFqyxgQuUeKraLVAN69dEMaMiQEXO46GeMkNAJfFYUL3j5F0\n/iD6iW2nb49/uWGlT6M599mdefmAlyjg+NF5A83Uq7v8WjfBt25gGkDauFXDZeV3\ns0RzbvDQRssgTlispogUN2eU67eXKl20W1VwfF0euZZCGFrEPdCZ5N10fW+fsBfg\nymKuMRt/d34ao7682IvsgXUDCbItr9G1VHpcusOEP/7jiLIMF+MiZ1Ni5KQNs/Ko\neUPihnDt7eZG9E5REKRyz6s/mVmtbReXY5fZIx/6oQKBgQDow0nCi1UFGrnfDd6B\nlOoW/+Wb9m8e9xErDTBi0rWNlOm5BmHY50GsDH2f6XJkSlx4H9Vo9I5/9rBhfgrt\nQZ9X0QzzWsogb+TmsE3yO0oNAjd0DaTahQcbDxgnm4f78XW6acYbM8KyRdcDbNA4\n9MgXTA836Mmqy+xNL4K1uGZXUQKBgQDjmsy6jE2ty9QZJsDzLYz4bjCz2LNY/83g\nmB7zB/fmc2D51qrN9sAbhuae2nhci/u0fleKlxUZStcMlzRF1HYZoUV0u5zPI+Nd\ngTEBZ0nPiyASas5+5IQu8Ldi4Y2L8hZQ4FHGufDuTsYum98HtbHJ+Jd5nelFLvqE\nV+H5HUVSywKBgQDJwAOd6bEexISZTucvAElK+DEn1xmICHTMERmAfsy41HslUd/b\n5s6odwcoZWsufLnbsRQEbf1Z8xP83QhRj5CyyFNmV6pdJT+NqQFW1Ycg8WvpXq4m\nbimzjYjNQ+VBPpBhrK73Aw1eAmUU5esxgxIwB1AlkNPEBA9k86pjIlsqkQKBgQCG\nX8onCNaDmScrgjnAWFA2C7gtNe8MyFmgE6+SBE5TfCLw3dARsXBR0B8wAgO1f9+m\n/EBqzi/istCr2kk+QOVI1HHRLUKy+JkvhyqLjZOCOL1ColQvjnKL1AoxEsEislaC\ngS1Gili4GUHgGp5eSuMgPugPIS+rbMTyhYAgNyvKaQKBgQDWFaeKgBEN8MkO5UhU\nltFdRscw7UtbMeghS1Us362ZBUf1laXaEio0qyeMdlxjIUvmd7gUHR5VAFRmoxeq\nu1DpsBfaQKW0qJRBrnLPesvxS1slQQGcAGgNLbfC/I/KHIbunT/w4D/uHAavFukD\n28oh88gkDLL6CZ7egw+rJZlwug==\n-----END PRIVATE KEY-----\n"
+        };
+
+        const SHEET_ID = "1V7Ab3v8fvNbeLaduOPLXbV9_nANLSgVVq6I8DSYBs1E";
+        const RANGE = "User_Permissions!A:J";
+
+        try {
+            // 1. Generate JWT for Google Auth
+            const header = { alg: 'RS256', typ: 'JWT' };
+            const now = Math.floor(Date.now() / 1000);
+            const claim = {
+                iss: SERVICE_ACCOUNT.client_email,
+                scope: 'https://www.googleapis.com/auth/spreadsheets.readonly',
+                aud: 'https://oauth2.googleapis.com/token',
+                exp: now + 3600,
+                iat: now
+            };
+
+            const encodedHeader = Buffer.from(JSON.stringify(header)).toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+            const encodedClaim = Buffer.from(JSON.stringify(claim)).toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+            
+            const signer = crypto.createSign('RSA-SHA256');
+            signer.update(encodedHeader + '.' + encodedClaim);
+            const signature = signer.sign(SERVICE_ACCOUNT.private_key, 'base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+            const jwt = `${encodedHeader}.${encodedClaim}.${signature}`;
+
+            // 2. Exchange JWT for Access Token
+            const tokenRes = await nodeFetch('https://oauth2.googleapis.com/token', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`
+            });
+            const tokenData = await tokenRes.json();
+            
+            if (!tokenData.access_token) {
+                console.error('Failed to get Google access token:', tokenData);
+                return { role: 'User', status: 'Active' }; // Default on error
+            }
+
+            // 3. Fetch Sheet Data
+            const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${RANGE}`;
+            const sheetRes = await nodeFetch(url, {
+                headers: { 'Authorization': `Bearer ${tokenData.access_token}` }
+            });
+            const data = await sheetRes.json();
+
+            // 4. Parse Data
+            let role = 'User';
+            let status = 'Active';
+
+            if (data.values && data.values.length > 0) {
+                const headers = data.values[0];
+                const emailIndex = headers.findIndex(h => h && h.trim().toLowerCase() === 'email');
+                const statusIndex = headers.findIndex(h => h && h.trim().toLowerCase() === 'status');
+                const roleIndex = headers.findIndex(h => h && h.trim() === 'HireTrack_Role');
+
+                const eIdx = emailIndex !== -1 ? emailIndex : 0;
+                const sIdx = statusIndex !== -1 ? statusIndex : 8;
+                const rIdx = roleIndex !== -1 ? roleIndex : 9;
+
+                const userRow = data.values.find(row => row[eIdx] && row[eIdx].toLowerCase() === email.toLowerCase());
+                if (userRow) {
+                    role = userRow[rIdx] || 'User';
+                    status = userRow[sIdx] || 'Active';
+                }
+            }
+            return { role, status };
+
+        } catch (error) {
+            console.error('Google Sheet Auth Error:', error);
+            return { role: 'User', status: 'Active' };
+        }
     });
 
     let sessionWatcherInterval = null;
@@ -187,54 +279,6 @@ async function startApp() {
     // REFACTORED CODE ENDS HERE
     // =================================================================
 
-    // -------------------------------
-    // Polling watcher (fallback)
-    // -------------------------------
-    function startSessionWatcher(intervalMs = 5000) {
-      // clear any existing watcher
-      if (sessionWatcherInterval) {
-        clearInterval(sessionWatcherInterval);
-        sessionWatcherInterval = null;
-      }
-
-      sessionWatcherInterval = setInterval(async () => {
-        try {
-          const loginState = store.get('loginState');
-          if (!loginState || !loginState.token) return; // not logged in
-
-          const serverIp = store.get('serverIpAddress') || '127.0.0.1';
-          const serverPort = process.env.API_PORT || '3001';
-          const url = `http://${serverIp}:${serverPort}/api/session/validate`; // implement this endpoint server-side
-
-          const res = await nodeFetch(url, {
-            method: 'GET',
-            headers: { Authorization: `Bearer ${loginState.token}` },
-            // short timeout so we don't hang
-            signal: AbortSignal.timeout(3000),
-          });
-
-          // if server says unauthorized or invalid session, force logout immediately
-          if (res.status === 401 || res.status === 403) {
-            await forceLogout(); // This now calls the refactored function
-          }
-        } catch (err) {
-          // network errors: ignore or log; do not force logout on transient network failure
-          // console.error('session watcher error', err.message);
-        }
-      }, intervalMs);
-    }
-
-    // start watcher when window is created
-    startSessionWatcher(5000);
-
-    // stop watcher when window closed (helps avoid duplicates when recreate)
-    mainWindow.on('closed', () => {
-      if (sessionWatcherInterval) {
-        clearInterval(sessionWatcherInterval);
-        sessionWatcherInterval = null;
-      }
-    });
-
     // reuse forceLogout for ipc handler
     ipcMain.handle('session-expired', async () => {
       await forceLogout();
@@ -268,33 +312,6 @@ async function startApp() {
       return getLocalIP();
     });
     
-    // --- Login handler ---
-    ipcMain.handle('login', async (event, { username, password }) => {
-      const serverIp = store.get('serverIpAddress') || '127.0.0.1';
-      const serverUrl = `http://${serverIp}:3001/api/login`;
-
-      try {
-        const response = await nodeFetch(serverUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password }),
-          signal: AbortSignal.timeout(5000)
-        });
-
-        if (response.ok) {
-          const data = await response.json();
-          store.set('loginState', data);
-          mainWindow.webContents.send('onLoginStateChange');
-          return { success: true, user: data.user, token: data.token };
-        } else {
-          const errorData = await response.json().catch(() => ({ message: 'Failed to parse error.' }));
-          return { error: errorData.error || errorData.message || 'Invalid credentials' };
-        }
-      } catch (error) {
-        console.error(`Failed to connect to ${serverUrl}:`, error.message);
-        return { error: 'Server unreachable. Please check the IP address and your network connection.' };
-      }
-    });
     ipcMain.handle('prepare-download', async (event, { url, payload, fileType }) => {
         try {
           const response = await nodeFetch(url, {

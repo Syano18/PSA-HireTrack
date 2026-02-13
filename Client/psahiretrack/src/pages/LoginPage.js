@@ -1,16 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { useTheme } from '../context/ThemeContext';
-import { useSettings } from '../context/SettingsContext'; // 1. IMPORT THE HOOK
+import { useAuth } from '../context/AuthContext';
+import { useSettings } from '../context/SettingsContext';
 import PSALogo from '../assets/logo.png';
-import { FaSun, FaMoon, FaEye, FaEyeSlash, FaCog } from 'react-icons/fa';
+import { FaSun, FaMoon, FaEye, FaEyeSlash, FaCog, FaInfoCircle } from 'react-icons/fa';
 
-const appVersion = "v1.0.0";
+const appVersion = "v1.0";
 
 const LoginPage = () => {
     const { isDarkMode, setIsDarkMode } = useTheme();
-    const { serverIp, updateServerIp } = useSettings(); // 2. USE THE HOOK
+    const { login } = useAuth();
+    const { serverIp, updateServerIp } = useSettings();
 
-    const [username, setUsername] = useState('');
+    const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [showPassword, setShowPassword] = useState(false);
     const [error, setError] = useState('');
@@ -19,21 +21,18 @@ const LoginPage = () => {
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [showRestartModal, setShowRestartModal] = useState(false);
 
-    // This state is temporary for the input field in the modal
     const [tempServerIp, setTempServerIp] = useState(serverIp); 
     const [localIp, setLocalIp] = useState('Fetching...');
 
     const ThemeIcon = isDarkMode ? FaSun : FaMoon;
     const PasswordIcon = showPassword ? FaEyeSlash : FaEye;
 
-    // Update the temporary IP when the modal opens or the real IP changes
     useEffect(() => {
         if (isSettingsOpen) {
             setTempServerIp(serverIp);
         }
     }, [isSettingsOpen, serverIp]);
 
-    // This useEffect is now only for the local IP
     useEffect(() => {
         const fetchLocalIp = async () => {
             try {
@@ -48,19 +47,14 @@ const LoginPage = () => {
     }, []);
 
     useEffect(() => {
-        // This function will be called when the backend sends the message
         const handleShowRestartPrompt = () => {
-            setIsSettingsOpen(false); // Close the settings modal first
-            setShowRestartModal(true); // Then show the restart modal
+            setIsSettingsOpen(false);
+            setShowRestartModal(true);
         };
 
         window.electronAPI.onShowRestartPrompt(handleShowRestartPrompt);
-        
-        // Cleanup function to prevent memory leaks
+
         return () => {
-            // It's good practice to have a way to remove the listener,
-            // though for this simple case it's less critical.
-            // You would need to add an 'offShowRestartPrompt' in your preload.js
         };
     }, []);
 
@@ -69,7 +63,7 @@ const LoginPage = () => {
         setError('');
         setIsLoading(true);
         try {
-            const response = await window.electronAPI.login({ username, password });
+            const response = await login(email, password);
             if (response.error) {
                 setError(response.error);
             }
@@ -80,11 +74,8 @@ const LoginPage = () => {
         }
     };
 
-    // 3. UPDATE the handleSaveSettings function
     const handleSaveSettings = async () => {
-        // This now calls the global update function from our context
         await updateServerIp(tempServerIp);
-        // The app will restart automatically from the backend, so we don't need to close the modal
     };
 
     const handleRestartApp = () => {
@@ -109,6 +100,23 @@ const LoginPage = () => {
                         >
                             <ThemeIcon className="w-6 h-6" />
                         </button>
+                        <div className="relative group">
+                            <button
+                                type="button"
+                                className="p-2 rounded-full text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-700 transition-transform duration-300 hover:scale-110"
+                            >
+                                <FaInfoCircle className="w-5 h-5" />
+                            </button>
+                            <div className="absolute top-10 right-0 w-64 p-3 bg-white dark:bg-gray-700 border dark:border-gray-600 rounded-lg shadow-lg text-left text-sm text-gray-700 dark:text-gray-200 z-50 hidden group-hover:block transition-all duration-300 opacity-0 group-hover:opacity-100">
+                                <h4 className="font-bold mb-1 text-gray-900 dark:text-white">About This App</h4>
+                                <p className="mb-2">
+                                    The PSA Kalinga Hired Tracking System streamlines personnel management for Contract of Service Workers (COSWs). It centralizes monitoring, automates employment and training certificates, and features a performance evaluation tool. Supervisor ratings are used as a reference for future hiring, ensuring a fair, transparent, and efficient system that reduces paperwork and speeds up hiring for field surveys.
+                                </p>
+                                <hr className="my-1 border-gray-300 dark:border-gray-600" />
+                                <p><strong>Developer:</strong> Christian A. Dacpano</p>
+                                <p><strong>Contact:</strong> officialchano18@gmail.com</p>
+                            </div>
+                        </div>
                     </div>
                     <img src={PSALogo} alt="PSA Logo" className="w-16 h-16 mx-auto" />
                     <h2 className="mt-6 text-3xl font-bold text-gray-900 dark:text-white">PSA KALINGA <br /> Hired Tracking System</h2>
@@ -120,20 +128,20 @@ const LoginPage = () => {
                     <div className="space-y-4">
                         <div className="relative">
                             <input
-                                id="username"
-                                name="username"
-                                type="text"
+                                id="email"
+                                name="email"
+                                type="email"
                                 required
                                 className="block px-3 pt-6 pb-2 w-full text-gray-900 bg-transparent rounded-lg border-2 border-gray-300 appearance-none dark:text-white dark:border-gray-600 focus:outline-none focus:ring-0 focus:border-blue-600 peer"
                                 placeholder=" "
-                                value={username}
-                                onChange={(e) => { setUsername(e.target.value); setError(''); }}
+                                value={email}
+                                onChange={(e) => { setEmail(e.target.value); setError(''); }}
                             />
                             <label
-                                htmlFor="username"
+                                htmlFor="email"
                                 className="absolute text-gray-500 dark:text-gray-400 duration-300 transform -translate-y-4 scale-75 top-4 z-10 origin-[0] start-3 peer-placeholder-shown:scale-100 peer-placeholder-shown:translate-y-0 peer-focus:scale-75 peer-focus:-translate-y-4 peer-focus:text-blue-600 dark:peer-focus:text-blue-500"
                             >
-                                Username
+                                Email Address
                             </label>
                         </div>
                         
