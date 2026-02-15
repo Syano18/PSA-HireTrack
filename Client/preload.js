@@ -13,12 +13,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   login: (credentials) => ipcRenderer.invoke('login', credentials),
   fetchUserDetails: (email) => ipcRenderer.invoke('fetch-user-details', email),
 
+  checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+  downloadAndInstallUpdate: (url) => ipcRenderer.invoke('download-and-install-update', url),
+
   // ADD THIS LINE
   handleSessionExpired: () => ipcRenderer.invoke('session-expired'),
 
   getServerIp: () => ipcRenderer.invoke('get-server-ip'),
   setServerIp: (ip) => ipcRenderer.invoke('set-server-ip', ip),
   getLocalIP: () => ipcRenderer.invoke('get-local-ip'), 
+  getAppVersion: () => ipcRenderer.invoke('get-app-version'),
   
   // Dark mode handlers
   getDarkMode: () => ipcRenderer.invoke('get-dark-mode'),

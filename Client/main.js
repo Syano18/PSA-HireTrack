@@ -6,6 +6,7 @@ const fs = require('fs');
 const { exec } = require('child_process');
 const os = require('os');
 const crypto = require('crypto'); // Required for Google Auth
+const http = require('http');
 
 // Declare variables outside the async function
 let store;
@@ -38,6 +39,7 @@ function getLocalIP() {
 
 async function startApp() {
   await initializeDependencies();
+  app.commandLine.appendSwitch('disable-site-isolation-trials');
 
   function createWindow() {
     const isDark = store.get('isDarkMode');
@@ -51,6 +53,7 @@ async function startApp() {
         preload: path.join(__dirname, 'preload.js'),
         nodeIntegration: false,
         contextIsolation: true,
+        webSecurity: false, // Allow file:// to make cross-origin requests (fixes "check internet connection")
       },
     });
 
@@ -58,7 +61,19 @@ async function startApp() {
     mainWindow.maximize();
     mainWindow.show();
 
-    mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+    // Intercept the Google Sign-In popup to set a custom title
+    mainWindow.webContents.on('did-create-window', (childWindow) => {
+        childWindow.setTitle('PSA Kalinga HireTrack - Google Sign In');
+        const iconPath = path.join(__dirname, 'System.ico');
+        if (fs.existsSync(iconPath)) {
+            childWindow.setIcon(iconPath);
+        }
+        childWindow.on('page-title-updated', (e) => {
+            e.preventDefault(); // Prevent Google from changing the title back
+        });
+    });
+
+    mainWindow.webContents.session.webRequest.onHeadersReceived({ urls: ['*://*/*'] }, (details, callback) => {
         const rawServerIp = store.get('serverIpAddress') || '127.0.0.1';
         let serverIp = rawServerIp;
         let serverPort = 3001;
@@ -70,23 +85,48 @@ async function startApp() {
              serverPort = parts[1];
         }
 
-        callback({
-            responseHeaders: {
-                ...details.responseHeaders,
-                'Content-Security-Policy': [
-                    `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' http://localhost:3001 http://127.0.0.1:3001 http://${serverIp}:${serverPort} https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://sheets.googleapis.com https://firebasestorage.googleapis.com https://www.googleapis.com`
-                ]
+        const responseHeaders = details.responseHeaders ? Object.assign({}, details.responseHeaders) : {};
+
+        // Remove existing headers that might conflict (case-insensitive) to ensure our permissive policy wins
+        Object.keys(responseHeaders).forEach((key) => {
+            const lowerKey = key.toLowerCase();
+            if ([
+                'content-security-policy', 
+                'cross-origin-opener-policy', 
+                'cross-origin-opener-policy-report-only',
+                'cross-origin-embedder-policy',
+                'cross-origin-resource-policy',
+                'x-frame-options'
+            ].includes(lowerKey)) {
+                delete responseHeaders[key];
             }
         });
+
+        // Only inject our App's CSP if it is a local request.
+        // Injecting it into accounts.google.com breaks the Google Sign-In page.
+        const isLocal = details.url.startsWith('file://') || 
+                        details.url.startsWith('http://localhost') || 
+                        details.url.startsWith('http://127.0.0.1');
+
+        if (isLocal) {
+            const scriptSrc = "'self' 'unsafe-inline' blob: https://apis.google.com https://www.gstatic.com https://www.google.com https://www.googleapis.com https://*.firebaseapp.com";
+            responseHeaders['Content-Security-Policy'] = [
+                `default-src 'self' 'unsafe-inline' data: blob:; script-src ${scriptSrc}; connect-src 'self' http://localhost:3001 http://127.0.0.1:3001 http://${serverIp}:${serverPort} https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://sheets.googleapis.com https://firebasestorage.googleapis.com https://www.googleapis.com https://apis.google.com https://*.firebaseapp.com; frame-src 'self' https://*.firebaseapp.com https://apis.google.com https://accounts.google.com; img-src 'self' data: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com;`
+            ];
+            responseHeaders['Cross-Origin-Resource-Policy'] = ['cross-origin'];
+        }
+
+        callback({ responseHeaders });
     });
 
     // --- CLEANUP: remove existing handlers to avoid "second handler" errors when we recreate the window ---
     const ipcHandleChannels = [
       'get-login-state','set-login-state','clear-login-state','session-expired',
       'get-dark-mode','set-dark-mode',
-      'get-server-ip','set-server-ip','restart-app','get-local-ip',
+      'get-server-ip','set-server-ip','restart-app','get-local-ip','get-app-version',
       'fetch-user-details', // Add new handler
-      'login','prepare-download','save-file','open-file',
+      'login','prepare-download','save-file','open-file', 
+      'check-for-updates', 'download-and-install-update',
       'backup-database','restore-database','save-csv-file'
     ];
     ipcHandleChannels.forEach(ch => {
@@ -108,6 +148,24 @@ async function startApp() {
 
     // --- Google Sheets Service Account Logic ---
     ipcMain.handle('fetch-user-details', async (event, email) => {
+        // Cache configuration
+        const CACHE_FILE = path.join(app.getPath('userData'), 'user_cache.json');
+        const CACHE_TTL = 10 * 24 * 60 * 60 * 1000; // 10 days in milliseconds
+        let cache = {};
+
+        // 1. Try to read from cache first
+        try {
+            if (fs.existsSync(CACHE_FILE)) {
+                cache = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
+                const cachedUser = cache[email];
+                if (cachedUser && cachedUser.timestamp && (Date.now() - cachedUser.timestamp < CACHE_TTL)) {
+                    return cachedUser.data;
+                }
+            }
+        } catch (err) {
+            console.error('Error reading user cache:', err);
+        }
+
         // TODO: PASTE YOUR SERVICE ACCOUNT CREDENTIALS HERE
         // Open the JSON file you downloaded from Google Cloud Console.
         const SERVICE_ACCOUNT = {
@@ -121,7 +179,7 @@ async function startApp() {
         const RANGE = "User_Permissions!A:J";
 
         try {
-            // 1. Generate JWT for Google Auth
+            // 2. Generate JWT for Google Auth (if cache missed)
             const header = { alg: 'RS256', typ: 'JWT' };
             const now = Math.floor(Date.now() / 1000);
             const claim = {
@@ -140,7 +198,7 @@ async function startApp() {
             const signature = signer.sign(SERVICE_ACCOUNT.private_key, 'base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
             const jwt = `${encodedHeader}.${encodedClaim}.${signature}`;
 
-            // 2. Exchange JWT for Access Token
+            // 3. Exchange JWT for Access Token
             const tokenRes = await nodeFetch('https://oauth2.googleapis.com/token', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -153,38 +211,53 @@ async function startApp() {
                 return { role: 'User', status: 'Active' }; // Default on error
             }
 
-            // 3. Fetch Sheet Data
+            // 4. Fetch Sheet Data
             const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${RANGE}`;
             const sheetRes = await nodeFetch(url, {
                 headers: { 'Authorization': `Bearer ${tokenData.access_token}` }
             });
             const data = await sheetRes.json();
 
-            // 4. Parse Data
+            // 5. Parse Data
             let role = 'User';
             let status = 'Active';
+            let first_name = '';
 
             if (data.values && data.values.length > 0) {
                 const headers = data.values[0];
                 const emailIndex = headers.findIndex(h => h && h.trim().toLowerCase() === 'email');
                 const statusIndex = headers.findIndex(h => h && h.trim().toLowerCase() === 'status');
                 const roleIndex = headers.findIndex(h => h && h.trim() === 'HireTrack_Role');
+                const firstNameIndex = headers.findIndex(h => h && h.trim().toLowerCase() === 'first name');
 
                 const eIdx = emailIndex !== -1 ? emailIndex : 0;
                 const sIdx = statusIndex !== -1 ? statusIndex : 8;
                 const rIdx = roleIndex !== -1 ? roleIndex : 9;
+                const fnIdx = firstNameIndex !== -1 ? firstNameIndex : 2; // Column C is index 2
 
                 const userRow = data.values.find(row => row[eIdx] && row[eIdx].toLowerCase() === email.toLowerCase());
                 if (userRow) {
                     role = userRow[rIdx] || 'User';
                     status = userRow[sIdx] || 'Active';
+                    first_name = userRow[fnIdx] || '';
                 }
             }
-            return { role, status };
+
+            const result = { role, status, first_name };
+
+            // 6. Save to cache
+            try {
+                cache[email] = { timestamp: Date.now(), data: result };
+                fs.writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 2));
+            } catch (writeErr) {
+                console.error('Error writing user cache:', writeErr);
+            }
+
+            return result;
 
         } catch (error) {
             console.error('Google Sheet Auth Error:', error);
-            return { role: 'User', status: 'Active' };
+            return { role: 'User', status: 'Active', first_name: '' };
         }
     });
 
@@ -310,6 +383,74 @@ async function startApp() {
     });
     ipcMain.handle('get-local-ip', () => {
       return getLocalIP();
+    });
+    ipcMain.handle('get-app-version', () => {
+      return app.getVersion();
+    });
+
+    ipcMain.handle('check-for-updates', async () => {
+        // TODO: Verify your GitHub details here
+        const GITHUB_OWNER = "Syano18"; 
+        const GITHUB_REPO = "PSA-HireTrack";
+        
+        try {
+            const response = await nodeFetch(`https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`);
+            if (!response.ok) return { updateAvailable: false, error: 'Failed to fetch releases' };
+            
+            const data = await response.json();
+            const latestVersion = data.tag_name.replace(/^v/, ''); // Remove 'v' prefix if present
+            const currentVersion = app.getVersion();
+            
+            // Simple version comparison (semver-like)
+            const v1 = latestVersion.split('.').map(Number);
+            const v2 = currentVersion.split('.').map(Number);
+            let updateAvailable = false;
+            
+            for (let i = 0; i < Math.max(v1.length, v2.length); i++) {
+                const n1 = v1[i] || 0;
+                const n2 = v2[i] || 0;
+                if (n1 > n2) { updateAvailable = true; break; }
+                if (n1 < n2) { break; }
+            }
+
+            if (updateAvailable) {
+                const asset = data.assets.find(a => a.name.endsWith('.exe'));
+                return {
+                    updateAvailable: true,
+                    version: data.tag_name,
+                    downloadUrl: asset ? asset.browser_download_url : null,
+                    releaseNotes: data.body
+                };
+            }
+            return { updateAvailable: false };
+        } catch (err) {
+            console.error('Update check failed:', err);
+            return { updateAvailable: false, error: err.message };
+        }
+    });
+
+    ipcMain.handle('download-and-install-update', async (event, downloadUrl) => {
+        try {
+            const response = await nodeFetch(downloadUrl);
+            if (!response.ok) throw new Error('Failed to download file');
+            
+            const tempDir = app.getPath('temp');
+            const fileName = 'PSA-HireTrack-Update.exe';
+            const filePath = path.join(tempDir, fileName);
+            
+            const fileStream = fs.createWriteStream(filePath);
+            await new Promise((resolve, reject) => {
+                response.body.pipe(fileStream);
+                response.body.on("error", reject);
+                fileStream.on("finish", resolve);
+            });
+            
+            shell.openPath(filePath);
+            setTimeout(() => app.quit(), 1000); // Quit app to allow installer to run
+            return { success: true };
+        } catch (err) {
+            return { success: false, message: err.message };
+        }
     });
     
     ipcMain.handle('prepare-download', async (event, { url, payload, fileType }) => {
@@ -488,7 +629,52 @@ async function startApp() {
         mainWindow.loadURL('http://localhost:3000');
         mainWindow.webContents.openDevTools();
     } else {
-        mainWindow.loadFile(path.join(__dirname, 'psahiretrack/build/index.html'));
+        // Serve static files via HTTP server to fix Firebase Auth "unauthorized-domain" error
+        // Firebase Auth does not support file:// protocol for signInWithPopup
+        const mimeTypes = {
+            '.html': 'text/html',
+            '.js': 'text/javascript',
+            '.css': 'text/css',
+            '.json': 'application/json',
+            '.png': 'image/png',
+            '.jpg': 'image/jpg',
+            '.gif': 'image/gif',
+            '.svg': 'image/svg+xml',
+            '.ico': 'image/x-icon'
+        };
+
+        const buildPath = path.join(__dirname, 'psahiretrack/build');
+        const serverPort = 4173;
+
+        const server = http.createServer((req, res) => {
+            const urlPath = req.url.split('?')[0];
+            const safePath = path.normalize(urlPath).replace(/^(\.\.[\/\\])+/, '');
+            let filePath = path.join(buildPath, safePath === '/' || safePath === '\\' ? 'index.html' : safePath);
+            
+            const extname = String(path.extname(filePath)).toLowerCase();
+            const contentType = mimeTypes[extname] || 'application/octet-stream';
+
+            fs.readFile(filePath, (error, content) => {
+                if (error) {
+                    // SPA Fallback: serve index.html
+                    fs.readFile(path.join(buildPath, 'index.html'), (err, indexContent) => {
+                        if (err) { res.writeHead(500); res.end('Error'); }
+                        else { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end(indexContent, 'utf-8'); }
+                    });
+                } else {
+                    res.writeHead(200, { 'Content-Type': contentType });
+                    res.end(content, 'utf-8');
+                }
+            });
+        });
+
+        server.listen(serverPort, 'localhost', () => {
+            mainWindow.loadURL(`http://localhost:${serverPort}`);
+        });
+
+        app.on('will-quit', () => {
+            server.close();
+        });
     }
   }
 
@@ -499,6 +685,7 @@ async function startApp() {
       app.quit();
     }
   });
+  //mainWindow.webContents.openDevTools();
 }
 
 startApp();

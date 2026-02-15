@@ -4,12 +4,12 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from
 
 // TODO: Replace with your actual Firebase configuration
 const firebaseConfig = {
-  apiKey: "AIzaSyCMoofIzlep61HniypQb3x1Hd1a2adwNhg",
-  authDomain: "logbook-cred.firebaseapp.com",
-  projectId: "logbook-cred",
-  storageBucket: "logbook-cred.firebasestorage.app",
-  messagingSenderId: "602025460910",
-  appId: "1:602025460910:web:2a9f3ed064cf367d17d93f"
+  apiKey: "AIzaSyAVTSOd5gN4QhFWjXBiQvpTIXLMzT_HSMU",
+  authDomain: "kalingacredentials-7129f.firebaseapp.com",
+  projectId: "kalingacredentials-7129f",
+  storageBucket: "kalingacredentials-7129f.firebasestorage.app",
+  messagingSenderId: "495081030126",
+  appId: "1:495081030126:web:5aa6a00990592df1e8ceff"
 };
 
 // Initialize Firebase
@@ -30,7 +30,7 @@ export const AuthProvider = ({ children }) => {
             return result;
         } catch (error) {
             console.error("Failed to fetch details via Electron:", error);
-            return { role: 'User', status: 'Active' };
+            return { role: 'User', status: 'Active', first_name: '' };
         }
     };
 
@@ -39,7 +39,7 @@ export const AuthProvider = ({ children }) => {
             if (firebaseUser) {
                 // User is signed in.
                 const token = await firebaseUser.getIdToken();
-                const { role, status } = await fetchUserDetails(firebaseUser.email);
+                const { role, status, first_name } = await fetchUserDetails(firebaseUser.email);
 
                 if (status === 'Inactive') {
                     await signOut(auth);
@@ -50,7 +50,8 @@ export const AuthProvider = ({ children }) => {
                         id: firebaseUser.uid,
                         email: firebaseUser.email,
                         username: firebaseUser.email, // Map email to username for compatibility
-                        role: role
+                        role: role,
+                        first_name: first_name
                     };
                     const sessionData = { user, token };
                     setSession(sessionData);

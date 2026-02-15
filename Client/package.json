@@ -1,6 +1,6 @@
 {
   "name": "psa-hired-app",
-  "version": "1.0.0",
+  "version": "0.1.1",
   "description": "PSA Hired Management System",
   "author": "Chano <officialchano18@gmail.com>",
   "main": "main.js",
@@ -37,7 +37,8 @@
       "psahiretrack/build/**/*",
       "main.js",
       "preload.js",
-      "node_modules/**/*"
+      "node_modules/**/*",
+      "System.ico"
     ],
     "win": {
       "target": "nsis",
