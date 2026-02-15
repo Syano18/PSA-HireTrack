@@ -1,5 +1,0 @@
-cd C:\Users\admin\Desktop\PSA-HireTrack
-git add .
-git commit -m "feat: Track both Client and Server"
-git push origin main
-
