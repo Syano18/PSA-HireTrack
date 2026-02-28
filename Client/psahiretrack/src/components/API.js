@@ -26,6 +26,11 @@ export const apiFetch = async (endpoint, serverIp, options = {}) => {
 
     // --- HANDLE ALL NON-OK RESPONSES (4xx, 5xx) ---
     if (!response.ok) {
+      // Special-case: if the survey criteria endpoint returns 404, treat as empty result
+      if (response.status === 404 && endpoint.includes('/rating-criteria')) {
+        return {};
+      }
+
       // Handle session expired as a special case
       if (response.status === 401) {
         await window.electronAPI.handleSessionExpired();

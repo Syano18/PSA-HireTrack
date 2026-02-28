@@ -162,6 +162,44 @@ const executeTurso = async (sql, args = []) => {
 // --- Employment Record Endpoints ---
 // =================================================================
 
+// GET /api/employments/search?first_name=&last_name= (Search by employee name)
+router.get('/search', async (req, res) => {
+  const { first_name, last_name } = req.query;
+  if (!first_name && !last_name) {
+    return res.status(400).json({ error: 'Please provide at least first_name or last_name.' });
+  }
+  try {
+    const conditions = [];
+    const params = [];
+    if (first_name) { conditions.push('e.first_name LIKE ?'); params.push(`%${first_name}%`); }
+    if (last_name)  { conditions.push('e.last_name LIKE ?');  params.push(`%${last_name}%`); }
+    const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const sqlQuery = `
+      SELECT
+        emp.id,
+        DATE_FORMAT(emp.contract_start_date, '%m/%d/%Y') AS contract_start_date,
+        DATE_FORMAT(emp.contract_end_date, '%m/%d/%Y') AS contract_end_date,
+        emp.rating, emp.remarks,
+        e.first_name, e.middle_initial, e.last_name, e.suffix, e.employee_id as emp_id_str,
+        p.title AS position_title,
+        s.name AS survey_name,
+        CONCAT(u.first_name, ' ', u.last_name) AS focal_person_name
+      FROM employments emp
+      JOIN employees e ON emp.employee_id = e.id
+      JOIN positions p ON emp.position_id = p.id
+      LEFT JOIN surveys s ON emp.survey_id = s.id
+      LEFT JOIN users u ON emp.focal_person_id = u.id
+      ${whereClause}
+      ORDER BY emp.contract_start_date DESC
+    `;
+    const [results] = await dbPool.query(sqlQuery, params);
+    res.json(results);
+  } catch (err) {
+    console.error(`Database error searching employments: ${err.message}`);
+    res.status(500).json({ error: 'Failed to search employment data.' });
+  }
+});
+
 // GET all employment records
 router.get('/', async (req, res) => {
     try {
@@ -895,8 +933,8 @@ router.get('/history', async (req, res) => {
         const sqlQuery = `
           SELECT
             emp.id,
-            DATE_FORMAT(emp.contract_start_date, '%Y-%m-%d') AS contract_start_date,
-            DATE_FORMAT(emp.contract_end_date, '%Y-%m-%d') AS contract_end_date,
+            DATE_FORMAT(emp.contract_start_date, '%m/%d/%Y') AS contract_start_date,
+            DATE_FORMAT(emp.contract_end_date, '%m/%d/%Y') AS contract_end_date,
             emp.rating, emp.remarks,
             p.title AS position_title,
             s.name AS survey_name

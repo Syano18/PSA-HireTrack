@@ -5,6 +5,45 @@ import { apiFetch } from '../components/API';
 import { useSettings } from '../context/SettingsContext';
 import { useAuth } from '../context/AuthContext';
 
+const DEFAULT_CRITERIA = [
+  {
+    key: 'professionalism',
+    label: 'Professionalism',
+    description: 'The ability to conduct self in an excellent and competent manner expected of a person trained to do the job. Some of the central professional characteristics includes commitment and confidence, responsibility and dependability, honesty and ethics, and appearance.',
+    notApplicable: true
+  },
+  {
+    key: 'interpersonal',
+    label: 'Interpersonal Skills',
+    description: 'Skills we use every day when we communicate and interact with other people, both individually and in groups. It is sometimes referred to as social skills, people skills, soft skills, or life skills. The ability of an individual to effectively communicate and interact with co-workers, clients, and work well in a team to achieve desired/agreed results.',
+    notApplicable: true
+  },
+  {
+    key: 'organization',
+    label: 'Organization Skills',
+    description: 'The ability to set priorities and identify scope and allocate resources to meet individual, team or organisation targets and objectives. It is the ability of an individual to make use of their time, energy and resources available in an effective manner to achieve their goal.',
+    notApplicable: true
+  },
+  {
+    key: 'written_communication',
+    label: 'Written Communication',
+    description: 'Written communication skills are those necessary to get your point across in writing. While they share many of the same features as verbal communication skills, written communication relies on grammar, punctuation and word choice.',
+    notApplicable: true
+  },
+  {
+    key: 'oral_communication',
+    label: 'Oral Communication',
+    description: 'Transfer of information from sender to receiver by means of verbal and visual aid. Most of the times oral communication is effectively carried out with the help of non-verbal communication like body language and tone modulations.',
+    notApplicable: true
+  },
+  {
+    key: 'digital_literacy',
+    label: 'Digital Literacy',
+    description: 'Ability to operate standard personal computer/tablets and use computer software, applications and technology.',
+    notApplicable: true
+  }
+];
+
 const Interview = () => {
   const { serverIp, isLoading: isSettingsLoading } = useSettings();
   const { session } = useAuth();
@@ -20,71 +59,37 @@ const Interview = () => {
   const [selectedApplicant, setSelectedApplicant] = useState(null);
   const [employmentHistory, setEmploymentHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
-  const [interviewForm, setInterviewForm] = useState({
-    professionalism: '',
-    interpersonal: '',
-    organization: '',
-    written_communication: '',
-    oral_communication: '',
-    digital_literacy: '',
-    remarks: ''
-  });
+  // criteria used for current interview; may be filtered from defaults depending on survey
+  const [criteria, setCriteria] = useState(DEFAULT_CRITERIA);
+  const [interviewForm, setInterviewForm] = useState({});
 
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
   const [interviewConfirm, setInterviewConfirm] = useState(false);
   const [successMessage, setSuccessMessage] = useState(null);
 
-  const CRITERIA = [
-    {
-      key: 'professionalism',
-      label: 'Professionalism',
-      description: 'The ability to conduct self in an excellent and competent manner expected of a person trained to do the job. Some of the central professional characteristics includes commitment and confidence, responsibility and dependability, honesty and ethics, and appearance.'
-    },
-    {
-      key: 'interpersonal',
-      label: 'Interpersonal Skills',
-      description: 'Skills we use every day when we communicate and interact with other people, both individually and in groups. It is sometimes referred to as social skills, people skills, soft skills, or life skills. The ability of an individual to effectively communicate and interact with co-workers, clients, and work well in a team to achieve desired/agreed results.'
-    },
-    {
-      key: 'organization',
-      label: 'Organization Skills',
-      description: 'The ability to set priorities and identify scope and allocate resources to meet individual, team or organisation targets and objectives. It is the ability of an individual to make use of their time, energy and resources available in an effective manner to achieve their goal.'
-    },
-    {
-      key: 'written_communication',
-      label: 'Written Communication',
-      description: 'Written communication skills are those necessary to get your point across in writing. While they share many of the same features as verbal communication skills, written communication relies on grammar, punctuation and word choice.',
-      notApplicable: true
-    },
-    {
-      key: 'oral_communication',
-      label: 'Oral Communication',
-      description: 'Transfer of information from sender to receiver by means of verbal and visual aid. Most of the times oral communication is effectively carried out with the help of non-verbal communication like body language and tone modulations.'
-    },
-    {
-      key: 'digital_literacy',
-      label: 'Digital Literacy',
-      description: 'Ability to operate standard personal computer/tablets and use computer software, applications and technology.'
-    }
-  ];
+
 
   const computedAverage = useMemo(() => {
-    const scores = CRITERIA
+    const scores = criteria
       .filter(c => interviewForm[c.key] !== 'N/A' && interviewForm[c.key] !== '')
       .map(c => parseFloat(interviewForm[c.key]))
       .filter(v => !isNaN(v));
     if (scores.length === 0) return null;
     return (scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(2);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [interviewForm]);
+  }, [interviewForm, criteria]);
 
   const fetchAssignedApplicants = useCallback(async () => {
     if (!serverIp || !session?.token) return;
     setIsLoading(true);
     try {
       const data = await apiFetch('applicants/assigned-to-me', serverIp);
-      setAssignedApplicants(data);
+      // ensure we only keep those with the statuses the interviewer cares about
+      const filtered = Array.isArray(data)
+        ? data.filter(a => a.interview_status === 'For Interview' || a.interview_status === 'Ongoing Interview')
+        : [];
+      setAssignedApplicants(filtered);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -137,8 +142,27 @@ const Interview = () => {
 
   const handleProceedInterview = async (applicant) => {
     setSelectedApplicant(applicant);
+    // always start with all default criteria, but flag which ones are enabled by the survey
+    let list = DEFAULT_CRITERIA.map(c => ({ ...c, enabled: true }));
+    if (applicant.survey_name) {
+      try {
+        const crit = await apiFetch(`applicants/surveys/${encodeURIComponent(applicant.survey_name)}/rating-criteria`, serverIp);
+        if (Array.isArray(crit.interview)) {
+          const allowed = new Set(crit.interview);
+          list = DEFAULT_CRITERIA.map(c => ({ ...c, enabled: allowed.has(c.key) }));
+        }
+      } catch (e) {
+        // ignore, keep all enabled
+      }
+    }
+    setCriteria(list);
+
+    // set initial form values; disabled items start as 'N/A'
+    const initialForm = { remarks: '' };
+    list.forEach(c => { initialForm[c.key] = c.enabled ? '' : 'N/A'; });
+    setInterviewForm(initialForm);
+
     setIsModalOpen(true);
-    setInterviewForm({ professionalism: '', interpersonal: '', organization: '', written_communication: '', oral_communication: '', digital_literacy: '', remarks: '' });
     setSaveError(null);
     setEmploymentHistory([]);
     setHistoryLoading(true);
@@ -162,29 +186,65 @@ const Interview = () => {
     }
   };
 
+  // validate interview scores, returns error message or null
+  const validateInterview = () => {
+    // each enabled criterion must have a score between 1 and 100
+    for (const criterion of criteria) {
+      if (criterion.enabled === false) continue; // disabled fields are shown as N/A and not required
+      const key = criterion.key;
+      const label = criterion.label;
+      const val = interviewForm[key];
+
+      if (val === '' || val === undefined || val === null) {
+        return `${label} is required and must be between 1 and 100.`;
+      }
+      if (val === 'N/A') {
+        // shouldn't happen for enabled fields, treat as missing
+        return `${label} is required and must be between 1 and 100.`;
+      }
+
+      // ensure numeric and within range
+      if (isNaN(parseFloat(val)) || parseFloat(val) < 1 || parseFloat(val) > 100) {
+        return `${label} must be between 1 and 100.`;
+      }
+    }
+    return null;
+  };
+
   const handleSaveInterview = () => {
     if (!selectedApplicant) return;
     setSaveError(null);
+    const err = validateInterview();
+    if (err) {
+      setSaveError(err);
+      setInterviewConfirm(false);
+      return;
+    }
     setInterviewConfirm(true);
   };
 
   const handleConfirmSaveInterview = async () => {
+    // run validator again in case handleSaveInterview didn't run (or data changed)
+    const err = validateInterview();
+    if (err) {
+      setSaveError(err);
+      return;
+    }
     setIsSaving(true);
     setSaveError(null);
+    const normalize = (val) => {
+      if (val === '' || val === undefined || val === null) return 'N/A';
+      return val;
+    };
     try {
+        // build payload based on active criteria
+        const payload = { average_score: computedAverage, remarks: interviewForm.remarks, interview_status: 'Done Interview' };
+        criteria.forEach(c => {
+          payload[c.key] = normalize(interviewForm[c.key]);
+        });
         await apiFetch(`applicants/${selectedApplicant.id}/interview-result`, serverIp, {
-            method: 'PUT',
-            body: JSON.stringify({
-                professionalism: interviewForm.professionalism,
-                interpersonal: interviewForm.interpersonal,
-                organization: interviewForm.organization,
-                written_communication: interviewForm.written_communication,
-                oral_communication: interviewForm.oral_communication,
-                digital_literacy: interviewForm.digital_literacy,
-                average_score: computedAverage,
-                remarks: interviewForm.remarks,
-                interview_status: 'Returned to PACD',
-            }),
+          method: 'PUT',
+          body: JSON.stringify(payload),
         });
         setInterviewConfirm(false);
         setIsModalOpen(false);
@@ -260,7 +320,7 @@ const Interview = () => {
       {/* Interview Modal */}
       {isModalOpen && selectedApplicant && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
-            <div className="w-full max-w-4xl max-h-[90vh] bg-white dark:bg-gray-800 rounded-lg shadow-xl flex flex-col">
+            <div className="w-full max-w-6xl max-h-[90vh] bg-white dark:bg-gray-800 rounded-lg shadow-xl flex flex-col">
                 <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
                     <div>
                         <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">Interview</p>
@@ -286,11 +346,14 @@ const Interview = () => {
                 </div>
                 
                 <div className="p-6 overflow-y-auto">
+                    <div className="flex gap-6">
+                    {/* LEFT COLUMN: Score Cards + Remarks */}
+                    <div className="w-[500px] flex-shrink-0">
                     {/* Interview Criteria Section */}
                     <div className="mb-8">
                         <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-6">Interview Assessment</h3>
                         <div className="space-y-4">
-                          {CRITERIA.map(criterion => (
+                          {criteria.map(criterion => (
                             <div key={criterion.key} className="border rounded-lg p-4 bg-gray-50 dark:bg-gray-700/30 dark:border-gray-600">
                               <div className="flex items-start justify-between gap-4">
                                 <div className="flex-1">
@@ -298,18 +361,13 @@ const Interview = () => {
                                   <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{criterion.description}</p>
                                 </div>
                                 <div className="flex-shrink-0 flex items-center gap-2">
-                                  {criterion.notApplicable && (
-                                    <label className="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-400 whitespace-nowrap">
-                                      <input type="checkbox" checked={interviewForm[criterion.key] === 'N/A'} onChange={e => setInterviewForm(p => ({ ...p, [criterion.key]: e.target.checked ? 'N/A' : '' }))} className="w-4 h-4" />
-                                      N/A
-                                    </label>
-                                  )}
-                                  {interviewForm[criterion.key] !== 'N/A' && (
+                                  {criterion.enabled ? (
                                     <div className="flex items-center gap-1">
                                       <input
                                         type="number"
                                         min="1"
                                         max="100"
+                                        step="0.01"
                                         value={interviewForm[criterion.key]}
                                         onChange={e => {
                                           let v = e.target.value;
@@ -319,8 +377,10 @@ const Interview = () => {
                                         placeholder="1–100"
                                         className="w-20 text-center p-2 text-sm border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-800 dark:border-gray-600 dark:text-white"
                                       />
-                                      <span className="text-xs text-gray-500 dark:text-gray-400">/100</span>
+                                      <span className="text-xs text-gray-500 dark:text-gray-400"></span>
                                     </div>
+                                  ) : (
+                                    <span className="text-sm italic text-gray-500 dark:text-gray-400">N/A</span>
                                   )}
                                 </div>
                               </div>
@@ -348,41 +408,38 @@ const Interview = () => {
                         <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4">Interviewer Remarks</h3>
                         <textarea rows="3" value={interviewForm.remarks} onChange={e => setInterviewForm(p => ({ ...p, remarks: e.target.value }))} className="block w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white" placeholder="General observations..."></textarea>
                     </div>
+                    </div>{/* end left column */}
 
+                    {/* Divider */}
+                    <div className="flex-shrink-0 w-px bg-gray-200 dark:bg-gray-700 self-stretch"></div>
+
+                    {/* RIGHT COLUMN: Employment History */}
+                    <div className="flex-1 min-w-0">
                     {/* Employment History Section */}
                     <div>
-                        <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4">Previous Employment History (Source: HireTrack Database)</h3>
+                        <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4">Previous Employment History <span className="text-xs font-normal text-gray-500 dark:text-gray-400">(HireTrack Database)</span></h3>
                         {historyLoading ? (
                             <p className="text-gray-500 dark:text-gray-400">Loading history...</p>
                         ) : employmentHistory.length > 0 ? (
-                            <div className="overflow-x-auto border rounded-lg dark:border-gray-700">
-                                <table className="min-w-full text-sm text-left">
-                                    <thead className="bg-gray-50 dark:bg-gray-900">
-                                        <tr>
-                                            <th className="px-4 py-2 font-medium text-gray-900 dark:text-white">Position</th>
-                                            <th className="px-4 py-2 font-medium text-gray-900 dark:text-white">Project/Survey</th>
-                                            <th className="px-4 py-2 font-medium text-gray-900 dark:text-white">Duration</th>
-                                            <th className="px-4 py-2 font-medium text-gray-900 dark:text-white">Rating</th>
-                                            <th className="px-4 py-2 font-medium text-gray-900 dark:text-white">Remarks</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                                        {employmentHistory.map((emp) => (
-                                            <tr key={emp.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/50">
-                                                <td className="px-4 py-2 text-gray-700 dark:text-gray-300">{emp.position_title}</td>
-                                                <td className="px-4 py-2 text-gray-700 dark:text-gray-300">{emp.survey_name}</td>
-                                                <td className="px-4 py-2 text-gray-700 dark:text-gray-300">{emp.contract_start_date} - {emp.contract_end_date}</td>
-                                                <td className="px-4 py-2 text-gray-700 dark:text-gray-300">{emp.rating || 'N/A'}</td>
-                                                <td className="px-4 py-2 text-gray-700 dark:text-gray-300">{emp.remarks || 'N/A'}</td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
+                            <div className="space-y-3">
+                                {employmentHistory.map((emp) => (
+                                    <div key={emp.id} className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700/30 p-3 text-sm">
+                                        <p className="font-semibold text-gray-900 dark:text-white">{emp.position_title}</p>
+                                        {emp.survey_name && <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{emp.survey_name}</p>}
+                                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{emp.contract_start_date} – {emp.contract_end_date}</p>
+                                        <div className="flex items-center gap-3 mt-1.5 flex-wrap">
+                                            <span className="text-xs text-gray-600 dark:text-gray-300"><span className="font-medium">Rating:</span> {emp.rating || 'N/A'}</span>
+                                            {emp.remarks && <span className="text-xs text-gray-600 dark:text-gray-300"><span className="font-medium">Remarks:</span> {emp.remarks}</span>}
+                                        </div>
+                                    </div>
+                                ))}
                             </div>
                         ) : (
                             <p className="text-gray-500 dark:text-gray-400 italic">No previous employment records found.</p>
                         )}
                     </div>
+                    </div>{/* end right column */}
+                    </div>{/* end flex row */}
                 </div>
                 
                 {interviewConfirm ? (

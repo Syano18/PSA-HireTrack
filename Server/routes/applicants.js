@@ -113,9 +113,12 @@ router.get('/assigned-to-me', verifyToken, async (req, res) => {
     const u = userRows[0];
     const interviewerName = [u.first_name, u.middle_initial, u.last_name, u.suffix].filter(Boolean).join(' ');
 
-    // 2. Fetch applicants assigned to this interviewer (exclude finished ones)
+    // 2. Fetch applicants assigned to this interviewer
+    //    only those that are still pending interview work (For Interview or Ongoing Interview).
+    //    Previously we excluded only 'Done Interview'; narrowing the condition here
+    //    ensures the interviewer page only shows the relevant applicants.
     const [applicants] = await dbPool.query(
-      "SELECT * FROM profile_entries WHERE interviewer = ? AND (interview_status IS NULL OR interview_status != 'Returned to PACD') ORDER BY last_name, first_name",
+      "SELECT * FROM profile_entries WHERE interviewer = ? AND interview_status IN ('For Interview','Ongoing Interview') ORDER BY last_name, first_name",
       [interviewerName]
     );
 
@@ -361,7 +364,15 @@ router.get('/transmit-options', verifyToken, async (req, res) => {
           FROM profile_entries pe
           LEFT JOIN surveys s ON pe.survey_name = s.name
           LEFT JOIN users u ON s.focal_person_id = u.id
-          WHERE pe.interview_status = 'Returned to PACD' 
+          WHERE pe.interview_status = 'Done Interview' 
+            AND pe.pre_assessment IS NOT NULL
+            AND pe.pre_assessment != 'null'
+            /* ensure JSON has all five rating fields */
+            AND JSON_EXTRACT(pe.pre_assessment,'$.educational_attainment') IS NOT NULL
+            AND JSON_EXTRACT(pe.pre_assessment,'$.relevant_training') IS NOT NULL
+            AND JSON_EXTRACT(pe.pre_assessment,'$.relevant_work_experience') IS NOT NULL
+            AND JSON_EXTRACT(pe.pre_assessment,'$.written_examination') IS NOT NULL
+            AND JSON_EXTRACT(pe.pre_assessment,'$.interview_average') IS NOT NULL
             AND pe.focal_id IS NULL
             AND pe.survey_name IS NOT NULL 
             AND pe.survey_name != ''
@@ -384,7 +395,19 @@ router.post('/transmit', verifyToken, async (req, res) => {
   try {
       // Check for applicants missing a pre-assessment score
       const [unscored] = await dbPool.query(
-          "SELECT first_name, last_name FROM profile_entries WHERE survey_name = ? AND interview_status = 'Returned to PACD' AND focal_id IS NULL AND (pre_assessment IS NULL OR pre_assessment = 'null')",
+          `SELECT first_name, last_name FROM profile_entries
+           WHERE survey_name = ?
+             AND interview_status = 'Done Interview'
+             AND focal_id IS NULL
+             AND (
+                  pre_assessment IS NULL
+                  OR pre_assessment = 'null'
+                  OR JSON_EXTRACT(pre_assessment,'$.educational_attainment') IS NULL
+                  OR JSON_EXTRACT(pre_assessment,'$.relevant_training') IS NULL
+                  OR JSON_EXTRACT(pre_assessment,'$.relevant_work_experience') IS NULL
+                  OR JSON_EXTRACT(pre_assessment,'$.written_examination') IS NULL
+                  OR JSON_EXTRACT(pre_assessment,'$.interview_average') IS NULL
+               )`,
           [survey_name]
       );
       if (unscored.length > 0) {
@@ -393,7 +416,7 @@ router.post('/transmit', verifyToken, async (req, res) => {
       }
 
       const [result] = await dbPool.query(
-          "UPDATE profile_entries SET focal_id = ?, interview_status = 'Transmitted to Focal Person' WHERE survey_name = ? AND interview_status = 'Returned to PACD' AND focal_id IS NULL",
+          "UPDATE profile_entries SET focal_id = ?, interview_status = 'Transmitted to Focal Person' WHERE survey_name = ? AND interview_status = 'Done Interview' AND focal_id IS NULL",
           [focal_id, survey_name]
       );
       res.json({ message: `Successfully transmitted ${result.affectedRows} applicant(s).` });
@@ -415,6 +438,59 @@ router.put('/:id/interview-status', verifyToken, async (req, res) => {
   } catch (err) {
     console.error(`Error updating interview status: ${err.message}`);
     res.status(500).json({ error: 'Failed to update interview status.' });
+  }
+});
+
+// --- GET /api/surveys/:name/rating-criteria ---
+// Retrieve evaluation criteria for a survey
+router.get('/surveys/:name/rating-criteria', verifyToken, async (req, res) => {
+  const { name } = req.params;
+  try {
+    const [rows] = await dbPool.query('SELECT rating_criteria FROM surveys WHERE name = ?', [name]);
+    if (rows.length === 0) return res.status(404).json({ error: 'Survey not found.' });
+    const rc = rows[0].rating_criteria;
+    let parsed = {};
+    if (rc) {
+      try { parsed = typeof rc === 'string' ? JSON.parse(rc) : rc; } catch (e) { parsed = {}; }
+    }
+    res.json(parsed);
+  } catch (err) {
+    console.error(`Error fetching rating criteria: ${err.message}`);
+    res.status(500).json({ error: 'Failed to fetch rating criteria.' });
+  }
+});
+
+// --- GET /api/surveys/without-criteria ---
+// Return survey names which have no evaluation criteria set yet.
+router.get('/surveys/without-criteria', verifyToken, async (req, res) => {
+  try {
+    // return surveys where rating_criteria is null or empty
+    const [rows] = await dbPool.query('SELECT name, rating_criteria FROM surveys WHERE rating_criteria IS NULL OR rating_criteria = ""');
+    const names = rows.map(r => r.name).filter(Boolean);
+    res.json(names);
+  } catch (err) {
+    console.error(`Error fetching surveys without criteria: ${err.message}`);
+    res.status(500).json({ error: 'Failed to fetch survey list.' });
+  }
+});
+
+// --- PUT /api/surveys/:name/rating-criteria ---
+// Saves selected evaluation criteria JSON into rating_criteria column of surveys
+router.put('/surveys/:name/rating-criteria', verifyToken, async (req, res) => {
+  const { name } = req.params;
+  const { rating_criteria } = req.body;
+  if (!rating_criteria) return res.status(400).json({ error: 'rating_criteria is required.' });
+  try {
+    const json = JSON.stringify(rating_criteria);
+    const [result] = await dbPool.query(
+      'UPDATE surveys SET rating_criteria = ? WHERE name = ?',
+      [json, name]
+    );
+    if (result.affectedRows === 0) return res.status(404).json({ error: 'Survey not found.' });
+    res.json({ message: 'Rating criteria saved successfully.' });
+  } catch (err) {
+    console.error(`Error saving rating criteria: ${err.message}`);
+    res.status(500).json({ error: 'Failed to save rating criteria.' });
   }
 });
 
@@ -527,18 +603,74 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// --- GET /api/applicants/for-assessment ---
+// Returns transmitted applicants for the Assessment page.
+// Super_Admin / Admin / PACD: all transmitted; Focal Person: only their own.
+router.get('/for-assessment', verifyToken, async (req, res) => {
+  const userId = req.user?.id;
+  if (!userId) return res.status(401).json({ error: 'Authentication required.' });
+  try {
+    const [userRows] = await dbPool.query('SELECT hiretrack_role AS role FROM users WHERE id = ?', [userId]);
+    const userRole = userRows[0]?.role;
+    let sql, params;
+    if (['Super_Admin', 'Admin', 'PACD'].includes(userRole)) {
+      sql = "SELECT * FROM profile_entries WHERE focal_id IS NOT NULL ORDER BY last_name, first_name";
+      params = [];
+    } else if (userRole === 'Focal Person') {
+      sql = "SELECT * FROM profile_entries WHERE focal_id = ? ORDER BY last_name, first_name";
+      params = [userId];
+    } else {
+      return res.status(403).json({ error: 'Access denied.' });
+    }
+    const [results] = await dbPool.query(sql, params);
+    res.json(results);
+  } catch (err) {
+    console.error(`Error fetching for-assessment: ${err.message}`);
+    res.status(500).json({ error: 'Failed to retrieve assessment records.' });
+  }
+});
+
+// --- PUT /api/applicants/:id/assessment ---
+// Saves assessment_status and assessment_remarks to dedicated columns.
+router.put('/:id/assessment', verifyToken, async (req, res) => {
+  const { id } = req.params;
+  const { assessment_status, assessment_remarks } = req.body;
+  try {
+    const [result] = await dbPool.query(
+      'UPDATE profile_entries SET assessment_status = ?, assessment_remarks = ? WHERE id = ?',
+      [assessment_status ?? null, assessment_remarks ?? null, id]
+    );
+    if (result.affectedRows === 0) return res.status(404).json({ error: 'Applicant not found.' });
+    res.json({ message: 'Assessment saved.' });
+  } catch (err) {
+    console.error(`Error saving assessment: ${err.message}`);
+    res.status(500).json({ error: 'Failed to save assessment.' });
+  }
+});
+
 // --- PUT /api/applicants/:id/pre-assessment ---
 router.put('/:id/pre-assessment', async (req, res) => {
   const { id } = req.params;
   const { educational_attainment, relevant_training, relevant_work_experience, written_examination } = req.body;
 
   try {
+    // fetch existing JSON so we don't overwrite interview_average or other fields
+    const [rows] = await dbPool.query('SELECT pre_assessment FROM profile_entries WHERE id = ?', [id]);
+    let existing = {};
+    if (rows.length > 0 && rows[0].pre_assessment) {
+      existing = typeof rows[0].pre_assessment === 'string'
+        ? JSON.parse(rows[0].pre_assessment)
+        : rows[0].pre_assessment;
+    }
+
     const assessment = {
-      educational_attainment: educational_attainment ?? null,
-      relevant_training: relevant_training ?? null,
-      relevant_work_experience: relevant_work_experience ?? null,
-      written_examination: written_examination ?? null,
+      ...existing,
+      educational_attainment: educational_attainment ?? existing.educational_attainment ?? null,
+      relevant_training: relevant_training ?? existing.relevant_training ?? null,
+      relevant_work_experience: relevant_work_experience ?? existing.relevant_work_experience ?? null,
+      written_examination: written_examination ?? existing.written_examination ?? null,
     };
+
     await dbPool.query(
       "UPDATE profile_entries SET pre_assessment = ? WHERE id = ?",
       [JSON.stringify(assessment), id]

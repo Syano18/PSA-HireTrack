@@ -12,6 +12,7 @@ import Employments from './pages/Employments';
 import Trainings from './pages/Trainings';
 import Accounts from './pages/Accounts';
 import Applicants from './pages/Applicants';
+import Assessment from './pages/Assessment';
 import Certificates from './pages/Certificates';
 import Utilities from './pages/Utilities';
 import TempTrainingCertificates from './pages/TempTrainingCertificates';
@@ -73,6 +74,10 @@ const App = () => {
                 <Route path="accounts" element={<Accounts />} />
                 <Route path="utilities" element={<Utilities />} />
                 <Route path="applicants" element={<Applicants />} />
+            </Route>
+
+            <Route element={<ProtectedRoute allowedRoles={['Super_Admin', 'Focal Person']} />}>
+                <Route path="assessment" element={<Assessment />} />
             </Route>
 
             <Route path="*" element={<Navigate to="/" replace />} />

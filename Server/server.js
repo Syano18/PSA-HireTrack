@@ -29,9 +29,6 @@ const dashboardRoutes = require('./routes/dashboard'); // This is the one we're 
 const databaseRoutes = require('./routes/database');
 const applicantRoutes = require('./routes/applicants');
 
-
-
-
 // --- USE ROUTES ---
 app.use('/api', authRoutes);
 app.use('/api/users', userRoutes);

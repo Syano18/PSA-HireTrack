@@ -5,7 +5,7 @@ import SysIcon from '../assets/iconat.png';
 import { motion } from 'framer-motion';
 import { 
     FiLogOut, FiChevronLeft, FiChevronRight, FiUser, FiLayout, FiMessageSquare,
-    FiUsers, FiTool, FiBriefcase, FiBook, FiAward, FiFileText, FiUserPlus
+    FiUsers, FiTool, FiBriefcase, FiBook, FiAward, FiFileText, FiUserPlus, FiClipboard
 } from 'react-icons/fi';
 import { FaSun, FaMoon } from 'react-icons/fa';
 
@@ -21,6 +21,7 @@ const Sidebar = ({ onLogout, user }) => {
         { name: 'Dashboard', icon: FiLayout, path: '/dashboard' },
         { name: 'Applicants', icon: FiUserPlus, path: '/applicants' },
         { name: 'Interview', icon: FiMessageSquare, path: '/interview' },
+        { name: 'Assessment', icon: FiClipboard, path: '/assessment' },
         { name: 'Employees', icon: FiUsers, path: '/employees' },
         { name: 'Training', icon: FiBook, path: '/trainings' },
         { name: 'Employment', icon: FiBriefcase, path: '/employments' },
@@ -33,6 +34,9 @@ const Sidebar = ({ onLogout, user }) => {
     const visibleLinks = navLinks.filter(link => {
         if (['Account', 'Utilities', 'Applicants'].includes(link.name)) {
             return ['Super_Admin', 'Admin', 'PACD'].includes(user.role);
+        }
+        if (['Assessment'].includes(link.name)) {
+            return ['Super_Admin', 'Focal Person'].includes(user.role);
         }
         if (['Certificate', 'Interview'].includes(link.name)) {
             return ['Super_Admin', 'Admin', 'PACD', 'User'].includes(user.role);

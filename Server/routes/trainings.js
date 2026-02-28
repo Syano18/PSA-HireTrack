@@ -153,6 +153,38 @@ router.delete('/titles/:id', async (req, res) => {
 // --- MODIFIED: Existing endpoints are updated to use training_title_id ---
 // =========================================================================
 
+// GET /api/trainings/search?first_name=&last_name= (Search by employee name)
+router.get('/search', async (req, res) => {
+  const { first_name, last_name } = req.query;
+  if (!first_name && !last_name) {
+    return res.status(400).json({ error: 'Please provide at least first_name or last_name.' });
+  }
+  try {
+    const conditions = [];
+    const params = [];
+    if (first_name) { conditions.push('e.first_name LIKE ?'); params.push(`%${first_name}%`); }
+    if (last_name)  { conditions.push('e.last_name LIKE ?');  params.push(`%${last_name}%`); }
+    const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const sqlQuery = `
+      SELECT 
+        t.id, t.start_date, t.end_date, t.hours, t.venue,
+        tt.title AS training_title,
+        e.first_name, e.last_name, e.suffix, e.middle_initial,
+        e.employee_id AS employee_identifier
+      FROM trainings t
+      JOIN employees e ON t.employee_id = e.id
+      JOIN training_titles tt ON t.training_title_id = tt.id
+      ${whereClause}
+      ORDER BY t.start_date DESC
+    `;
+    const [results] = await dbPool.query(sqlQuery, params);
+    res.json(results);
+  } catch (err) {
+    console.error(`Database error searching trainings: ${err.message}`);
+    res.status(500).json({ error: 'Failed to search training data.' });
+  }
+});
+
 // GET /api/trainings (Main list)
 router.get('/', async (req, res) => {
   try {
