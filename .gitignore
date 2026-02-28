@@ -9,6 +9,7 @@ Verifier/node_modules/
 Client/psahiretrack/build/
 Verifier/.next/
 Verifier/out/
+Client/dist/
 
 # --- Private database engine (never commit) ---
 Server/mariadb/
