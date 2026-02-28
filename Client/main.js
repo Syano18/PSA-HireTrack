@@ -5,6 +5,9 @@ const path = require('path');
 const fs = require('fs');
 const { exec } = require('child_process');
 const os = require('os');
+const http = require('http');
+const { autoUpdater } = require('electron-updater');
+require('dotenv').config();
 
 // Declare variables outside the async function
 let store;
@@ -34,11 +37,11 @@ function getLocalIP() {
   return '127.0.0.1';
 }
 
-
 async function startApp() {
   await initializeDependencies();
 
   function createWindow() {
+    const isDev = !app.isPackaged;
     const isDark = store.get('isDarkMode');
     mainWindow = new BrowserWindow({
       width: 1200,
@@ -57,33 +60,53 @@ async function startApp() {
     mainWindow.maximize();
     mainWindow.show();
 
-    mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
-        const serverIp = store.get('serverIpAddress') || '127.0.0.1';
-        const serverPort = 3001;
+    // Allow Firebase/Google API certificate errors (handles corporate SSL inspection proxies)
+    mainWindow.webContents.session.setCertificateVerifyProc((request, callback) => {
+      const googleHosts = [
+        'identitytoolkit.googleapis.com',
+        'securetoken.googleapis.com',
+        'www.googleapis.com',
+        'firebaseio.com',
+        'firebaseapp.com',
+        'googleapis.com',
+      ];
+      const isGoogle = googleHosts.some(h => request.hostname === h || request.hostname.endsWith('.' + h));
+      // 0 = success (trust), -2 = use default verification
+      callback(isGoogle ? 0 : -2);
+    });
 
-        callback({
-            responseHeaders: {
-                ...details.responseHeaders,
-                'Content-Security-Policy': [
-                    `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://localhost:${serverPort} http://127.0.0.1:${serverPort} http://${serverIp}:${serverPort}`
-                ]
-            }
-        });
+    // Set Content Security Policy (CSP) to fix security warning
+    mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+      const serverIp = store.get('serverIpAddress') || '192.168.169.180';
+      const serverPort = 3001;
+      
+      callback({
+        responseHeaders: {
+          ...details.responseHeaders,
+          'Content-Security-Policy': [
+            `default-src 'self' 'unsafe-inline' data:; script-src 'self' 'unsafe-inline' ${isDev ? "'unsafe-eval'" : ""}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' http://localhost:${serverPort} http://127.0.0.1:${serverPort} http://${serverIp}:${serverPort} https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.googleapis.com https://*.firebaseio.com https://*.firebaseapp.com`
+          ]
+        }
+      });
     });
 
     // --- CLEANUP: remove existing handlers to avoid "second handler" errors when we recreate the window ---
     const ipcHandleChannels = [
       'get-login-state','set-login-state','clear-login-state','session-expired',
       'get-dark-mode','set-dark-mode',
+      'login-google-loopback', 'login-google-silent',
       'get-server-ip','set-server-ip','restart-app','get-local-ip',
       'login','prepare-download','save-file','open-file',
-      'backup-database','restore-database','save-csv-file'
+      'backup-database','restore-database','save-csv-file',
+      'get-app-version'
     ];
     ipcHandleChannels.forEach(ch => {
       try { ipcMain.removeHandler(ch); } catch (e) { /* ignore if none */ }
     });
     // remove any plain listeners added with ipcMain.on
     try { ipcMain.removeAllListeners('get-dark-mode-sync'); } catch (e) { /* ignore */ }
+    try { ipcMain.removeAllListeners('check-for-updates'); } catch (e) { /* ignore */ }
+    try { ipcMain.removeAllListeners('quit-and-install'); } catch (e) { /* ignore */ }
 
     // --- Existing Login and Dark Mode Handlers ---
     ipcMain.handle('get-login-state', () => store.get('loginState'));
@@ -267,6 +290,133 @@ async function startApp() {
     ipcMain.handle('get-local-ip', () => {
       return getLocalIP();
     });
+
+    // --- Google Loopback Login Handler (Python Strategy) ---
+    ipcMain.handle('login-google-loopback', async () => {
+      let credentials;
+      try {
+        // Look for client_secret.json in the same directory as main.js
+        const secretPath = path.join(__dirname, 'client_secret.json');
+        if (!fs.existsSync(secretPath)) {
+          return { error: 'client_secret.json not found in Client folder.' };
+        }
+        const content = fs.readFileSync(secretPath);
+        credentials = JSON.parse(content);
+      } catch (err) {
+        return { error: `Failed to load client_secret.json: ${err.message}` };
+      }
+
+      // Support both "installed" and "web" formats
+      const { client_id, client_secret } = credentials.installed || credentials.web;
+      
+      return new Promise((resolve) => {
+        let serverPort = null;
+        let isProcessed = false;
+
+        const server = http.createServer(async (req, res) => {
+          try {
+            if (req.url.startsWith('/?code=')) {
+              if (isProcessed) {
+                res.end('Authentication already processed.');
+                return;
+              }
+              isProcessed = true;
+
+              // 1. Extract code from URL
+              // Use captured serverPort to avoid "Cannot read properties of null" if server closes
+              const portToUse = serverPort || (server.address() ? server.address().port : null);
+              const urlParams = new URL(req.url, `http://127.0.0.1:${portToUse}`);
+              const code = urlParams.searchParams.get('code');
+
+              // 2. Show success message to user
+              res.end('Authentication successful! You can close this window and return to the app.');
+              server.close();
+
+              // 3. Exchange code for tokens
+              const tokenResponse = await nodeFetch('https://oauth2.googleapis.com/token', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: new URLSearchParams({
+                  code,
+                  client_id,
+                  client_secret,
+                  redirect_uri: `http://127.0.0.1:${portToUse}`,
+                  grant_type: 'authorization_code'
+                })
+              });
+
+              const tokens = await tokenResponse.json();
+              if (tokens.id_token) {
+                // Store refresh token if provided (happens with access_type=offline)
+                if (tokens.refresh_token) {
+                  store.set('googleRefreshToken', tokens.refresh_token);
+                }
+                resolve({ idToken: tokens.id_token, accessToken: tokens.access_token });
+              } else {
+                resolve({ error: 'Failed to retrieve ID token from Google.' });
+              }
+            }
+          } catch (err) {
+            resolve({ error: err.message });
+            if (server.listening) server.close();
+          }
+        });
+
+        server.listen(0, '127.0.0.1', () => {
+          serverPort = server.address().port;
+          // Added access_type=offline and prompt=consent to ensure we get a refresh token
+          const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?response_type=code&client_id=${client_id}&redirect_uri=http://127.0.0.1:${serverPort}&scope=openid%20email%20profile&access_type=offline&prompt=consent`;
+          shell.openExternal(authUrl);
+        });
+      });
+    });
+
+    // --- Google Silent Login Handler (Uses Refresh Token) ---
+    ipcMain.handle('login-google-silent', async () => {
+      const refreshToken = store.get('googleRefreshToken');
+      if (!refreshToken) {
+        return { error: 'No refresh token available' };
+      }
+
+      let credentials;
+      try {
+        const secretPath = path.join(__dirname, 'client_secret.json');
+        const content = fs.readFileSync(secretPath);
+        credentials = JSON.parse(content);
+      } catch (err) {
+        return { error: 'Failed to load client credentials' };
+      }
+
+      const { client_id, client_secret } = credentials.installed || credentials.web;
+
+      try {
+        const tokenResponse = await nodeFetch('https://oauth2.googleapis.com/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            client_id,
+            client_secret,
+            refresh_token: refreshToken,
+            grant_type: 'refresh_token'
+          })
+        });
+
+        const tokens = await tokenResponse.json();
+        if (tokens.id_token) {
+          // Update stored refresh token if a new one is returned
+          if (tokens.refresh_token) {
+            store.set('googleRefreshToken', tokens.refresh_token);
+          }
+          return { idToken: tokens.id_token, accessToken: tokens.access_token };
+        } else {
+          // If refresh fails (e.g. revoked), clear the stored token so we force a new login next time
+          store.delete('googleRefreshToken');
+          return { error: tokens.error_description || 'Failed to refresh token' };
+        }
+      } catch (err) {
+        return { error: err.message };
+      }
+    });
     
     // --- Login handler ---
     ipcMain.handle('login', async (event, { username, password }) => {
@@ -307,8 +457,17 @@ async function startApp() {
           });
   
           if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.message || 'Backend failed to generate the file.');
+            // Try to parse as JSON, but handle HTML/text responses gracefully
+            const contentType = response.headers.get('content-type') || '';
+            if (contentType.includes('application/json')) {
+              const errorData = await response.json();
+              throw new Error(errorData.message || errorData.error || 'Backend failed to generate the file.');
+            } else {
+              // Server returned non-JSON (likely HTML error page)
+              const errorText = await response.text();
+              console.error('Server returned non-JSON response:', errorText.substring(0, 200));
+              throw new Error(`Server error (${response.status}): ${response.statusText || 'Endpoint not found or server error'}`);
+            }
           }
   
           const tempDir = path.join(app.getPath('temp'), 'psahired-downloads');
@@ -465,7 +624,42 @@ async function startApp() {
         }
     });
 
-    const isDev = !app.isPackaged;
+    // --- Auto Updater Handlers ---
+    ipcMain.handle('get-app-version', () => app.getVersion());
+
+    ipcMain.on('check-for-updates', () => {
+      // Explicitly configure for private repository to avoid 404 on releases.atom
+      autoUpdater.setFeedURL({
+        provider: 'github',
+        owner: 'Syano18',
+        repo: 'PSA-HireTrack',
+        private: true
+      });
+      autoUpdater.checkForUpdates();
+    });
+
+    ipcMain.on('quit-and-install', () => {
+      autoUpdater.quitAndInstall();
+    });
+
+    // Auto Updater Events
+    autoUpdater.removeAllListeners(); // Clean up previous listeners
+    
+    autoUpdater.on('update-available', (info) => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-available', info);
+    });
+    autoUpdater.on('update-not-available', () => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-not-available');
+    });
+    autoUpdater.on('error', (err) => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-error', err.toString());
+    });
+    autoUpdater.on('download-progress', (progressObj) => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-progress', progressObj);
+    });
+    autoUpdater.on('update-downloaded', (info) => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-downloaded', info);
+    });
 
     if (isDev) {
         mainWindow.loadURL('http://localhost:3000');

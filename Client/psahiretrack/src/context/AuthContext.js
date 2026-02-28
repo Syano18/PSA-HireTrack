@@ -29,18 +29,10 @@ export const AuthProvider = ({ children }) => {
         setSession(null);
     };
 
-    const handlePasswordChanged = async () => {
-        const updatedUser = { ...session.user, force_password_change: 0 };
-        const newSessionState = { ...session, user: updatedUser };
-        setSession(newSessionState);
-        await window.electronAPI.setLoginState(newSessionState);
-    };
-
     const value = {
         session,
         isLoading,
         logout: handleLogout,
-        onPasswordChanged: handlePasswordChanged,
     };
 
     return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

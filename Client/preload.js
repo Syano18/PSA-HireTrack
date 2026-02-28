@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setLoginState: (state) => ipcRenderer.invoke('set-login-state', state),
   clearLoginState: () => ipcRenderer.invoke('clear-login-state'),
   login: (credentials) => ipcRenderer.invoke('login', credentials),
+  loginGoogleLoopback: () => ipcRenderer.invoke('login-google-loopback'),
+  loginGoogleSilent: () => ipcRenderer.invoke('login-google-silent'),
 
   // ADD THIS LINE
   handleSessionExpired: () => ipcRenderer.invoke('session-expired'),
@@ -39,6 +41,36 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Restart handlers
   onShowRestartPrompt: (callback) => ipcRenderer.on('ip-saved-show-restart-prompt', callback),
   restartApp: () => ipcRenderer.invoke('restart-app'),
+
+  // Auto Update handlers
+  getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+  checkForUpdates: () => ipcRenderer.send('check-for-updates'),
+  quitAndInstall: () => ipcRenderer.send('quit-and-install'),
+  onUpdateAvailable: (callback) => {
+    const subscription = (_event, ...args) => callback(...args);
+    ipcRenderer.on('update-available', subscription);
+    return () => ipcRenderer.removeListener('update-available', subscription);
+  },
+  onUpdateNotAvailable: (callback) => {
+    const subscription = (_event, ...args) => callback(...args);
+    ipcRenderer.on('update-not-available', subscription);
+    return () => ipcRenderer.removeListener('update-not-available', subscription);
+  },
+  onUpdateError: (callback) => {
+    const subscription = (_event, ...args) => callback(...args);
+    ipcRenderer.on('update-error', subscription);
+    return () => ipcRenderer.removeListener('update-error', subscription);
+  },
+  onUpdateProgress: (callback) => {
+    const subscription = (_event, ...args) => callback(...args);
+    ipcRenderer.on('update-progress', subscription);
+    return () => ipcRenderer.removeListener('update-progress', subscription);
+  },
+  onUpdateDownloaded: (callback) => {
+    const subscription = (_event, ...args) => callback(...args);
+    ipcRenderer.on('update-downloaded', subscription);
+    return () => ipcRenderer.removeListener('update-downloaded', subscription);
+  },
 
   // Listeners
   onLoginStateChange: (callback) => {

@@ -1,9 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const dbPool = require('../db');
-const { logAudit } = require('../utils/auditLogger');
 const getUserWithRole = async (userId) => {
-    const [rows] = await dbPool.query('SELECT role FROM users WHERE id = ?', [userId]);
+    const [rows] = await dbPool.query('SELECT hiretrack_role AS role FROM users WHERE id = ?', [userId]);
     return rows[0];
 };
 
@@ -86,7 +85,6 @@ router.post('/titles', async (req, res) => {
     
     // Log the complete new record
     const newData = { id: result.insertId, title, start_date, end_date, hours, venue };
-    await logAudit(actingUserId, 'CREATE', 'training_title', result.insertId, null, newData);
 
     res.status(201).json({ message: 'Title created successfully', ...newData });
   } catch (err) {
@@ -119,7 +117,6 @@ router.put('/titles/:id', async (req, res) => {
         );
         
         const newData = { title, start_date, end_date, hours, venue };
-        await logAudit(actingUserId, 'UPDATE', 'training_title', id, oldRecord[0], newData);
         
         res.json({ message: 'Training title updated successfully' });
     } catch (err) {
@@ -145,9 +142,6 @@ router.delete('/titles/:id', async (req, res) => {
         
         await dbPool.query('DELETE FROM training_titles WHERE id = ?', [id]);
         
-        // Use actingUserId for the audit log
-        await logAudit(actingUserId, 'DELETE', 'training_title', id, oldRecord[0], null);
-
         res.json({ message: 'Training title deleted successfully' });
     } catch (err) {
         res.status(500).json({ error: 'Cannot delete: Training Title was assigned to multiple employees' });
@@ -213,9 +207,6 @@ router.post('/', async (req, res) => {
         const values = [employee_id, training_title_id, start_date, end_date, hours, venue.trim()];
         
         const [result] = await dbPool.query(`INSERT INTO trainings (${columns.join(', ')}) VALUES (?, ?, ?, ?, ?, ?)`, values);
-
-        // ✅ Audit log
-        await logAudit(actingUserId, 'CREATE', 'training', result.insertId, null, trainingData);
 
         res.status(201).json({ message: 'Training record created successfully', trainingId: result.insertId });
     } catch (dbErr) {
@@ -296,14 +287,14 @@ router.post('/import', async (req, res) => {
 
         if (errors.length > 0) {
             await connection.rollback();
-            return res.status(400).json({ message: 'Import failed.', errors });
+            const message = `Import failed. ${errors.length} error(s) found. First error: ${errors[0]}`;
+            return res.status(400).json({ message, errors });
         }
 
         if (validTrainings.length > 0) {
             const insertQuery = `INSERT INTO trainings (employee_id, training_title_id, start_date, end_date, hours, venue) VALUES ?`;
             const valuesToInsert = validTrainings.map(t => [t.employee_id, t.training_title_id, t.start_date, t.end_date, t.hours, t.venue]);
             await connection.query(insertQuery, [valuesToInsert]);
-            await logAudit(actingUserId, 'IMPORT', 'training', null, null, { importedCount: validTrainings.length });
         }
         
         await connection.commit();
@@ -312,7 +303,7 @@ router.post('/import', async (req, res) => {
     } catch (dbErr) {
         await connection.rollback();
         console.error(`Database error during training import: ${dbErr.message}`);
-        return res.status(500).json({ error: 'A database error occurred.' });
+        return res.status(500).json({ error: dbErr.message });
     } finally {
         if (connection) connection.release();
     }
@@ -355,9 +346,6 @@ router.put('/:id', async (req, res) => {
         
         if (result.affectedRows === 0) return res.status(404).json({ error: 'Training record not found.' });
 
-        // ✅ Audit log
-        await logAudit(actingUserId, 'UPDATE', 'training', id, oldRecord[0], trainingData);
-
         res.json({ message: 'Training record updated successfully' });
     } catch (err) {
         console.error(`Database error during training update: ${err.message}`);
@@ -383,9 +371,6 @@ router.delete('/:id', async (req, res) => {
         if (result.affectedRows === 0) {
             return res.status(404).json({ error: 'Training record not found.' });
         }
-
-        // ✅ Audit log
-        await logAudit(actingUserId, 'DELETE', 'training', id, oldRecord[0], null);
 
         res.json({ message: 'Training record deleted successfully' });
     } catch (err) {

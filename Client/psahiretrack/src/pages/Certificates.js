@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
-import { FaSort, FaSortUp, FaSortDown, FaExclamationTriangle } from 'react-icons/fa';
+import { FaSort, FaSortUp, FaSortDown, FaExclamationTriangle, FaSearch, FaCertificate } from 'react-icons/fa';
 import ProgressModal from '../components/Progress';
 import { apiFetch } from '../components/API';
-import { useSettings } from '../context/SettingsContext'; // 1. IMPORT THE HOOK
+import { useSettings } from '../context/SettingsContext';
 
 const apiEndpoints = {
   Training: { download: 'generate-certificate' },
@@ -12,7 +12,7 @@ const apiEndpoints = {
   ByTrainingTitle: { download: 'generate-certificates-by-training' }
 };
 const Certificates = () => {
-  const { serverIp, isLoading: isSettingsLoading } = useSettings(); // 2. USE THE HOOK
+  const { serverIp, isLoading: isSettingsLoading } = useSettings();
   const [employees, setEmployees] = useState([]);
   const [trainings, setTrainings] = useState([]);
   const [employments, setEmployments] = useState([]);
@@ -35,16 +35,35 @@ const Certificates = () => {
   const [globalSearchTerm, setGlobalSearchTerm] = useState("");
   const [sessionState, setSessionState] = useState(null);
   const [savedFilePath, setSavedFilePath] = useState(null);
+  const [isValidationModalOpen, setIsValidationModalOpen] = useState(false);
+  const [validationInput, setValidationInput] = useState('');
+  const [validationResult, setValidationResult] = useState(null);
+  const [isValidating, setIsValidating] = useState(false);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [editFormData, setEditFormData] = useState({});
+  const [generatedCerts, setGeneratedCerts] = useState([]);
+  const [hoveredGeneratedTraining, setHoveredGeneratedTraining] = useState(null);
+  const [generatedTitlesList, setGeneratedTitlesList] = useState([]);
+
+  const fetchGeneratedTitles = useCallback(async () => {
+    if (!serverIp) return;
+    try {
+      const data = await apiFetch('batch-generated-titles', serverIp);
+      setGeneratedTitlesList(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.warn('Could not fetch generated titles:', err.message);
+    }
+  }, [serverIp]);
 
   const fetchData = useCallback(async () => {
-    if (!serverIp) return; // Wait for serverIp
+    if (!serverIp) return;
     setIsLoading(true);
     setError(null);
     try {
       const [employeesData, trainingsData, employmentsData] = await Promise.all([
-        apiFetch('employees', serverIp),     // 3. PASS serverIp
-        apiFetch('trainings', serverIp),      // 3. PASS serverIp
-        apiFetch('employments', serverIp)    // 3. PASS serverIp
+        apiFetch('employees', serverIp),
+        apiFetch('trainings', serverIp),
+        apiFetch('employments', serverIp)
       ]);
 
       setEmployees(employeesData);
@@ -56,7 +75,7 @@ const Certificates = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [serverIp]); // 4. ADD serverIp dependency
+  }, [serverIp]);
 
   useEffect(() => {
     const getSession = async () => {
@@ -72,11 +91,11 @@ const Certificates = () => {
   }, []);
 
   useEffect(() => {
-    // 5. UPDATE data fetch trigger
     if (sessionState && !isSettingsLoading) {
       fetchData();
+      fetchGeneratedTitles();
     }
-  }, [sessionState, isSettingsLoading, fetchData]);
+  }, [sessionState, isSettingsLoading, fetchData, fetchGeneratedTitles]);
 
   const masterEmployeeList = useMemo(() => {
     if (employees.length === 0) return [];
@@ -189,7 +208,7 @@ const Certificates = () => {
   const handleNextPage = () => setCurrentPage(prev => Math.min(prev + 1, totalPages));
   const handlePreviousPage = () => setCurrentPage(prev => Math.max(prev - 1, 1));
 
-  const handleOpenModal = (employee, mode) => {
+  const handleOpenModal = async (employee, mode) => {
     setSelectedEmployee(employee);
     setModalMode(mode);
     setIsModalOpen(true);
@@ -197,6 +216,15 @@ const Certificates = () => {
     setSelectedTrainings([]);
     setModalSearchTerm("");
     setError(null);
+    setGeneratedCerts([]);
+    const fullName = `${employee.firstName} ${employee.middleInitial || ''} ${employee.lastName} ${employee.suffix || ''}`.replace(/\s+/g, ' ').trim();
+    try {
+      const data = await apiFetch(`check-generated?recipient_name=${encodeURIComponent(fullName)}`, serverIp);
+      setGeneratedCerts(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.warn('Could not fetch generated certificates:', err.message);
+      setGeneratedCerts([]);
+    }
   };
 
   const closeModal = () => {
@@ -239,8 +267,41 @@ const Certificates = () => {
     );
   };
 
+  // Returns the matching cert object if a training certificate has already been generated, or null otherwise.
+  const isTrainingGenerated = useCallback((training) => {
+    return generatedCerts.find(cert => {
+      if (cert.type !== 'training' || cert.details?.source !== 'employee') return false;
+      const storedTitles = (cert.details.training_title || '').split(', ').map(t => t.trim());
+      if (!storedTitles.includes(training.trainingTitle)) return false;
+      const storedHours = String(cert.details.training_hours || '').split(', ').map(h => h.trim());
+      return storedHours.includes(String(training.hours || '').trim());
+    }) || null;
+  }, [generatedCerts]);
+
+  // Returns the matching cert object if a single employment certificate has already been generated, or null otherwise.
+  const isEmploymentGenerated = useCallback((employment) => {
+    return generatedCerts.find(cert =>
+      cert.type === 'employment' &&
+      cert.details?.source === 'employee' &&
+      cert.details?.employment_titles === employment.project_name &&
+      cert.details?.position === employment.position &&
+      (cert.details?.performance_rating || '') === (employment.performance_rating || '')
+    ) || null;
+  }, [generatedCerts]);
+
+  // Returns the matching cert object if this exact combination of employments was already issued as a combined cert.
+  const isMultiEmploymentGenerated = useCallback((employments) => {
+    if (!employments || employments.length < 2) return null;
+    const comboKey = employments.map(e => `${e.position}||${e.project_name}`).sort().join(',');
+    return generatedCerts.find(cert =>
+      cert.type === 'employment' &&
+      cert.details?.source === 'multi-employee' &&
+      cert.details?.combo_key === comboKey
+    ) || null;
+  }, [generatedCerts]);
+
   const fetchFile = async (endpointPath, payload, fileName, fileType = 'pdf') => {
-    if (!serverIp) { // Check for serverIp
+    if (!serverIp) {
       setError({ type: 'download', message: 'Server IP is not available.' });
       return false;
     }
@@ -252,7 +313,7 @@ const Certificates = () => {
 
     try {
       const API_PORT = 3001;
-      const fullUrl = `http://${serverIp}:${API_PORT}/api/${endpointPath}`; // Use serverIp from context
+      const fullUrl = `http://${serverIp}:${API_PORT}/api/${endpointPath}`;
 
       const finalFileName = `${fileName}.${fileType}`;
       const prepareResponse = await window.electronAPI.prepareDownload({
@@ -305,51 +366,116 @@ const Certificates = () => {
     setSavedFilePath(null);
   };
 
-  const handleDownloadTraining = (record) => {
+  const handleDownloadTraining = (record, transmitterName, encodedBy) => {
     const fullName = `${selectedEmployee.firstName} ${selectedEmployee.middleInitial || ''} ${selectedEmployee.lastName}`.replace(/\s+/g, ' ').trim();
-    const certificateData = { type: "Training", name: fullName, id: selectedEmployee.id, trainingTitle: record.trainingTitle, thours: record.hours, startDate: record.startDate, endDate: record.endDate, venue: record.venue };
+    const certificateData = { 
+      type: "Training", 
+      name: fullName, 
+      id: selectedEmployee.id, 
+      first_name: selectedEmployee.firstName,
+      middle_initial: selectedEmployee.middleInitial,
+      last_name: selectedEmployee.lastName,
+      suffix: selectedEmployee.suffix,
+      trainingTitle: record.trainingTitle, thours: record.hours, startDate: record.startDate, endDate: record.endDate, venue: record.venue,
+      transmitterName,
+      encodedBy
+    };
     return fetchFile(apiEndpoints.Training.download, certificateData, `Certificate-Training-${selectedEmployee.lastName}`);
   };
 
-  const handleDownloadSingleEmployment = (record) => {
+  const handleDownloadSingleEmployment = (record, withReference = false, transmitterName = '', encodedBy = '') => {
     const fullName = `${selectedEmployee.firstName} ${selectedEmployee.middleInitial || ''} ${selectedEmployee.lastName}`.replace(/\s+/g, ' ').trim();
-    const certificateData = { type: "SingleEmployment", name: fullName, id: selectedEmployee.id, sex: selectedEmployee.sex, last_name: selectedEmployee.lastName, barangay: selectedEmployee.barangay, municipality: selectedEmployee.municipality, employee_id_str: selectedEmployee.id, position: record.position, project_name: record.project_name, contract_start_date: record.contract_start_date, contract_end_date: record.contract_end_date, performance_rating: record.performance_rating, remarks: record.remarks };
+    const certificateData = { 
+      type: "SingleEmployment", 
+      name: fullName, 
+      id: selectedEmployee.id, 
+      sex: selectedEmployee.sex, 
+      first_name: selectedEmployee.firstName,
+      middle_initial: selectedEmployee.middleInitial,
+      last_name: selectedEmployee.lastName,
+      suffix: selectedEmployee.suffix,
+      barangay: selectedEmployee.barangay, 
+      municipality: selectedEmployee.municipality, 
+      employee_id_str: selectedEmployee.id, 
+      position: record.position, 
+      project_name: record.project_name, 
+      contract_start_date: record.contract_start_date, 
+      contract_end_date: record.contract_end_date, 
+      performance_rating: record.performance_rating, 
+      remarks: record.remarks,
+      withReference,
+      transmitterName,
+      encodedBy
+    };
     return fetchFile(apiEndpoints.SingleEmployment.download, certificateData, `Certificate-Employment-${selectedEmployee.lastName}`);
   };
 
-  const handleDownloadMultiEmployment = () => {
+  const handleDownloadMultiEmployment = (withReference = false, transmitterName = '', encodedBy = '') => {
     const fullName = `${selectedEmployee.firstName} ${selectedEmployee.middleInitial || ''} ${selectedEmployee.lastName}`.replace(/\s+/g, ' ').trim();
-    const certificateData = { type: "MultiEmployment", name: fullName, id: selectedEmployee.id, lastName: selectedEmployee.lastName, sex: selectedEmployee.sex, barangay: selectedEmployee.barangay, municipality: selectedEmployee.municipality, employments: [...selectedEmployments].sort((a, b) => new Date(a.contract_start_date) - new Date(b.contract_start_date)) };
+    const certificateData = { 
+      type: "MultiEmployment", 
+      name: fullName, 
+      id: selectedEmployee.id, 
+      first_name: selectedEmployee.firstName,
+      middle_initial: selectedEmployee.middleInitial,
+      last_name: selectedEmployee.lastName,
+      suffix: selectedEmployee.suffix,
+      lastName: selectedEmployee.lastName, 
+      sex: selectedEmployee.sex, 
+      barangay: selectedEmployee.barangay, 
+      municipality: selectedEmployee.municipality, 
+      employments: [...selectedEmployments].sort((a, b) => new Date(a.contract_start_date) - new Date(b.contract_start_date)),
+      withReference,
+      transmitterName,
+      encodedBy
+    };
     return fetchFile(apiEndpoints.MultiEmployment.download, certificateData, `Certificate-Multi-Employment-${selectedEmployee.lastName}`);
   };
 
-  const handleDownloadBatchTraining = () => {
+  const handleDownloadBatchTraining = (transmitterName, encodedBy) => {
     const fullName = `${selectedEmployee.firstName} ${selectedEmployee.middleInitial || ''} ${selectedEmployee.lastName}`.replace(/\s+/g, ' ').trim();
-    const certificateData = { type: "BatchTraining", name: fullName, id: selectedEmployee.id, trainings: selectedTrainings.sort((a, b) => new Date(a.startDate) - new Date(b.startDate)) };
+    const certificateData = { 
+      type: "BatchTraining", 
+      name: fullName, 
+      id: selectedEmployee.id, 
+      first_name: selectedEmployee.firstName,
+      middle_initial: selectedEmployee.middleInitial,
+      last_name: selectedEmployee.lastName,
+      suffix: selectedEmployee.suffix,
+      trainings: selectedTrainings.sort((a, b) => new Date(a.startDate) - new Date(b.startDate)),
+      transmitterName,
+      encodedBy
+    };
     return fetchFile(apiEndpoints.BatchTraining.download, certificateData, `Certificate-Batch-Training-${selectedEmployee.lastName}`);
   };
 
 
-  const handleEmploymentDownloadAction = async () => {
+  const handleEmploymentDownloadAction = () => {
+    executeEmploymentDownload(true);
+  };
+
+  const executeEmploymentDownload = async (withReference) => {
     closeModal();
+    const transmitterName = `${sessionState.user.first_name} ${sessionState.user.middle_initial} ${sessionState.user.last_name}`;
+    const encodedBy = sessionState.user.email_address;
     let result = false;
     if (selectedEmployments.length === 1) {
-      result = await handleDownloadSingleEmployment(selectedEmployments[0]);
+      result = await handleDownloadSingleEmployment(selectedEmployments[0], withReference, transmitterName, encodedBy);
     } else if (selectedEmployments.length > 1) {
-      result = await handleDownloadMultiEmployment();
+      result = await handleDownloadMultiEmployment(withReference, transmitterName, encodedBy);
     }
-    if (typeof result === 'string') {
-      showCompletionModal(result);
-    }
+    if (typeof result === 'string') showCompletionModal(result);
   };
 
   const handleTrainingDownloadAction = async () => {
     closeModal();
+    const transmitterName = `${sessionState.user.first_name} ${sessionState.user.middle_initial} ${sessionState.user.last_name}`;
+    const encodedBy = sessionState.user.email_address;
     let result = false;
     if (selectedTrainings.length === 1) {
-      result = await handleDownloadTraining(selectedTrainings[0]);
+      result = await handleDownloadTraining(selectedTrainings[0], transmitterName, encodedBy);
     } else if (selectedTrainings.length > 1) {
-      result = await handleDownloadBatchTraining();
+      result = await handleDownloadBatchTraining(transmitterName, encodedBy);
     }
     if (typeof result === 'string') {
       showCompletionModal(result);
@@ -357,7 +483,9 @@ const Certificates = () => {
   };
 
   const handleGenerateBatchByTitle = async (trainingTitle) => {
-    const payload = { trainingTitle };
+    const transmitterName = `${sessionState.user.first_name} ${sessionState.user.middle_initial} ${sessionState.user.last_name}`;
+    const encodedBy = sessionState.user.email_address;
+    const payload = { trainingTitle, transmitterName, encodedBy };
     const endpointPath = apiEndpoints.ByTrainingTitle.download;
     let interval = null; 
 
@@ -388,10 +516,12 @@ const Certificates = () => {
           setProgress(100);
           setIsProgressComplete(true);
           setProgressMessage(result);
+          fetchGeneratedTitles(); // refresh so button is disabled immediately
       }
     } catch (error) {
         console.error('Download error:', error);
-        setIsProgressModalOpen(false); 
+        setIsProgressComplete(true);
+        setProgressMessage(`Error: ${error.message}`);
     } finally {
         if (interval) {
           clearInterval(interval);
@@ -403,7 +533,129 @@ const Certificates = () => {
     setGlobalSearchTerm('');
   };
 
-  // 6. UPDATE initial loading condition
+  // ─── Helpers ──────────────────────────────────────────────────────────────
+  // Try to parse a formatted date string like "January 5, 2026" back to YYYY-MM-DD
+  const parseDateToInput = (formatted) => {
+    if (!formatted) return '';
+    const d = new Date(formatted);
+    if (!isNaN(d)) return d.toISOString().slice(0, 10);
+    return '';
+  };
+
+  // Extract start/end from stored training_dates like "January 1, 2026 - January 5, 2026"
+  const splitTrainingDates = (datesStr) => {
+    if (!datesStr) return { startDate: '', endDate: '' };
+    const sep = datesStr.includes(' - ') ? ' - ' : null;
+    if (sep) {
+      const [a, b] = datesStr.split(sep);
+      return { startDate: parseDateToInput(a), endDate: parseDateToInput(b) };
+    }
+    const d = parseDateToInput(datesStr);
+    return { startDate: d, endDate: d };
+  };
+
+  // ─── Validation modal ─────────────────────────────────────────────────────
+  const handleOpenValidationModal = () => {
+    setIsValidationModalOpen(true);
+    setValidationInput('');
+    setValidationResult(null);
+  };
+
+  const handleValidate = async (e) => {
+    e.preventDefault();
+    if (!validationInput.trim()) return;
+    setIsValidating(true);
+    setValidationResult(null);
+    try {
+      const data = await apiFetch(`validate-certificate/${encodeURIComponent(validationInput.trim())}`, serverIp);
+      setValidationResult(data);
+    } catch (err) {
+      setValidationResult({ valid: false, message: "Error connecting to server." });
+    } finally {
+      setIsValidating(false);
+    }
+  };
+
+  // ─── Edit & Regenerate ────────────────────────────────────────────────────
+  const handleOpenEdit = () => {
+    if (!validationResult?.valid || !validationResult.data) return;
+    const d    = validationResult.data;
+    const type = d.certificate_type;
+
+    if (type === 'training') {
+      const { startDate, endDate } = splitTrainingDates(d.training_dates);
+      setEditFormData({
+        certType      : 'Participation',
+        name          : d.recipient_name || '',
+        trainingTitle : d.training_title  || '',
+        startDate,
+        endDate,
+        thours        : d.training_hours  || '',
+        venue         : '',
+        refNumber     : d.reference_number,
+        certificateType: type,
+      });
+    } else {
+      // Match against masterEmployeeList (already has barangay + municipality correctly aliased)
+      const match = masterEmployeeList.find(e => {
+        const full = `${e.firstName} ${e.middleInitial || ''} ${e.lastName} ${e.suffix || ''}`.replace(/\s+/g, ' ').trim();
+        return full === d.recipient_name;
+      });
+      setEditFormData({
+        name              : d.recipient_name    || '',
+        first_name        : match?.firstName    || '',
+        middle_initial    : match?.middleInitial || '',
+        last_name         : match?.lastName     || '',
+        suffix            : match?.suffix       || '',
+        sex               : match?.sex          || 'Male',
+        barangay          : match?.barangay     || '',
+        municipality      : match?.municipality || '',
+        position          : d.position              || '',
+        project_name      : d.employment_titles     || '',
+        contract_duration : d.contract_duration     || '',
+        performance_rating: d.performance_rating    || '',
+        remarks           : d.remarks               || '',
+        refNumber         : d.reference_number,
+        certificateType   : type,
+      });
+    }
+    setIsEditModalOpen(true);
+  };
+
+  const handleEditChange = (field, value) => {
+    setEditFormData(prev => ({ ...prev, [field]: value }));
+  };
+
+  const handleRegenerateSubmit = async (e) => {
+    e.preventDefault();
+    const type     = editFormData.certificateType;
+    const endpoint = type === 'training'
+      ? 'regenerate-training-certificate'
+      : 'regenerate-employment-certificate';
+
+    setIsEditModalOpen(false);
+
+    const result = await fetchFile(
+      endpoint,
+      editFormData,
+      `Certificate-Regenerated-${editFormData.last_name || editFormData.name || editFormData.refNumber}`
+    );
+
+    if (result) {
+      // Refresh the validation result to reflect the updated data
+      if (validationResult?.data?.reference_number) {
+        try {
+          const updated = await apiFetch(
+            `validate-certificate/${encodeURIComponent(validationResult.data.reference_number)}`,
+            serverIp
+          );
+          setValidationResult(updated);
+        } catch (_) { /* non-critical */ }
+      }
+      showCompletionModal('Certificate regenerated and saved successfully!');
+    }
+  };
+
   if (isLoading || isSettingsLoading) {
     return (
       <div className="p-4 sm:p-6 lg:p-8">
@@ -424,16 +676,122 @@ const Certificates = () => {
     );
   }
 
-  if (error && error.type !== 'download') return <div className="p-8 text-center text-red-500">{error.message}</div>;
-
   return (
     <div>
-      {/* ... All your JSX ... */}
-      {/* NOTE: No changes are needed in the JSX, only in the logic above. */}
-      {/* The full JSX is omitted here for brevity but is included in the copy-paste block. */}
       <div className="flex flex-col items-start justify-between gap-4 mb-6 md:flex-row md:items-center">
         <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">Generate Certificates</h1>
         <div className="flex items-center gap-4 w-full md:w-auto">
+          <div className="relative">
+            <button onClick={handleOpenValidationModal} className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 shadow-sm">
+              <FaCertificate /> Validate Certificate
+            </button>
+            {isValidationModalOpen && (
+              <>
+                {/* Backdrop — click outside to close */}
+                <div className="fixed inset-0 z-[69]" onClick={() => setIsValidationModalOpen(false)} />
+                {/* Dropdown panel */}
+                <div className="fixed top-16 left-1/2 -translate-x-1/2 z-[70] w-[500px] max-h-[150vh] bg-white rounded-xl shadow-2xl dark:bg-gray-800 flex flex-col border border-gray-200 dark:border-gray-700">
+
+                  {/* Header */}
+                  <div className="px-5 py-4 border-b border-gray-100 dark:border-gray-700 flex-shrink-0">
+                    <h2 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                      <FaCertificate className="text-indigo-500" /> Validate Certificate
+                    </h2>
+                    <p className="mt-0.5 text-sm text-gray-500 dark:text-gray-400">Verify the authenticity of a certificate issued by PSA Kalinga.</p>
+                  </div>
+
+                  {/* Search bar */}
+                  <div className="px-5 pt-4 pb-2 flex-shrink-0">
+                    <form onSubmit={handleValidate} className="relative">
+                      <input type="text" value={validationInput} onChange={(e) => setValidationInput(e.target.value)} placeholder="Enter Reference Number (e.g., 26CAR32-001)" className="w-full pl-3 pr-10 py-2.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white" />
+                      <button type="submit" disabled={isValidating || !validationInput.trim()} className="absolute right-2 top-2 p-1 text-white bg-indigo-600 rounded-md hover:bg-indigo-700 disabled:opacity-50">
+                        {isValidating ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : <FaSearch className="w-3.5 h-3.5" />}
+                      </button>
+                    </form>
+                  </div>
+
+                  {/* Result area */}
+                  <div className="px-5 pb-3 space-y-3 flex-1 overflow-y-auto">
+                    {validationResult && (
+                      <div className={`rounded-lg overflow-hidden border-2 ${validationResult.valid ? 'border-green-500' : 'border-red-500'}`}>
+                        <div className={`h-1 ${validationResult.valid ? 'bg-green-500' : 'bg-red-500'}`} />
+                        <div className="p-4 bg-white dark:bg-gray-800">
+                          {/* Status + source badges */}
+                          <div className="flex flex-wrap gap-1.5 mb-3">
+                            <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full font-bold text-xs tracking-wider border-[1.5px] ${validationResult.valid ? 'bg-green-50 text-green-700 border-green-300 dark:bg-green-900/20 dark:text-green-400 dark:border-green-700' : 'bg-red-50 text-red-700 border-red-300 dark:bg-red-900/20 dark:text-red-400 dark:border-red-700'}`}>
+                              {validationResult.valid ? '✓ AUTHENTIC' : '✗ UNVERIFIED'}
+                            </span>
+                            {validationResult.valid && validationResult.data && (
+                              <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold border ${
+                                validationResult.data.source === 'external_partner'
+                                  ? 'bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-900/20 dark:text-purple-400 dark:border-purple-700'
+                                  : 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/20 dark:text-blue-400 dark:border-blue-700'
+                              }`}>
+                                {validationResult.data.source === 'external_partner' ? '📂 External Partners' : '🏢 Employee'}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Failure reason */}
+                          {!validationResult.valid && (
+                            <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-red-900 text-sm dark:bg-red-900/20 dark:border-red-800 dark:text-red-300">
+                              {validationResult.message || 'No record matches this reference number.'}
+                            </div>
+                          )}
+
+                          {/* Details */}
+                          {validationResult.valid && validationResult.data && (
+                            <>
+                              <div className="mb-3">
+                                <div className="text-base font-bold text-slate-800 dark:text-white">{validationResult.data.recipient_name}</div>
+                                <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                                  {validationResult.data.certificate_type ? validationResult.data.certificate_type.charAt(0).toUpperCase() + validationResult.data.certificate_type.slice(1) : ''} Certificate Holder
+                                </div>
+                              </div>
+                              <div className="border-t border-slate-100 dark:border-gray-700">
+                                {[
+                                  { label: 'Reference No.', value: validationResult.data.reference_number },
+                                  { label: 'Document Type', value: validationResult.data.certificate_type ? validationResult.data.certificate_type.charAt(0).toUpperCase() + validationResult.data.certificate_type.slice(1) + ' Certificate' : '' },
+                                  ...(validationResult.data.certificate_type === 'training' ? [
+                                    { label: 'Training Title', value: validationResult.data.training_title },
+                                    { label: 'Dates', value: validationResult.data.training_dates },
+                                    ...(validationResult.data.training_hours ? [{ label: 'Hours', value: `${validationResult.data.training_hours} hour(s)` }] : []),
+                                  ] : []),
+                                  ...(validationResult.data.certificate_type === 'employment' ? [
+                                    { label: 'Position', value: validationResult.data.position },
+                                    { label: 'Project', value: validationResult.data.employment_titles },
+                                    { label: 'Duration', value: validationResult.data.contract_duration },
+                                    ...(validationResult.data.performance_rating ? [{ label: 'Performance', value: validationResult.data.performance_rating }] : []),
+                                    ...(validationResult.data.remarks ? [{ label: 'Commendation', value: validationResult.data.remarks }] : []),
+                                  ] : []),
+                                ].map(({ label, value }) => value ? (
+                                  <div key={label} className="flex gap-2 py-2 border-b border-slate-100 dark:border-gray-700">
+                                    <span className="min-w-[120px] text-slate-500 dark:text-slate-400 text-xs font-bold uppercase tracking-wider flex-shrink-0 pt-px">{label}</span>
+                                    <span className="text-slate-800 dark:text-slate-200 text-sm leading-relaxed">{value}</span>
+                                  </div>
+                                ) : null)}
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Footer */}
+                  <div className="px-5 py-3 bg-gray-50 dark:bg-gray-700/50 border-t border-gray-100 dark:border-gray-700 flex justify-between items-center flex-shrink-0">
+                    {validationResult?.valid && validationResult.data?.source === 'external_partner' ? (
+                      <button onClick={handleOpenEdit} className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-amber-500 rounded-lg hover:bg-amber-600 focus:outline-none focus:ring-2 focus:ring-amber-400 shadow-sm">
+                        ✏️ Edit &amp; Regenerate
+                      </button>
+                    ) : <span />}
+                    <button onClick={() => setIsValidationModalOpen(false)} className="px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600">Close</button>
+                  </div>
+
+                </div>
+              </>
+            )}
+          </div>
           <div className="flex items-center border rounded-lg p-0.5 bg-gray-100 dark:bg-gray-700">
             <button onClick={() => setViewMode('employee')} className={`px-3 py-1 text-sm rounded-md ${viewMode === 'employee' ? 'bg-white dark:bg-gray-900 text-blue-600 shadow' : 'text-gray-600 dark:text-gray-300'}`}>By Employee</button>
             <button onClick={() => setViewMode('training')} className={`px-3 py-1 text-sm rounded-md ${viewMode === 'training' ? 'bg-white dark:bg-gray-900 text-blue-600 shadow' : 'text-gray-600 dark:text-gray-300'}`}>By Training Title</button>
@@ -508,7 +866,11 @@ const Certificates = () => {
                     <td className="px-5 py-4 text-center border-b border-gray-200 dark:border-gray-700">{training.participantCount}</td>
                     <td className="px-5 py-4 border-b border-gray-200 dark:border-gray-700">{`${training.startDate.toLocaleDateString()} - ${training.endDate.toLocaleDateString()}`}</td>
                     <td className="px-5 py-4 text-center border-b border-gray-200 dark:border-gray-700">
-                      <button onClick={() => handleGenerateBatchByTitle(training.title)} className="px-4 py-2 font-semibold text-white bg-blue-600 rounded-lg shadow-md hover:bg-blue-700">Download All</button>
+                      {generatedTitlesList.includes(training.title) ? (
+                        <span title="Certificates for this training have already been generated." className="px-4 py-2 font-semibold text-gray-400 bg-gray-200 rounded-lg cursor-not-allowed dark:bg-gray-700 dark:text-gray-500">Generated</span>
+                      ) : (
+                        <button onClick={() => handleGenerateBatchByTitle(training.title)} className="px-4 py-2 font-semibold text-white bg-blue-600 rounded-lg shadow-md hover:bg-blue-700">Download</button>
+                      )}
                     </td>
                   </tr>
                 ))
@@ -545,19 +907,160 @@ const Certificates = () => {
             </div>
             <div className="flex-auto overflow-y-auto">
               <ul className="p-6 space-y-3">
-                {modalMode === 'Training' && (filteredTrainings.length > 0 ? (filteredTrainings.map((record, index) => { const isSelected = selectedTrainings.some(item => item.trainingTitle === record.trainingTitle); return ( <li key={index} className={`rounded-lg shadow-sm transition-colors duration-200 ${isSelected ? 'bg-blue-50 dark:bg-blue-900/50 ring-2 ring-blue-500' : 'bg-gray-50 dark:bg-gray-900'}`}> <label className="flex items-center justify-between w-full p-4 cursor-pointer"> <span className="font-medium text-gray-900 dark:text-white">{record.trainingTitle}</span> <input type="checkbox" className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600" checked={isSelected} onChange={() => handleTrainingSelectionChange(record)} /> </label> </li> ); })) : <p className="py-8 text-center text-gray-500 dark:text-gray-400">No matching training records found.</p>)}
-                {modalMode === 'Employment' && (filteredEmployments.length > 0 ? (filteredEmployments.map((record, index) => { const isSelected = selectedEmployments.some(item => item.project_name === record.project_name && item.position === record.position); return ( <li key={index} className={`rounded-lg shadow-sm transition-colors duration-200 ${isSelected ? 'bg-blue-50 dark:bg-blue-900/50 ring-2 ring-blue-500' : 'bg-gray-50 dark:bg-gray-900'}`}> <label className="flex items-center justify-between w-full p-4 cursor-pointer"> <span className="font-medium text-gray-900 dark:text-white">{`${record.position} (${record.project_name})`}</span> <input type="checkbox" className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600" checked={isSelected} onChange={() => handleEmploymentSelectionChange(record)} /> </label> </li> ); })) : <p className="py-8 text-center text-gray-500 dark:text-gray-400">No matching employment records found.</p>)}
+                {modalMode === 'Training' && (filteredTrainings.length > 0 ? (filteredTrainings.map((record, index) => { const isSelected = selectedTrainings.some(item => item.trainingTitle === record.trainingTitle); const alreadyGenerated = isTrainingGenerated(record); return ( <li key={index} onMouseEnter={() => alreadyGenerated && setHoveredGeneratedTraining(alreadyGenerated)} onMouseLeave={() => alreadyGenerated && setHoveredGeneratedTraining(null)} className={`rounded-lg shadow-sm transition-colors duration-200 ${alreadyGenerated ? 'opacity-60 bg-gray-100 dark:bg-gray-900/60' : isSelected ? 'bg-blue-50 dark:bg-blue-900/50 ring-2 ring-blue-500' : 'bg-gray-50 dark:bg-gray-900'}`}> <label className={`flex items-center justify-between w-full p-4 ${alreadyGenerated ? 'cursor-not-allowed' : 'cursor-pointer'}`}> <div className="flex flex-col gap-0.5"><span className="font-medium text-gray-900 dark:text-white">{record.trainingTitle}</span></div> <input type="checkbox" className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 disabled:opacity-50" checked={isSelected} onChange={() => handleTrainingSelectionChange(record)} disabled={alreadyGenerated} /> </label> </li> ); })) : <p className="py-8 text-center text-gray-500 dark:text-gray-400">No matching training records found.</p>)}
+                {modalMode === 'Employment' && (filteredEmployments.length > 0 ? (filteredEmployments.map((record, index) => { const isSelected = selectedEmployments.some(item => item.project_name === record.project_name && item.position === record.position); return ( <li key={index} className={`rounded-lg shadow-sm transition-colors duration-200 ${isSelected ? 'bg-blue-50 dark:bg-blue-900/50 ring-2 ring-blue-500' : 'bg-gray-50 dark:bg-gray-900'}`}> <label className="flex items-center justify-between w-full p-4 cursor-pointer"> <div className="flex flex-col gap-0.5"><span className="font-medium text-gray-900 dark:text-white">{`${record.position} (${record.project_name})`}</span></div> <input type="checkbox" className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600" checked={isSelected} onChange={() => handleEmploymentSelectionChange(record)} /> </label> </li> ); })) : <p className="py-8 text-center text-gray-500 dark:text-gray-400">No matching employment records found.</p>)}
               </ul>
             </div>
-            <div className="flex justify-end flex-shrink-0 p-4 space-x-4 bg-gray-50 border-t border-gray-200 dark:bg-gray-800/50 dark:border-gray-700">
-              <button onClick={closeModal} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600">Cancel</button>
-              {modalMode === 'Training' && (
-                <button onClick={handleTrainingDownloadAction} className="px-5 py-2 text-sm font-medium text-white bg-blue-600 rounded-md shadow-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed" disabled={selectedTrainings.length === 0}>Download Selected ({selectedTrainings.length})</button>
-              )}
-              {modalMode === 'Employment' && (
-                <button onClick={handleEmploymentDownloadAction} className="px-5 py-2 text-sm font-medium text-white bg-blue-600 rounded-md shadow-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed" disabled={selectedEmployments.length === 0}>Download Selected ({selectedEmployments.length})</button>
-              )}
+            {(() => {
+              const multiIssuedCert = modalMode === 'Employment' && selectedEmployments.length > 1 ? isMultiEmploymentGenerated(selectedEmployments) : null;
+              return (
+                <div className="flex items-center justify-between flex-shrink-0 p-4 gap-4 bg-gray-50 border-t border-gray-200 dark:bg-gray-800/50 dark:border-gray-700">
+                  {/* Left: info message */}
+                  <div className="flex-1 text-xs text-amber-600 dark:text-amber-400 font-semibold">
+                    {modalMode === 'Training' && hoveredGeneratedTraining && (
+                      <span>✓ Certificate already issued — Ref: {hoveredGeneratedTraining.reference_number} — {hoveredGeneratedTraining.issued_at ? new Date(hoveredGeneratedTraining.issued_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : ''}</span>
+                    )}
+                    {modalMode === 'Employment' && selectedEmployments.length === 1 && (() => { const sc = isEmploymentGenerated(selectedEmployments[0]); return sc ? <span>✓ Certificate already issued &mdash; Ref: {sc.reference_number} &mdash; {sc.issued_at ? new Date(sc.issued_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : ''}</span> : null; })()}
+                    {multiIssuedCert && (
+                      <span>✓ Certificate already issued &mdash; Ref: {multiIssuedCert.reference_number} &mdash; {multiIssuedCert.issued_at ? new Date(multiIssuedCert.issued_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : ''}</span>
+                    )}
+                  </div>
+                  {/* Right: Cancel + action button */}
+                  <div className="flex items-center gap-3 flex-shrink-0">
+                    <button onClick={closeModal} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600">Cancel</button>
+                    {modalMode === 'Training' && (
+                      <button onClick={handleTrainingDownloadAction} className="px-5 py-2 text-sm font-medium text-white bg-blue-600 rounded-md shadow-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed" disabled={selectedTrainings.length === 0}>Download Selected ({selectedTrainings.length})</button>
+                    )}
+                    {modalMode === 'Employment' && (
+                      <button onClick={handleEmploymentDownloadAction} className="px-5 py-2 text-sm font-medium text-white bg-blue-600 rounded-md shadow-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed" disabled={selectedEmployments.length === 0 || (selectedEmployments.length === 1 && !!isEmploymentGenerated(selectedEmployments[0])) || !!multiIssuedCert}>
+                        Download Selected ({selectedEmployments.length})
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* ─── Edit & Regenerate Modal ─── */}
+      {isEditModalOpen && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+          <div className="w-full max-w-lg bg-white rounded-xl shadow-2xl dark:bg-gray-800 overflow-hidden flex flex-col max-h-[90vh]">
+            {/* Header */}
+            <div className="p-5 border-b border-gray-100 dark:border-gray-700 flex-shrink-0">
+              <h2 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                ✏️ Edit Certificate & Regenerate
+              </h2>
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                Correct any misspelled entries below. The same reference number will be kept and the digital logbook will be updated.
+              </p>
             </div>
+
+            {/* Form */}
+            <form onSubmit={handleRegenerateSubmit} className="overflow-y-auto flex-1">
+              <div className="p-5 space-y-4">
+
+                {/* ----- TRAINING FIELDS ----- */}
+                {editFormData.certificateType === 'training' && (
+                  <>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="col-span-2">
+                        <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1">Recipient Name</label>
+                        <input type="text" value={editFormData.name} onChange={e => handleEditChange('name', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-amber-400" required />
+                      </div>
+                      <div className="col-span-2">
+                        <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1">Training Title</label>
+                        <input type="text" value={editFormData.trainingTitle} onChange={e => handleEditChange('trainingTitle', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-amber-400" required />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1">Start Date</label>
+                        <input type="date" value={editFormData.startDate} onChange={e => handleEditChange('startDate', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-amber-400" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1">End Date</label>
+                        <input type="date" value={editFormData.endDate} onChange={e => handleEditChange('endDate', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-amber-400" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1">Hours</label>
+                        <input type="text" value={editFormData.thours} onChange={e => handleEditChange('thours', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-amber-400" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1">Certificate Type</label>
+                        <select value={editFormData.certType} onChange={e => handleEditChange('certType', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-amber-400">
+                          <option value="Participation">Participation</option>
+                          <option value="Completion">Completion</option>
+                          <option value="Appreciation">Appreciation</option>
+                        </select>
+                      </div>
+                      <div className="col-span-2">
+                        <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1">Venue</label>
+                        <input type="text" value={editFormData.venue} onChange={e => handleEditChange('venue', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-amber-400" />
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {/* ----- EMPLOYMENT FIELDS ----- */}
+                {editFormData.certificateType === 'employment' && (
+                  <>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1">First Name</label>
+                        <input type="text" value={editFormData.first_name} onChange={e => handleEditChange('first_name', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-amber-400" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1">Last Name</label>
+                        <input type="text" value={editFormData.last_name} onChange={e => handleEditChange('last_name', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-amber-400" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1">Barangay</label>
+                        <input type="text" value={editFormData.barangay} onChange={e => handleEditChange('barangay', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-amber-400" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1">Municipality</label>
+                        <input type="text" value={editFormData.municipality} onChange={e => handleEditChange('municipality', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-amber-400" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1">Position</label>
+                        <input type="text" value={editFormData.position} onChange={e => handleEditChange('position', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-amber-400" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1">Project/Assignment</label>
+                        <input type="text" value={editFormData.project_name} onChange={e => handleEditChange('project_name', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-amber-400" />
+                      </div>
+                      <div className="col-span-2">
+                        <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1">Duration</label>
+                        <input type="text" value={editFormData.contract_duration} onChange={e => handleEditChange('contract_duration', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-amber-400" />
+                      </div>
+                      <div className="col-span-2">
+                        <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1">Performance Rating</label>
+                        <input type="text" value={editFormData.performance_rating} onChange={e => handleEditChange('performance_rating', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-amber-400" />
+                      </div>
+                      <div className="col-span-2">
+                        <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1">Notes / Commendations</label>
+                        <textarea rows={2} value={editFormData.remarks} onChange={e => handleEditChange('remarks', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-amber-400 resize-none" />
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                <p className="text-xs text-gray-400 dark:text-gray-500 italic">
+                  Reference No.: <strong>{editFormData.refNumber}</strong> will be preserved. No new logbook entry will be created.
+                </p>
+              </div>
+
+              {/* Footer */}
+              <div className="px-5 py-4 bg-gray-50 dark:bg-gray-700/50 border-t border-gray-100 dark:border-gray-700 flex justify-end gap-3 flex-shrink-0">
+                <button type="button" onClick={() => setIsEditModalOpen(false)} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600">
+                  Cancel
+                </button>
+                <button type="submit" className="flex items-center gap-2 px-5 py-2 text-sm font-medium text-white bg-amber-500 rounded-lg hover:bg-amber-600 shadow-sm">
+                  📄 Save &amp; Regenerate PDF
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
@@ -570,6 +1073,21 @@ const Certificates = () => {
         isComplete={isProgressComplete}
         filePath={savedFilePath}
       />
+
+      {error && error.type !== 'download' && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black bg-opacity-70">
+          <div className="w-full max-w-md p-6 bg-white rounded-lg shadow-xl dark:bg-gray-800 transform transition-all">
+            <div className="text-center">
+              <div className="flex items-center justify-center w-12 h-12 mx-auto bg-red-100 rounded-full dark:bg-red-900/50"><FaExclamationTriangle className="w-6 h-6 text-red-600 dark:text-red-400" aria-hidden="true" /></div>
+              <h3 className="mt-4 text-lg font-medium text-gray-900 dark:text-white">Error</h3>
+              <div className="mt-2 text-sm text-gray-600 dark:text-gray-300"><p>{error.message}</p></div>
+            </div>
+            <div className="mt-5 sm:mt-6">
+              <button type="button" className="inline-flex justify-center w-full px-4 py-2 text-base font-medium text-white bg-red-600 border border-transparent rounded-md shadow-sm hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500" onClick={() => setError(null)}>OK</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {error?.type === 'download' && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black bg-opacity-70">

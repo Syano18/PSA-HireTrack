@@ -1,12 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const dbPool = require('../db');
-const { logAudit } = require('../utils/auditLogger'); // ✅ Import audit logger
+require('dotenv').config();
 
 // --- HELPER FUNCTIONS ---
 
 const getUserWithRole = async (userId) => {
-    const [rows] = await dbPool.query('SELECT role FROM users WHERE id = ?', [userId]);
+    const [rows] = await dbPool.query('SELECT hiretrack_role AS role FROM users WHERE id = ?', [userId]);
     return rows[0];
 };
 
@@ -106,6 +106,58 @@ const getEmploymentDetails = async (data) => {
     }
 };
 
+// --- Helper: Execute Turso Sync via HTTP ---
+const executeTurso = async (sql, args = []) => {
+    const dbUrl = process.env.TURSO_DB_URL?.replace(/^libsql:/, 'https:');
+    const authToken = process.env.TURSO_AUTH_TOKEN;
+    
+    if (!dbUrl || !authToken) {
+      console.warn("Turso DB URL or Token is not configured. Skipping Turso sync.");
+      return null;
+    }
+   
+    const hranaArgs = args.map(arg => {
+      if (arg === null || arg === undefined) return { type: "null" };
+      if (typeof arg === 'number') return { type: "float", value: arg };
+      return { type: "text", value: String(arg) };
+    });
+   
+    const body = {
+      requests: [
+        { type: "execute", stmt: { sql, args: hranaArgs } },
+        { type: "close" }
+      ]
+    };
+   
+    try {
+      console.log(`[Turso] Attempting Sync: ${sql}`, args);
+      const response = await fetch(`${dbUrl}/v2/pipeline`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${authToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[Turso] Sync Failed (${response.status}): ${errorText}`);
+        throw new Error(`Turso Sync Error: ${response.status} ${errorText}`);
+      }
+      const result = await response.json();
+      
+      // Check for SQL errors inside the response
+      const errors = result.results?.filter(r => r.type === 'error');
+      if (errors && errors.length > 0) {
+          console.error('[Turso] SQL Execution Failed:', JSON.stringify(errors, null, 2));
+          throw new Error(`Turso SQL Error: ${errors[0].error.message}`);
+      }
+
+      //console.log('[Turso] Sync Success. Result:', JSON.stringify(result));
+      return result;
+    } catch (err) {
+      console.error('Turso DB Error:', err.message);
+      return null;
+    }
+};
+
 // =================================================================
 // --- Employment Record Endpoints ---
 // =================================================================
@@ -142,7 +194,7 @@ router.get('/', async (req, res) => {
 // GET all focal persons for dropdowns
 router.get('/focal-persons', async (req, res) => {
     try {
-        const [results] = await dbPool.query("SELECT id, first_name, middle_initial ,last_name, suffix FROM users WHERE role = 'Focal Person' ORDER BY last_name");
+        const [results] = await dbPool.query("SELECT id, first_name, middle_initial ,last_name, suffix FROM users WHERE hiretrack_role = 'Focal Person' ORDER BY last_name");
         res.json(results);
     } catch (err) {
         console.error(`Database error fetching focal persons: ${err.message}`);
@@ -206,9 +258,6 @@ router.post('/', async (req, res) => {
         const values = columns.map(col => employmentData[col] || null);
         const [result] = await dbPool.query(`INSERT INTO employments (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`, values);
         
-        const detailedData = await getEmploymentDetails(employmentData);
-        await logAudit(actingUserId, 'CREATE', 'employment', result.insertId, null, detailedData);
-
         res.status(201).json({ message: 'Employment record created successfully', employmentId: result.insertId });
 
     } catch (dbErr) {
@@ -289,9 +338,6 @@ router.put('/batch-update', async (req, res) => {
             affected_ids: ids
         };
 
-        // We use a different action name 'UPDATE_BATCH' to distinguish it in the audit logs.
-        await logAudit(actingUserId, 'UPDATE_BATCH', 'employment', null, oldDataForLog, newDataForLog);
-
         await connection.commit();
 
         // 6. --- SEND SUCCESS RESPONSE ---
@@ -340,10 +386,20 @@ router.put('/:id', async (req, res) => {
             }
             // --- END OF DUPLICATE CHECK ---
 
-            const columns = ['employee_id', 'position_id', 'survey_id', 'focal_person_id', 'contract_start_date', 'contract_end_date', 'rating', 'remarks'];
-            values = [...columns.map(col => employmentData[col] || null), id];
-            sqlQuery = `UPDATE employments SET ${columns.map(col => `${col} = ?`).join(', ')} WHERE id = ?`;
-            newData = employmentData;
+            // Only Super_Admin can overwrite an already-saved rating
+            const ratingIsLocked = oldRecord.rating && oldRecord.rating.trim() !== '';
+            if (ratingIsLocked && actingUser.role !== 'Super_Admin') {
+                // Strip rating/remarks from the update — leave them untouched
+                const columns = ['employee_id', 'position_id', 'survey_id', 'focal_person_id', 'contract_start_date', 'contract_end_date'];
+                values = [...columns.map(col => employmentData[col] || null), id];
+                sqlQuery = `UPDATE employments SET ${columns.map(col => `${col} = ?`).join(', ')} WHERE id = ?`;
+                newData = Object.fromEntries(columns.map(c => [c, employmentData[c]]));
+            } else {
+                const columns = ['employee_id', 'position_id', 'survey_id', 'focal_person_id', 'contract_start_date', 'contract_end_date', 'rating', 'remarks'];
+                values = [...columns.map(col => employmentData[col] || null), id];
+                sqlQuery = `UPDATE employments SET ${columns.map(col => `${col} = ?`).join(', ')} WHERE id = ?`;
+                newData = employmentData;
+            }
 
         } else if (actingUser.role === 'PACD') {
             const { employee_id, position_id, survey_id, contract_start_date, contract_end_date } = employmentData;
@@ -370,6 +426,10 @@ router.put('/:id', async (req, res) => {
             if (oldRecord.focal_person_id !== actingUserId) {
                 return res.status(403).json({ error: 'You are not the assigned focal person for this record.' });
             }
+            // Block if rating is already saved
+            if (oldRecord.rating && oldRecord.rating.trim() !== '') {
+                return res.status(403).json({ error: 'Performance rating has already been submitted and cannot be changed.' });
+            }
             const { rating, remarks } = employmentData;
             values = [rating || null, remarks || null, id];
             sqlQuery = 'UPDATE employments SET rating = ?, remarks = ? WHERE id = ?';
@@ -386,8 +446,6 @@ router.put('/:id', async (req, res) => {
             getEmploymentDetails(oldRecord),
             getEmploymentDetails(newData)
         ]);
-        await logAudit(actingUserId, 'UPDATE', 'employment', id, detailedOldData, detailedNewData);
-
         return res.json({ message: 'Employment record updated successfully' });
 
     } catch (err) {
@@ -415,8 +473,6 @@ router.delete('/:id', async (req, res) => {
 
         const [result] = await dbPool.query('DELETE FROM employments WHERE id = ?', [id]);
         if (result.affectedRows === 0) return res.status(404).json({ error: 'Record not found during deletion.' });
-
-        await logAudit(actingUserId, 'DELETE', 'employment', id, detailedOldData, null);
 
         res.json({ message: 'Employment record deleted successfully' });
     } catch (err) {
@@ -454,6 +510,16 @@ router.post('/import', async (req, res) => {
         const [existingSurveys] = await connection.query("SELECT id, name, contract_start_date, contract_end_date, focal_person_id FROM surveys");
         const surveyMap = new Map(existingSurveys.map(s => [s.name.toLowerCase(), s]));
 
+        // Fetch valid users to validate focal_person_id
+        const [existingUsers] = await connection.query("SELECT id, first_name, middle_initial, last_name, suffix FROM users");
+        const validUserIds = new Set(existingUsers.map(u => u.id));
+        const userMap = new Map();
+        existingUsers.forEach(u => {
+            const fullName = [u.first_name, u.middle_initial, u.last_name, u.suffix]
+                .filter(Boolean).join(' ').replace(/\s+/g, ' ').trim().toLowerCase();
+            userMap.set(fullName, u.id);
+        });
+
         // ✅ PRE-FETCH existing employments for duplicate check
         const [dbEmployments] = await connection.query("SELECT employee_id, position_id, DATE_FORMAT(contract_start_date, '%Y-%m-%d') as start_date FROM employments");
         const existingDbKeys = new Set(dbEmployments.map(e => `${e.employee_id}-${e.position_id}-${e.start_date}`));
@@ -466,7 +532,7 @@ router.post('/import', async (req, res) => {
         for (let i = 0; i < employments.length; i++) {
             const record = employments[i];
             const rowNum = i + 2;
-            const { employee_id, position_title, survey_name } = record;
+            const { employee_id, position_title, survey_name, focal_person_name } = record;
             let hasError = false;
 
             if (!employee_id || !position_title || !survey_name) {
@@ -515,14 +581,34 @@ router.post('/import', async (req, res) => {
             record.db_employee_id = db_employee_id;
             record.db_position_id = db_position_id;
             record.surveyData = surveyData;
+
+            // Determine Focal Person ID (Prioritize CSV input, fallback to Survey default)
+            let targetFocalPersonId = null;
+            if (focal_person_name) {
+                const normalizedName = String(focal_person_name).replace(/\s+/g, ' ').trim().toLowerCase();
+                if (userMap.has(normalizedName)) {
+                    targetFocalPersonId = userMap.get(normalizedName);
+                }
+            }
+            if (!targetFocalPersonId && surveyData) {
+                targetFocalPersonId = surveyData.focal_person_id;
+            }
+
+            // Validate focal_person_id against existing users to prevent FK errors
+            if (targetFocalPersonId && validUserIds.has(targetFocalPersonId)) {
+                record.safe_focal_person_id = targetFocalPersonId;
+            } else {
+                record.safe_focal_person_id = null;
+            }
+
             validRecords.push(record);
         }
 
         // --- 3. Handle errors or insert ---
         if (errors.length > 0) {
             await connection.rollback();
-            connection.release();
-            return res.status(400).json({ message: 'Import failed. Please fix the errors in your file.', errors });
+            const message = `Import failed. ${errors.length} error(s) found. First error: ${errors[0]}`;
+            return res.status(400).json({ message, errors });
         }
         
         if (validRecords.length > 0) {
@@ -531,7 +617,7 @@ router.post('/import', async (req, res) => {
                 rec.db_employee_id,
                 rec.db_position_id,
                 rec.surveyData.id,
-                rec.surveyData.focal_person_id,
+                rec.safe_focal_person_id,
                 rec.surveyData.contract_start_date,
                 rec.surveyData.contract_end_date,
                 null,
@@ -540,15 +626,13 @@ router.post('/import', async (req, res) => {
             await connection.query(insertQuery, [valuesToInsert]);
         }
         
-        await logAudit(actingUserId, 'IMPORT', 'employment', null, null, { importedCount: validRecords.length });
-
         await connection.commit();
         res.status(201).json({ message: `Successfully imported ${validRecords.length} employment records.` });
 
     } catch (dbErr) {
         await connection.rollback();
         console.error(`Database error during employment import: ${dbErr.message}`);
-        return res.status(500).json({ error: 'Database transaction failed.' });
+        return res.status(500).json({ error: dbErr.message });
     } finally {
         if (connection) connection.release();
     }
@@ -586,8 +670,6 @@ router.post('/positions', async (req, res) => {
 
         const [result] = await dbPool.query('INSERT INTO positions (title) VALUES (?)', [position_title.trim()]);
         
-        await logAudit(actingUserId, 'CREATE', 'position', result.insertId, null, { title: position_title.trim() });
-        
         res.status(201).json({ message: 'Position created successfully', positionId: result.insertId });
     } catch (dbErr) {
         console.error(`Database error creating position: ${dbErr.message}`);
@@ -616,8 +698,6 @@ router.put('/positions/:id', async (req, res) => {
 
         const [result] = await dbPool.query('UPDATE positions SET title = ? WHERE id = ?', [position_title.trim(), id]);
         if (result.affectedRows === 0) return res.status(404).json({ error: 'Position not found during update.' });
-        
-        await logAudit(actingUserId, 'UPDATE', 'position', id, oldRecordRows[0], { title: position_title.trim() });
         
         res.json({ message: 'Position updated successfully' });
     } catch (dbErr) {
@@ -648,8 +728,6 @@ router.delete('/positions/:id', async (req, res) => {
         const [result] = await dbPool.query('DELETE FROM positions WHERE id = ?', [id]);
         if (result.affectedRows === 0) return res.status(404).json({ error: 'Position not found during deletion.' });
         
-        await logAudit(actingUserId, 'DELETE', 'position', id, oldRecordRows[0], null);
-
         res.json({ message: 'Position deleted successfully' });
     } catch (dbErr) {
         console.error(`Database error deleting position: ${dbErr.message}`);
@@ -674,7 +752,7 @@ router.get('/surveys', async (req, res) => {
 
 // POST (Create) a new survey with new fields
 router.post('/surveys', async (req, res) => {
-    const { name, contract_start_date, contract_end_date, focal_person_id, actingUserId } = req.body;
+    const { name, contract_start_date, contract_end_date, focal_person_id, hiring_positions, actingUserId, hiring_end_date } = req.body;
     if (!actingUserId) return res.status(403).json({ error: 'Permission denied.' });
     if (!name || !name.trim()) return res.status(400).json({ error: 'Survey name is required.' });
 
@@ -695,9 +773,32 @@ router.post('/surveys', async (req, res) => {
             [name.trim(), contract_start_date || null, contract_end_date || null, focal_person_id || null]
         );
         
+        // Check if survey is ongoing or upcoming
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const endDate = contract_end_date ? new Date(contract_end_date) : null;
+        const isOngoingOrUpcoming = endDate && endDate >= today;
+
+        if (isOngoingOrUpcoming) {
+            // Sync Hiring Positions to Turso if provided
+            if (hiring_positions && Array.isArray(hiring_positions) && hiring_positions.length > 0) {
+                // 1. Get titles from local DB
+                const [posRows] = await dbPool.query('SELECT title FROM positions WHERE id IN (?)', [hiring_positions]);
+                
+                // 2. Sync each title to Turso (Create a row for each position with the survey name)
+                for (const row of posRows) {
+                    // We use a try-catch per insert to avoid stopping if one fails (e.g. duplicate)
+                    try {
+                        await executeTurso("INSERT INTO name_of_surveys (survey_name, hiring_end_date, position) VALUES (?, ?, ?)", [name.trim(), hiring_end_date || null, row.title]);
+                    } catch (e) { console.warn(`Turso sync skipped for position ${row.title}:`, e.message); }
+                }
+            } else {
+                // Sync to Turso (No positions, just survey info)
+                await executeTurso("INSERT INTO name_of_surveys (survey_name, hiring_end_date) VALUES (?, ?)", [name.trim(), hiring_end_date || null]);
+            }
+        }
+
         const newDataForLog = { name: name.trim(), contract_start_date, contract_end_date, focal_person_id };
-        await logAudit(actingUserId, 'CREATE', 'survey', result.insertId, null, newDataForLog);
-        
         res.status(201).json({ message: 'Survey created successfully', surveyId: result.insertId });
 
     } catch (dbErr) {
@@ -743,8 +844,6 @@ router.put('/surveys/:id', async (req, res) => {
         if (result.affectedRows === 0) return res.status(404).json({ error: 'Survey not found during update.' });
         
         const newDataForLog = { name: trimmedName, contract_start_date, contract_end_date, focal_person_id };
-        await logAudit(actingUserId, 'UPDATE', 'survey', id, oldRecordRows[0], newDataForLog);
-        
         res.json({ message: 'Survey updated successfully' });
     } catch (dbErr) {
         // ✅ CATCH the specific duplicate error code from the database
@@ -777,12 +876,42 @@ router.delete('/surveys/:id', async (req, res) => {
         const [result] = await dbPool.query('DELETE FROM surveys WHERE id = ?', [id]);
         if (result.affectedRows === 0) return res.status(404).json({ error: 'Survey not found during deletion.' });
         
-        await logAudit(actingUserId, 'DELETE', 'survey', id, oldRecordRows[0], null);
-        
         res.json({ message: 'Survey deleted successfully' });
     } catch (dbErr) {
         console.error(`Database error deleting survey: ${dbErr.message}`);
         return res.status(500).json({ error: 'Database error.' });
+    }
+});
+
+// --- GET /api/employments/history ---
+// Fetch employment history by name (for Interview page)
+router.get('/history', async (req, res) => {
+    const { first_name, last_name } = req.query;
+    if (!first_name || !last_name) {
+        return res.status(400).json({ error: 'First name and last name are required.' });
+    }
+
+    try {
+        const sqlQuery = `
+          SELECT
+            emp.id,
+            DATE_FORMAT(emp.contract_start_date, '%Y-%m-%d') AS contract_start_date,
+            DATE_FORMAT(emp.contract_end_date, '%Y-%m-%d') AS contract_end_date,
+            emp.rating, emp.remarks,
+            p.title AS position_title,
+            s.name AS survey_name
+          FROM employments emp
+          JOIN employees e ON emp.employee_id = e.id
+          JOIN positions p ON emp.position_id = p.id
+          LEFT JOIN surveys s ON emp.survey_id = s.id
+          WHERE e.first_name = ? AND e.last_name = ?
+          ORDER BY emp.contract_start_date DESC
+        `;
+        const [results] = await dbPool.query(sqlQuery, [first_name, last_name]);
+        res.json(results);
+    } catch (err) {
+        console.error(`Database error fetching employment history: ${err.message}`);
+        res.status(500).json({ error: 'Failed to retrieve employment history.' });
     }
 });
 

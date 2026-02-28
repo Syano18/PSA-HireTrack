@@ -1,0 +1,5 @@
+owner: Syano18
+repo: PSA-HireTrack
+provider: github
+private: true
+updaterCacheDirName: psa-hired-app-updater

@@ -4,8 +4,8 @@ import { useTheme } from '../context/ThemeContext';
 import SysIcon from '../assets/iconat.png';
 import { motion } from 'framer-motion';
 import { 
-    FiLogOut, FiChevronLeft, FiChevronRight, FiUser, FiLayout, 
-    FiUsers, FiTool, FiBriefcase, FiBook, FiAward 
+    FiLogOut, FiChevronLeft, FiChevronRight, FiUser, FiLayout, FiMessageSquare,
+    FiUsers, FiTool, FiBriefcase, FiBook, FiAward, FiFileText, FiUserPlus
 } from 'react-icons/fi';
 import { FaSun, FaMoon } from 'react-icons/fa';
 
@@ -19,17 +19,23 @@ const Sidebar = ({ onLogout, user }) => {
 
     const navLinks = [
         { name: 'Dashboard', icon: FiLayout, path: '/dashboard' },
+        { name: 'Applicants', icon: FiUserPlus, path: '/applicants' },
+        { name: 'Interview', icon: FiMessageSquare, path: '/interview' },
         { name: 'Employees', icon: FiUsers, path: '/employees' },
         { name: 'Training', icon: FiBook, path: '/trainings' },
         { name: 'Employment', icon: FiBriefcase, path: '/employments' },
         { name: 'Certificate', icon: FiAward, path: '/certificates' },
+        { name: 'External Partners', icon: FiFileText, path: '/temp-certificates' },
         { name: 'Utilities', icon: FiTool, path: '/utilities'},
         { name: 'Account', icon: FiUser, path: '/accounts' },
     ];
 
     const visibleLinks = navLinks.filter(link => {
-        if (['Account', 'Utilities', 'Certificate'].includes(link.name)) {
+        if (['Account', 'Utilities', 'Applicants'].includes(link.name)) {
             return ['Super_Admin', 'Admin', 'PACD'].includes(user.role);
+        }
+        if (['Certificate', 'Interview'].includes(link.name)) {
+            return ['Super_Admin', 'Admin', 'PACD', 'User'].includes(user.role);
         }
         return true;
     });

@@ -1,0 +1,21 @@
+directories:
+  output: dist
+  buildResources: assets
+appId: com.psa.hired
+productName: PSA Kalinga HireTrack
+files:
+  - filter:
+      - psahiretrack/build/**/*
+      - main.js
+      - preload.js
+      - node_modules/**/*
+      - client_secret.json
+win:
+  target: nsis
+  icon: System.ico
+publish:
+  provider: github
+  owner: Syano18
+  repo: PSA-HireTrack
+  private: true
+electronVersion: 28.3.3

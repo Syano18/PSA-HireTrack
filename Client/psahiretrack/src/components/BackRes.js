@@ -1,4 +1,5 @@
 import React, { useState,useEffect } from 'react';
+import { FaExclamationTriangle } from 'react-icons/fa';
 
 const BackRes = () => {
     const [feedback, setFeedback] = useState({ message: '', type: 'info' });
@@ -71,13 +72,7 @@ const BackRes = () => {
         );
     }
 
-    if (error) {
-        return (
-            <div className="mt-8 p-6">
-                <p className="text-red-600 dark:text-red-400">{error}</p>
-            </div>
-        );
-    }
+
 
     return (
         <>
@@ -110,6 +105,23 @@ const BackRes = () => {
                         <div className="flex justify-end mt-6 space-x-2">
                             <button onClick={() => setIsRestoreModalOpen(false)} className="px-4 py-2 font-semibold text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600">Cancel</button>
                             <button onClick={confirmRestore} className="px-4 py-2 font-semibold text-white bg-red-600 rounded-md shadow-sm hover:bg-red-700">Yes, Restore</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {error && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black bg-opacity-70">
+                    <div className="w-full max-w-md p-6 bg-white rounded-lg shadow-xl dark:bg-gray-800">
+                        <div className="text-center">
+                            <div className="flex items-center justify-center w-12 h-12 mx-auto bg-red-100 rounded-full dark:bg-red-900/50">
+                                <FaExclamationTriangle className="w-6 h-6 text-red-600 dark:text-red-400" />
+                            </div>
+                            <h3 className="mt-4 text-lg font-medium text-gray-900 dark:text-white">Error</h3>
+                            <div className="mt-2 text-sm text-gray-600 dark:text-gray-300">{error}</div>
+                        </div>
+                        <div className="mt-5">
+                            <button type="button" onClick={() => setError(null)} className="inline-flex justify-center w-full px-4 py-2 text-base font-medium text-white bg-red-600 border border-transparent rounded-md shadow-sm hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500">OK</button>
                         </div>
                     </div>
                 </div>

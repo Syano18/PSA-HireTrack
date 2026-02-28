@@ -1,9 +1,41 @@
+# --- Dependencies ---
 node_modules/
 Client/node_modules/
 Client/psahiretrack/node_modules/
-Client/psahiretrack/build/
 Server/node_modules/
+Verifier/node_modules/
+
+# --- Build outputs ---
+Client/psahiretrack/build/
+Verifier/.next/
+Verifier/out/
+
+# --- Private database engine (never commit) ---
 Server/mariadb/
+
+# --- Packaged binaries ---
 installer.nsi
 server.exe
+Server/server.exe
+*.exe
+*.nsis
+
+# --- Environment files (ALL subdirectories) ---
 .env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# --- Secret / credential files ---
+Client/client_secret.json
+client_secret.json
+*.pem
+
+# --- Runtime / generated files ---
+Server/error.log
+error.log
+Server/temp_restore/
+
+# --- AI assistant cache ---
+.aider*

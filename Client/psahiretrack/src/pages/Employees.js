@@ -4,13 +4,12 @@ import { FiPlus } from 'react-icons/fi';
 import { parseISO, format } from 'date-fns';
 import ProgressModal from '../components/Progress';
 import { apiFetch } from '../components/API';
-import { useSettings } from '../context/SettingsContext'; // 1. IMPORT THE HOOK
+import { useSettings } from '../context/SettingsContext';
 
-// Helper function to calculate age
 const calculateAge = (dobString) => {
   if (!dobString) return 'N/A';
   try {
-    const birthDate = parseISO(dobString); // Use parseISO
+    const birthDate = parseISO(dobString);
     const today = new Date();
     let age = today.getFullYear() - birthDate.getFullYear();
     const m = today.getMonth() - birthDate.getMonth();
@@ -23,7 +22,6 @@ const calculateAge = (dobString) => {
   }
 };
 
-// Custom hook to handle clicks outside a specified element
 const useClickOutside = (ref, handler) => {
   useEffect(() => {
     const listener = (event) => {
@@ -39,7 +37,6 @@ const useClickOutside = (ref, handler) => {
   }, [ref, handler]);
 };
 
-// Helper function for CSV parsing
 const parseCSV = (text) => {
   const lines = text.split(/\r\n|\n/).filter(line => line.trim() !== '');
   if (lines.length < 2) return [];
@@ -60,7 +57,6 @@ const parseCSV = (text) => {
   return data;
 };
 
-// Helper function for date formatting
 const formatDateForExport = (dateString) => {
   if (!dateString) return '';
   try {
@@ -71,7 +67,6 @@ const formatDateForExport = (dateString) => {
   }
 };
 
-// Initial state for the employee form
 const initialFormState = {
   employee_id: '',
   first_name: '',
@@ -89,8 +84,7 @@ const initialFormState = {
 };
 
 const Employees = () => {
-  // --- STATE MANAGEMENT ---
-  const { serverIp, isLoading: isSettingsLoading } = useSettings(); // 2. USE THE HOOK
+  const { serverIp, isLoading: isSettingsLoading } = useSettings();
   const [employees, setEmployees] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -118,6 +112,7 @@ const Employees = () => {
   const [progressMessage, setProgressMessage] = useState('');
   const [isProgressComplete, setIsProgressComplete] = useState(false);
   const [savedFilePath, setSavedFilePath] = useState(null);
+  const [successMessage, setSuccessMessage] = useState(null);
   const viewModalRef = useRef(null);
 
   useClickOutside(viewModalRef, () => {
@@ -140,30 +135,29 @@ const Employees = () => {
       setCsvData([]);
   }, []);
 
-  // --- DATA FETCHING & EFFECTS ---
   const fetchEmployees = useCallback(async () => {
-    if (!serverIp) return; // Wait for serverIp
+    if (!serverIp) return;
     setIsLoading(true);
     try {
-      const data = await apiFetch('employees', serverIp); // 3. PASS serverIp
+      const data = await apiFetch('employees', serverIp);
       setEmployees(data);
     } catch (err) {
       setError(err.message);
     } finally {
       setIsLoading(false);
     }
-  }, [serverIp]); // 4. ADD serverIp dependency
+  }, [serverIp]);
 
   const fetchMunicipalities = useCallback(async () => {
-    if (!serverIp) return; // Wait for serverIp
+    if (!serverIp) return;
     try {
-      const data = await apiFetch('municipalities', serverIp); // 3. PASS serverIp
+      const data = await apiFetch('municipalities', serverIp);
       setMunicipalities(data);
     } catch (err) {
       console.error("Failed to fetch municipalities:", err);
       setError("Could not load location data.");
     }
-  }, [serverIp]); // 4. ADD serverIp dependency
+  }, [serverIp]);
 
   useEffect(() => {
     const getSession = async () => {
@@ -187,7 +181,6 @@ const Employees = () => {
   }, []);
 
   useEffect(() => {
-    // 5. UPDATE data fetch trigger
     if (sessionState && !isSettingsLoading) { 
       fetchEmployees();
       fetchMunicipalities();
@@ -195,10 +188,10 @@ const Employees = () => {
   }, [sessionState, isSettingsLoading, fetchEmployees, fetchMunicipalities]);
   
   useEffect(() => {
-    if (selectedMunicipalityId && serverIp) { // Check for serverIp
+    if (selectedMunicipalityId && serverIp) {
       const fetchBarangays = async () => {
         try {
-          const data = await apiFetch(`barangays/${selectedMunicipalityId}`, serverIp); // 3. PASS serverIp
+          const data = await apiFetch(`barangays/${selectedMunicipalityId}`, serverIp);
           setBarangays(data);
         } catch (err) {
           console.error("Failed to fetch barangays for form:", err);
@@ -208,7 +201,7 @@ const Employees = () => {
     } else {
       setBarangays([]);
     }
-  }, [selectedMunicipalityId, serverIp]); // 4. ADD serverIp dependency
+  }, [selectedMunicipalityId, serverIp]);
 
   const employeesWithAge = useMemo(() => {
     return employees.map(emp => ({
@@ -265,8 +258,6 @@ const Employees = () => {
   const indexOfFirstItem = indexOfLastItem - rowsPerPage;
   const currentItems = sortedEmployees.slice(indexOfFirstItem, indexOfLastItem);
   
-  // --- HANDLER FUNCTIONS ---
-  // 6. UPDATE initial loading condition
   if (!sessionState || isLoading || isSettingsLoading) { 
     return (
       <div className="p-4 sm:p-6 lg:p-8">
@@ -366,7 +357,7 @@ const Employees = () => {
         const text = e.target.result;
         const parsedData = parseCSV(text);
         const errors = [];
-        const requiredFields = ['first_name', 'middle_initial', 'last_name', 'phone_number', 'date_of_birth', 'sex', 'barangay', 'city', 'highest_grade_completed'];
+        const requiredFields = ['first_name', 'middle_initial', 'last_name', 'date_of_birth', 'sex', 'barangay', 'city', 'highest_grade_completed'];
         parsedData.forEach((row, index) => {
           const missingFields = requiredFields.filter(field => !row[field] || row[field].trim() === '');
           if (missingFields.length > 0) {
@@ -383,10 +374,10 @@ const Employees = () => {
   };
 
   const handleIdExport = (newlyImported) => {
-    const headers = ["employee_id", "full_name"];
+    const headers = ["employee_id", "full_name", "status"];
     const csvContent = [
       headers.join(','),
-      ...newlyImported.map(emp => `"${emp.employee_id}","${emp.full_name}"`)
+      ...newlyImported.map(emp => `"${emp.employee_id}","${emp.full_name}","${emp.status || 'New Record'}"`)
     ].join('\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement("a");
@@ -401,18 +392,48 @@ const Employees = () => {
     }
   };
 
-  const handleConfirmImport = async () => {
+  const handleConfirmImport = async (ignoreWarnings = false, recordsToSkip = new Map()) => {
+    const shouldIgnore = ignoreWarnings === true;
     if (csvData.length === 0 || !sessionState) return;
-    setError(null);
-    setImportResults({ status: 'importing', message: 'Importing, please wait...' });
+    
+    let dataToSend = csvData;
+    let skippedRecords = [];
+    
+    if (!shouldIgnore) {
+        setError(null);
+        setImportResults({ status: 'importing', message: 'Importing, please wait...' });
+    } else {
+        // Filter out records marked to skip (duplicates)
+        dataToSend = [];
+        csvData.forEach((row, index) => {
+            if (recordsToSkip.has(index)) {
+                skippedRecords.push({
+                    employee_id: recordsToSkip.get(index) || 'SKIPPED',
+                    full_name: `${row.first_name} ${row.middle_initial || ''} ${row.last_name} ${row.suffix || ''}`.trim(),
+                    status: 'Skipped (Duplicate)'
+                });
+            } else {
+                dataToSend.push(row);
+            }
+        });
+
+        if (dataToSend.length === 0) {
+            handleIdExport(skippedRecords);
+            setImportResults({ status: 'success', message: 'All records were marked as duplicates and skipped. Export generated.' });
+            return;
+        }
+    }
     try {
         const result = await apiFetch('employees/import', serverIp, { // 3. PASS serverIp
             method: 'POST',
-            body: JSON.stringify({ actingUserId: sessionState.user.id, employees: csvData })
+            body: JSON.stringify({ actingUserId: sessionState.user.id, employees: dataToSend, ignoreWarnings: shouldIgnore })
         });
         
-        if (result.newlyImported && result.newlyImported.length > 0) {
-            handleIdExport(result.newlyImported);
+        // Combine server results with client-skipped records for the report
+        const combinedResults = result.newlyImported ? [...result.newlyImported, ...skippedRecords] : skippedRecords;
+
+        if (combinedResults.length > 0) {
+            handleIdExport(combinedResults);
             result.message = `${result.message} A reference file with their new IDs has been downloaded.`;
         }
         setImportResults({ status: result.errors ? 'partial' : 'success', ...result });
@@ -420,19 +441,30 @@ const Employees = () => {
 
     } catch (err) {
         const errorPayload = { status: 'error', message: 'An unknown error occurred.', errors: [] };
-        try {
-            const parsedError = JSON.parse(err.message);
-            if (parsedError.errors && parsedError.errors.length > 0) {
-                errorPayload.message = "Please fix the following errors in your file:";
-                errorPayload.errors = parsedError.errors;
+        // Prefer the structured payload attached by apiFetch (err.data)
+        const structured = err.data || (() => { try { return JSON.parse(err.message); } catch { return null; } })();
+        if (structured) {
+            if (structured.errors && structured.errors.length > 0) {
+                errorPayload.message = 'Please fix the following errors in your file:';
+                errorPayload.errors = structured.errors;
             } else {
-                errorPayload.message = parsedError.message || errorPayload.message;
+                errorPayload.message = structured.message || structured.error || err.message;
             }
-        } catch (e) {
+        } else {
             errorPayload.message = err.message;
         }
         setImportResults(errorPayload);
     }
+  };
+
+  const handleProceedAsDuplicates = () => {
+    const fuzzyMap = new Map();
+    if (importResults && importResults.warnings) {
+        importResults.warnings.forEach(w => {
+            if (typeof w === 'object') fuzzyMap.set(w.index, w.existingEmployeeId);
+        });
+    }
+    handleConfirmImport(true, fuzzyMap);
   };
 
   const handleInputChange = (e) => {
@@ -479,12 +511,14 @@ const Employees = () => {
   const confirmDelete = async () => {
     if (!employeeToDelete || !sessionState) return;
     try {
-      await apiFetch(`employees/${employeeToDelete.id}`, serverIp, { // 3. PASS serverIp
+      await apiFetch(`employees/${employeeToDelete.id}`, serverIp, {
         method: 'DELETE',
         body: JSON.stringify({ actingUserId: sessionState.user.id })
       });
       setEmployeeToDelete(null);
       fetchEmployees();
+      setSuccessMessage('Employee deleted successfully.');
+      setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err) {
       setError(err.message);
       setEmployeeToDelete(null);
@@ -495,7 +529,7 @@ const Employees = () => {
     e.preventDefault();
     setError(null);
     const phoneRegex = /^9\d{9}$/;
-    if (!phoneRegex.test(formData.phone_number)) {
+    if (formData.phone_number && !phoneRegex.test(formData.phone_number)) {
       setError('Invalid phone number. It must be 10 digits and start with 9 (e.g., 9171234567).');
       return;
     }
@@ -505,12 +539,14 @@ const Employees = () => {
     const body = { ...formData, actingUserId: sessionState?.user?.id };
 
     try {
-      await apiFetch(endpoint, serverIp, { // 3. PASS serverIp
+      await apiFetch(endpoint, serverIp, {
         method,
         body: JSON.stringify(body)
       });
       handleCloseAddEditModal();
       fetchEmployees();
+      setSuccessMessage(method === 'PUT' ? 'Employee updated successfully.' : 'Employee added successfully.');
+      setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err) {
             try {
                 const parsedError = JSON.parse(err.message);
@@ -561,9 +597,13 @@ const Employees = () => {
     handleCsvDownload(csvContent, fileName);
   };
 
-  // --- RENDER LOGIC ---
   return (
     <div>
+      {successMessage && (
+        <div className="fixed top-5 right-5 z-[200] flex items-center gap-3 px-5 py-3 bg-green-600 text-white text-sm font-semibold rounded-lg shadow-lg">
+          <span>✓</span> {successMessage}
+        </div>
+      )}
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">Employee Records</h1>
         <div className="flex items-center gap-4">
@@ -710,7 +750,7 @@ const Employees = () => {
                 <div className="sm:col-span-2"><label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Last Name*</label><input type="text" name="last_name" value={formData.last_name} onChange={handleInputChange} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" /></div>
                 <div className="sm:col-span-1"><label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Suffix</label><input type="text" name="suffix" value={formData.suffix} onChange={handleInputChange} className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" /></div>
                 <div className="sm:col-span-3"><label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Email Address (e.g. angelicademunyo@gmial.com)</label><input type="email" name="email" value={formData.email} onChange={handleInputChange} className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" /></div>
-                <div className="sm:col-span-3"><label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Phone Number (e.g. 9179836137)*</label><input type="tel" name="phone_number" value={formData.phone_number} onChange={handleInputChange} required pattern="^9\d{9}$" maxLength="10" title="Must be 10 digits starting with 9" className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" /></div>
+                <div className="sm:col-span-3"><label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Phone Number (e.g. 9179836137)</label><input type="tel" name="phone_number" value={formData.phone_number} onChange={handleInputChange} pattern="^9\d{9}$" maxLength="10" title="Must be 10 digits starting with 9" className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" /></div>
                 <div className="sm:col-span-2"><label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Date of Birth*</label><input type="date" name="date_of_birth" value={formData.date_of_birth} onChange={handleInputChange} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" /></div>
                 <div className="sm:col-span-2"><label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Sex*</label><select name="sex" value={formData.sex} onChange={handleInputChange} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"><option value="" hidden></option><option value="Male">Male</option><option value="Female">Female</option></select></div>
                 <div className="sm:col-span-2"><label className="block text-sm font-medium text-gray-700 dark:text-gray-300">TIN (e.g. 123-456-789)</label><input type="text" name="tin_no" value={formData.tin_no} onChange={handleInputChange} className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" /></div>
@@ -785,6 +825,16 @@ const Employees = () => {
                 {importResults.status === 'importing' && <div className="p-3 text-blue-800 bg-blue-100 rounded-lg">{importResults.message}</div>}
                 {importResults.status === 'success' && <div className="p-3 text-green-800 bg-green-100 rounded-lg">{importResults.message}</div>}
                 {importResults.status === 'partial' && <div className="p-3 text-yellow-800 bg-yellow-100 rounded-lg">{importResults.message}</div>}
+                {importResults.status === 'warning' && (
+                  <div className="p-3 text-yellow-800 bg-yellow-100 rounded-lg">
+                    <strong className="block mb-2">{importResults.message}</strong>
+                    {importResults.warnings && importResults.warnings.length > 0 && (
+                      <ul className="pl-5 text-sm list-disc max-h-48 overflow-y-auto">
+                        {importResults.warnings.map((warn, index) => <li key={index}>{warn.message || warn}</li>)}
+                      </ul>
+                    )}
+                  </div>
+                )}
                 {importResults.status === 'error' && (
                   <div className="p-3 text-red-800 bg-red-100 rounded-lg">
                     <strong className="block mb-2">{importResults.message}</strong>
@@ -795,13 +845,36 @@ const Employees = () => {
                     )}
                   </div>
                 )}
-                <div className="mt-4 flex justify-end">
-                  <button
-                    type="button" onClick={() => setIsImportModalOpen(false)}
-                    className="rounded-lg bg-gray-200 px-4 py-2 font-semibold text-gray-800 hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500"
-                  >
-                    Close
-                  </button>
+                <div className="mt-4 flex justify-end gap-2">
+                  {importResults.status === 'warning' ? (
+                    <>
+                      <button
+                        type="button" onClick={() => setIsImportModalOpen(false)}
+                        className="rounded-lg bg-gray-200 px-4 py-2 font-semibold text-gray-800 hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button" onClick={handleProceedAsDuplicates}
+                        className="rounded-lg bg-yellow-500 px-4 py-2 font-semibold text-white hover:bg-yellow-600"
+                      >
+                        Duplicate
+                      </button>
+                      <button
+                        type="button" onClick={() => handleConfirmImport(true)}
+                        className="rounded-lg bg-green-600 px-4 py-2 font-semibold text-white hover:bg-green-700"
+                      >
+                        New Employee
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button" onClick={() => setIsImportModalOpen(false)}
+                      className="rounded-lg bg-gray-200 px-4 py-2 font-semibold text-gray-800 hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500"
+                    >
+                      Close
+                    </button>
+                  )}
                 </div>
               </div>
             ) : (
@@ -853,7 +926,7 @@ const Employees = () => {
                     Cancel
                   </button>
                   <button
-                    onClick={handleConfirmImport}
+                    onClick={() => handleConfirmImport(false)}
                     className="px-4 py-2 font-semibold text-white bg-green-600 rounded-lg disabled:opacity-50"
                     disabled={preImportErrors.length > 0 || csvData.length === 0}
                   >

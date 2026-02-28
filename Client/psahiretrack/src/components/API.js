@@ -42,7 +42,9 @@ export const apiFetch = async (endpoint, serverIp, options = {}) => {
       
       // ✅ LOOK FOR 'error' FIRST, then 'message', then fallback.
       // This directly fixes your problem.
-      throw new Error(errorData.error || errorData.message || `HTTP Error ${response.status}`);
+      const thrownError = new Error(errorData.error || errorData.message || `HTTP Error ${response.status}`);
+      thrownError.data = errorData; // attach full payload so callers can inspect errors/warnings arrays
+      throw thrownError;
     }
 
     // --- HANDLE SUCCESSFUL RESPONSES ---

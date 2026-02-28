@@ -6,15 +6,17 @@ import { SettingsProvider } from './context/SettingsContext';
 
 // --- Page & Layout Imports ---
 import LoginPage from './pages/LoginPage';
-import ForceChangePasswordPage from './pages/ForceChangePasswordPage';
 import Dashboard from './pages/Dashboard';
 import Employees from './pages/Employees';
 import Employments from './pages/Employments';
 import Trainings from './pages/Trainings';
 import Accounts from './pages/Accounts';
+import Applicants from './pages/Applicants';
 import Certificates from './pages/Certificates';
 import Utilities from './pages/Utilities';
+import TempTrainingCertificates from './pages/TempTrainingCertificates';
 import AppLayout from './layouts/AppLayout';
+import Interview from './pages/Interview';
 
 // --- Role Constants ---
 const ADMIN_ROLES = ['Super_Admin', 'Admin', 'PACD'];
@@ -30,10 +32,6 @@ const ProtectedRoute = ({ allowedRoles }) => {
 
     if (!session?.user) {
         return <Navigate to="/login" replace />;
-    }
-    
-    if (session.user.force_password_change) {
-        return <Navigate to="/force-change-password" replace />;
     }
 
     if (allowedRoles && !allowedRoles.includes(session.user.role)) {
@@ -51,17 +49,6 @@ const LoginPageWrapper = () => {
     return session ? <Navigate to="/dashboard" /> : <LoginPage />;
 };
 
-const ForceChangePasswordWrapper = () => {
-    const { session, isLoading, onPasswordChanged, logout } = useAuth();
-    if (isLoading) {
-        return <div className="flex h-screen items-center justify-center dark:bg-gray-900 dark:text-white">Loading...</div>;
-    }
-    if (!session?.user?.force_password_change) {
-        return <Navigate to="/dashboard" />;
-    }
-    return <ForceChangePasswordPage user={session.user} onPasswordChanged={onPasswordChanged} onLogout={logout} />;
-};
-
 
 // --- Main App Component ---
 const App = () => {
@@ -70,20 +57,22 @@ const App = () => {
     return (
         <Routes>
             <Route path="/login" element={<LoginPageWrapper />} />
-            <Route path="/force-change-password" element={<ForceChangePasswordWrapper />} />
 
             <Route element={<ProtectedRoute />}>
                 <Route path="/" element={<Navigate to="/dashboard" replace />} />
                 <Route path="dashboard" element={<Dashboard />} />
                 <Route path="employees" element={<Employees />} />
                 <Route path="employments" element={<Employments />} />
+                <Route path="interview" element={<Interview />} />
                 <Route path="trainings" element={<Trainings />} />
+                <Route path="temp-certificates" element={<TempTrainingCertificates />} />
+                <Route path="certificates" element={<Certificates />} />
             </Route>
             
             <Route element={<ProtectedRoute allowedRoles={ADMIN_ROLES} />}>
                 <Route path="accounts" element={<Accounts />} />
-                <Route path="certificates" element={<Certificates />} />
                 <Route path="utilities" element={<Utilities />} />
+                <Route path="applicants" element={<Applicants />} />
             </Route>
 
             <Route path="*" element={<Navigate to="/" replace />} />

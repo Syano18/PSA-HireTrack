@@ -11,7 +11,7 @@ const checkRole = (allowedRoles = []) => {
             const actingUserId = req.user.id;
 
             // Get role directly from database
-            const [rows] = await dbPool.query('SELECT role FROM users WHERE id = ?', [actingUserId]);
+            const [rows] = await dbPool.query('SELECT hiretrack_role AS role FROM users WHERE id = ?', [actingUserId]);
             const actingUser = rows[0];
 
             if (!actingUser || !allowedRoles.includes(actingUser.role)) {

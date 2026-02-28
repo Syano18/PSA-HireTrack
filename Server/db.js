@@ -5,7 +5,7 @@ const path = require('path');
 // This function will write errors to your log file
 const logErrorToFile = (errorMessage) => {
   const timestamp = new Date().toISOString();
-  const logFilePath = path.join(path.dirname(process.execPath), 'error.log');
+  const logFilePath = path.join(__dirname, 'error.log');
   const logMessage = `[${timestamp}] [DATABASE] ${errorMessage}\n`;
 
   fs.appendFile(logFilePath, logMessage, (err) => {
@@ -26,7 +26,6 @@ const dbPool = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
-  dateStrings: true
 }).promise();
 
 dbPool.getConnection().then(connection => {

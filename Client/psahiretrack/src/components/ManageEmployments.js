@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { FiPlus, FiX } from 'react-icons/fi';
 import { parseISO, format } from 'date-fns';
-import { FaSort, FaSortUp, FaSortDown } from 'react-icons/fa';
+import { FaSort, FaSortUp, FaSortDown, FaExclamationTriangle } from 'react-icons/fa';
 import { apiFetch } from '../components/API';
 import { useSettings } from '../context/SettingsContext'; // 1. IMPORT THE HOOK
 
@@ -11,8 +11,10 @@ const ManageSurveys = ({ session }) => {
     const { serverIp, isLoading: isSettingsLoading } = useSettings(); // 2. USE THE HOOK
     const [surveys, setSurveys] = useState([]);
     const [focalPersons, setFocalPersons] = useState([]);
+    const [availablePositions, setAvailablePositions] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState(null);
+    const [successMessage, setSuccessMessage] = useState(null);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [currentSurvey, setCurrentSurvey] = useState({ id: null, name: '' });
     const [searchQuery, setSearchQuery] = useState('');
@@ -20,6 +22,10 @@ const ManageSurveys = ({ session }) => {
     const [surveyToDelete, setSurveyToDelete] = useState(null);
     const rowsPerPage = 10;
     const [sortConfig, setSortConfig] = useState({ key: 'name', direction: 'ascending' });
+    
+    // State for hiring positions
+    const [selectedHiringPositions, setSelectedHiringPositions] = useState([]);
+    const [positionToAdd, setPositionToAdd] = useState('');
 
     const canManage = useMemo(() => {
         return session && MANAGABLE_ROLES.includes(session.user?.role);
@@ -30,12 +36,14 @@ const ManageSurveys = ({ session }) => {
         setIsLoading(true);
         setError(null);
         try {
-            const [surveysData, focalPersonsData] = await Promise.all([
+            const [surveysData, focalPersonsData, positionsData] = await Promise.all([
                 apiFetch('employments/surveys', serverIp),        // 3. PASS serverIp
-                apiFetch('employments/focal-persons', serverIp) // 3. PASS serverIp
+                apiFetch('employments/focal-persons', serverIp), // 3. PASS serverIp
+                apiFetch('employments/positions', serverIp)
             ]);
             setSurveys(surveysData);
             setFocalPersons(focalPersonsData);
+            setAvailablePositions(positionsData);
         } catch (err) {
             setError(err.message);
         } finally {
@@ -114,7 +122,7 @@ const ManageSurveys = ({ session }) => {
     const handleNextPage = () => setCurrentPage(prev => Math.min(prev + 1, totalPages));
     const handlePreviousPage = () => setCurrentPage(prev => Math.max(prev - 1, 1));
 
-    const handleOpenModal = (survey = { id: null, name: '', contract_start_date: null, contract_end_date: null, focal_person_id: '' }) => {
+    const handleOpenModal = (survey = { id: null, name: '', contract_start_date: null, contract_end_date: null, focal_person_id: '', hiring_end_date: '' }) => {
         const formatForInput = (dateString) => {
             if (!dateString) return '';
             try {
@@ -129,14 +137,18 @@ const ManageSurveys = ({ session }) => {
             ...survey,
             contract_start_date: formatForInput(survey.contract_start_date),
             contract_end_date: formatForInput(survey.contract_end_date),
+            hiring_end_date: '', // Always empty initially as it's not stored locally
         });
 
         setIsModalOpen(true);
+        setSelectedHiringPositions([]); // Reset hiring positions on open
+        setPositionToAdd('');
         setError(null);
     };
 
     const handleCloseModal = () => {
         setIsModalOpen(false);
+        setSelectedHiringPositions([]);
         setCurrentSurvey({ id: null, name: '' });
     };
 
@@ -148,16 +160,27 @@ const ManageSurveys = ({ session }) => {
             return;
         }
 
+        if (isOngoingOrUpcoming && !currentSurvey.hiring_end_date) {
+            setError("Hiring End Date is required for ongoing or upcoming surveys.");
+            return;
+        }
+
         const endpoint = id ? `employments/surveys/${id}` : 'employments/surveys';
         const method = id ? 'PUT' : 'POST';
 
         try {
             await apiFetch(endpoint, serverIp, { // 3. PASS serverIp
                 method,
-                body: JSON.stringify({ ...currentSurvey, actingUserId: session.user.id }),
+                body: JSON.stringify({ 
+                    ...currentSurvey, 
+                    hiring_positions: selectedHiringPositions, // Send selected positions
+                    actingUserId: session.user.id 
+                }),
             });
             fetchData(); // Re-fetch all data
             handleCloseModal();
+            setSuccessMessage(currentSurvey.id ? 'Survey updated successfully.' : 'Survey added successfully.');
+            setTimeout(() => setSuccessMessage(null), 3000);
         } catch (err) {
             try {
                 const parsedError = JSON.parse(err.message);
@@ -176,6 +199,8 @@ const ManageSurveys = ({ session }) => {
                 body: JSON.stringify({ actingUserId: session.user.id })
             });
             setSurveyToDelete(null);
+            setSuccessMessage('Survey deleted successfully.');
+            setTimeout(() => setSuccessMessage(null), 3000);
             fetchData(); // Re-fetch all data
         } catch (err) {
             setError(err.message);
@@ -187,6 +212,26 @@ const ManageSurveys = ({ session }) => {
         setError(null);
         setSurveyToDelete(survey);
     };
+
+    const handleAddPosition = () => {
+        if (positionToAdd && !selectedHiringPositions.includes(parseInt(positionToAdd))) {
+            setSelectedHiringPositions([...selectedHiringPositions, parseInt(positionToAdd)]);
+            setPositionToAdd('');
+        }
+    };
+
+    const handleRemovePosition = (idToRemove) => {
+        setSelectedHiringPositions(selectedHiringPositions.filter(id => id !== idToRemove));
+    };
+
+    const isOngoingOrUpcoming = useMemo(() => {
+        if (!currentSurvey.contract_end_date) return false;
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const endDate = parseISO(currentSurvey.contract_end_date);
+        // If end date is today or in the future, it's ongoing or upcoming
+        return endDate >= today;
+    }, [currentSurvey.contract_end_date]);
 
     // 6. UPDATE initial loading condition
     if (isLoading || isSettingsLoading) {
@@ -207,6 +252,11 @@ const ManageSurveys = ({ session }) => {
 
     return (
         <div>
+            {successMessage && (
+                <div className="fixed top-5 right-5 z-[200] flex items-center gap-3 px-5 py-3 bg-green-600 text-white text-sm font-semibold rounded-lg shadow-lg">
+                    <span>✓</span> {successMessage}
+                </div>
+            )}
             <div className="flex justify-between items-center mb-4">
               <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">Manage Surveys</h1>
               <div className="flex items-center gap-4">
@@ -231,8 +281,19 @@ const ManageSurveys = ({ session }) => {
           </div>
 
           {error && !isModalOpen && !surveyToDelete && (
-              <div className="mb-4 flex justify-center items-center text-center p-3 bg-red-100 text-red-700 rounded-lg">
-                  {error}
+              <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black bg-opacity-70">
+                  <div className="w-full max-w-md p-6 bg-white rounded-lg shadow-xl dark:bg-gray-800">
+                      <div className="text-center">
+                          <div className="flex items-center justify-center w-12 h-12 mx-auto bg-red-100 rounded-full dark:bg-red-900/50">
+                              <FaExclamationTriangle className="w-6 h-6 text-red-600 dark:text-red-400" />
+                          </div>
+                          <h3 className="mt-4 text-lg font-medium text-gray-900 dark:text-white">Error</h3>
+                          <div className="mt-2 text-sm text-gray-600 dark:text-gray-300">{error}</div>
+                      </div>
+                      <div className="mt-5">
+                          <button type="button" onClick={() => setError(null)} className="inline-flex justify-center w-full px-4 py-2 text-base font-medium text-white bg-red-600 border border-transparent rounded-md shadow-sm hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500">OK</button>
+                      </div>
+                  </div>
               </div>
           )}
 
@@ -330,6 +391,50 @@ const ManageSurveys = ({ session }) => {
                                   ))}
                               </select>
                           </div>
+
+                          {/* Hiring Positions Section - Only if active/upcoming */}
+                          {isOngoingOrUpcoming && (
+                              <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-100 dark:border-blue-800">
+                                  <div className="mb-4">
+                                      <label htmlFor="hiring_end_date" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Hiring End Date*</label>
+                                      <input id="hiring_end_date" type="date"
+                                          value={currentSurvey.hiring_end_date || ''}
+                                          onChange={(e) => setCurrentSurvey({ ...currentSurvey, hiring_end_date: e.target.value })}
+                                          required
+                                          className="block w-full p-2 mt-1 bg-white border border-gray-300 rounded-md shadow-sm dark:bg-gray-700 dark:border-gray-600 focus:border-blue-500 focus:ring-blue-500" />
+                                  </div>
+                                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Positions to Hire</label>
+                                  <div className="flex gap-2 mb-2">
+                                      <select 
+                                          value={positionToAdd} 
+                                          onChange={(e) => setPositionToAdd(e.target.value)}
+                                          className="flex-1 p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
+                                      >
+                                          <option value="" disabled>Select a position...</option>
+                                          {availablePositions.map(pos => (
+                                              <option key={pos.id} value={pos.id} disabled={selectedHiringPositions.includes(pos.id)}>
+                                                  {pos.position_title}
+                                              </option>
+                                          ))}
+                                      </select>
+                                      <button type="button" onClick={handleAddPosition} disabled={!positionToAdd} className="px-3 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50">Add</button>
+                                  </div>
+                                  
+                                  {selectedHiringPositions.length > 0 && (
+                                      <ul className="space-y-1 max-h-32 overflow-y-auto">
+                                          {selectedHiringPositions.map(posId => {
+                                              const pos = availablePositions.find(p => p.id === posId);
+                                              return (
+                                                  <li key={posId} className="flex justify-between items-center bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700 text-sm">
+                                                      <span className="text-gray-800 dark:text-gray-200">{pos?.position_title}</span>
+                                                      <button type="button" onClick={() => handleRemovePosition(posId)} className="text-red-500 hover:text-red-700"><FiX /></button>
+                                                  </li>
+                                              );
+                                          })}
+                                      </ul>
+                                  )}
+                              </div>
+                          )}
                       </form>
                       
                       <div className="flex-shrink-0 flex justify-end px-6 py-4 space-x-2 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-200 dark:border-gray-700">

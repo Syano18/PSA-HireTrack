@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { FiPlus, FiX } from 'react-icons/fi';
 import { parseISO, format } from 'date-fns';
-import { FaSort, FaSortUp, FaSortDown } from 'react-icons/fa';
+import { FaSort, FaSortUp, FaSortDown, FaExclamationTriangle } from 'react-icons/fa';
 import { apiFetch } from '../components/API';
 import { useSettings } from '../context/SettingsContext'; // 1. IMPORT THE HOOK
 
@@ -13,6 +13,7 @@ const ManageTrainings = ({ session }) => {
     const [titles, setTitles] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState(null);
+    const [successMessage, setSuccessMessage] = useState(null);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [currentTraining, setCurrentTraining] = useState(INITIAL_FORM_STATE);
     const [searchQuery, setSearchQuery] = useState('');
@@ -138,6 +139,8 @@ const ManageTrainings = ({ session }) => {
             });
             fetchTitles();
             handleCloseModal();
+            setSuccessMessage(currentTraining.id ? 'Training title updated successfully.' : 'Training title added successfully.');
+            setTimeout(() => setSuccessMessage(null), 3000);
         } catch (err) {
             try {
                 const parsedError = JSON.parse(err.message);
@@ -155,6 +158,8 @@ const ManageTrainings = ({ session }) => {
                 method: 'DELETE',
                 body: JSON.stringify({ actingUserId: session.user.id })
             });
+            setSuccessMessage('Training title deleted successfully.');
+            setTimeout(() => setSuccessMessage(null), 3000);
             fetchTitles();
         } catch (err) {
             setError(err.message);
@@ -187,6 +192,11 @@ const ManageTrainings = ({ session }) => {
 
     return (
         <div>
+            {successMessage && (
+                <div className="fixed top-5 right-5 z-[200] flex items-center gap-3 px-5 py-3 bg-green-600 text-white text-sm font-semibold rounded-lg shadow-lg animate-fade-in">
+                    <span>✓</span> {successMessage}
+                </div>
+            )}
             <div className="flex justify-between items-center mb-4">
                 <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">Manage Training Titles</h1>
                 <div className="flex items-center gap-4">
@@ -211,9 +221,20 @@ const ManageTrainings = ({ session }) => {
             </div>
 
             {error && !isModalOpen && !titleToDelete && (
-                   <div className="p-3 mb-4 text-center text-red-700 bg-red-100 rounded-lg">
-                       {error}
-                   </div>
+                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black bg-opacity-70">
+                    <div className="w-full max-w-md p-6 bg-white rounded-lg shadow-xl dark:bg-gray-800">
+                        <div className="text-center">
+                            <div className="flex items-center justify-center w-12 h-12 mx-auto bg-red-100 rounded-full dark:bg-red-900/50">
+                                <FaExclamationTriangle className="w-6 h-6 text-red-600 dark:text-red-400" />
+                            </div>
+                            <h3 className="mt-4 text-lg font-medium text-gray-900 dark:text-white">Error</h3>
+                            <div className="mt-2 text-sm text-gray-600 dark:text-gray-300">{error}</div>
+                        </div>
+                        <div className="mt-5">
+                            <button type="button" onClick={() => setError(null)} className="inline-flex justify-center w-full px-4 py-2 text-base font-medium text-white bg-red-600 border border-transparent rounded-md shadow-sm hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500">OK</button>
+                        </div>
+                    </div>
+                </div>
             )}
 
             <div className="overflow-x-auto bg-white h-[680px] rounded-lg shadow dark:bg-gray-800">

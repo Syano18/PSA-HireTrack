@@ -3,17 +3,24 @@ import { FiPlus, FiX } from 'react-icons/fi';
 import { parseISO, format } from 'date-fns';
 import { FaSort, FaSortUp, FaSortDown } from 'react-icons/fa';
 import { apiFetch } from '../components/API';
-import { useSettings } from '../context/SettingsContext'; // 1. IMPORT THE HOOK
+import { useSettings } from '../context/SettingsContext';
+import { auth } from '../firebase';
+import { sendPasswordResetEmail } from 'firebase/auth';
 
 const initialFormState = {
   first_name: '',
   middle_initial: '',
   last_name: '',
   suffix: '',
-  username: '',
-  password: '',
-  role: 'User'
+  email: '',
+  role: 'User',
+  opshub_role: 'Staff',
+  position: '',
+  salary: '',
+  salary_grade: '',
+  status: 'Active'
 };
+
 const useClickOutside = (ref, handler) => {
   useEffect(() => {
     const listener = (event) => {
@@ -28,8 +35,9 @@ const useClickOutside = (ref, handler) => {
     };
   }, [ref, handler]);
 };
+
 const Accounts = () => {
-  const { serverIp, isLoading: isSettingsLoading } = useSettings(); // 2. USE THE HOOK
+  const { serverIp, isLoading: isSettingsLoading } = useSettings();
   const [users, setUsers] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -38,10 +46,13 @@ const Accounts = () => {
   const [editingUser, setEditingUser] = useState(null);
   const [userToDelete, setUserToDelete] = useState(null);
   const [tempPassword, setTempPassword] = useState('');
+  const [resetLink, setResetLink] = useState('');
   const [showTempPasswordModal, setShowTempPasswordModal] = useState(false);
   const [copySuccess, setCopySuccess] = useState('');
+  const [tempPasswordModalTitle, setTempPasswordModalTitle] = useState(''); // <-- 1. ADDED STATE
   const [sessionState, setSessionState] = useState(null);
   const [canManage, setCanManage] = useState(false);
+  const [successMessage, setSuccessMessage] = useState(null);
   const [sortConfig, setSortConfig] = useState({ key: 'last_name', direction: 'ascending' });
   const [filters, setFilters] = useState({ query: '' });
   const [currentPage, setCurrentPage] = useState(1);
@@ -52,6 +63,7 @@ const Accounts = () => {
       setError(null);
       setFormData(initialFormState);
   }, []);
+
   const addEditModalRef = useRef(null);
   useClickOutside(addEditModalRef, () => { 
       if(isModalOpen) {
@@ -79,22 +91,24 @@ const Accounts = () => {
   }, []);
 
   const fetchUsers = useCallback(async () => {
-    if (!serverIp) return; // Wait for serverIp
+    if (!serverIp) return;
     setIsLoading(true);
     try {
-      const data = await apiFetch('users', serverIp); // 3. PASS serverIp
+      const data = await apiFetch('users', serverIp);
       setUsers(data);
     } catch (err) {
       setError({ type: 'api', message: err.message });
     } finally {
       setIsLoading(false);
     }
-  }, [serverIp]); // 4. ADD serverIp dependency
+  }, [serverIp]);
 
   useEffect(() => {
-    // 5. UPDATE data fetch trigger
     if (sessionState && !isSettingsLoading) {
       fetchUsers();
+      if (['Super_Admin', 'Admin', 'PACD'].includes(sessionState.user.role)) {
+        fetchUsers();
+      }
     }
   }, [sessionState, isSettingsLoading, fetchUsers]);
 
@@ -111,7 +125,7 @@ const Accounts = () => {
     return users.filter(user => {
       const searchLower = filters.query.toLowerCase();
       const fullName = `${user.first_name || ''} ${user.middle_initial || ''} ${user.last_name || ''}`.toLowerCase();
-      return filters.query === '' || fullName.includes(searchLower) || (user.username && user.username.toLowerCase().includes(searchLower));
+      return filters.query === '' || fullName.includes(searchLower) || (user.email && user.email.toLowerCase().includes(searchLower));
     });
   }, [users, filters.query]);
 
@@ -164,15 +178,17 @@ const Accounts = () => {
     setError(null);
   };
 
-   const confirmDelete = async () => {
+  const confirmDelete = async () => {
     if (!userToDelete || !sessionState) return;
     try {
-      await apiFetch(`users/${userToDelete.id}`, serverIp, { // 3. PASS serverIp
+      await apiFetch(`users/${userToDelete.id}`, serverIp, {
         method: 'DELETE',
         body: JSON.stringify({ actingUserId: sessionState.user.id })
       });
       setUserToDelete(null);
       fetchUsers();
+      setSuccessMessage('User deleted successfully.');
+      setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err) {
       setError({ type: 'delete', message: err.message });
       setUserToDelete(null);
@@ -187,18 +203,29 @@ const Accounts = () => {
       const body = { ...formData, actingUserId: sessionState.user.id };
 
       try {
-          const data = await apiFetch(endpoint, serverIp, { // 3. PASS serverIp
+          const data = await apiFetch(endpoint, serverIp, {
               method,
               body: JSON.stringify(body)
           });
           
-          setIsModalOpen(false);
-          
-          if (method === 'POST' && data.temporaryPassword) {
-              setTempPassword(data.temporaryPassword);
+          if (method === 'POST') {
+              setTempPassword(data.temporaryPassword || '');
+              setResetLink(data.resetLink || '');
+              
+              // --- SEND FIREBASE EMAIL ---
+              try {
+                  await sendPasswordResetEmail(auth, formData.email);
+                  setTempPasswordModalTitle('Account Created & Email Sent');
+              } catch (emailErr) {
+                  setTempPasswordModalTitle('Account Created (Email Failed)');
+              }
               setShowTempPasswordModal(true);
+          } else {
+              setSuccessMessage('User updated successfully.');
+              setTimeout(() => setSuccessMessage(null), 3000);
           }
           
+          setIsModalOpen(false);
           fetchUsers();
       } catch (err) {
           let errorMessage = "An unknown error occurred.";
@@ -212,23 +239,8 @@ const Accounts = () => {
       }
   };
 
-  const handlePasswordReset = async () => {
-    if (!editingUser || !sessionState) return;
-    setError(null);
-    try {
-      const data = await apiFetch(`users/${editingUser.id}/reset-password`, serverIp, { // 3. PASS serverIp
-        method: 'POST'
-      });
-      setTempPassword(data.temporaryPassword);
-      setShowTempPasswordModal(true);
-      setIsModalOpen(false);
-    } catch (err) {
-      setError({ type: 'password_reset', message: err.message });
-    }
-  };
-
-  const copyToClipboard = () => {
-    navigator.clipboard.writeText(tempPassword).then(() => {
+  const copyToClipboard = (text) => {
+    navigator.clipboard.writeText(text).then(() => {
       setCopySuccess('Copied!');
       setTimeout(() => setCopySuccess(''), 2000);
     }, () => {
@@ -255,7 +267,6 @@ const Accounts = () => {
     return sortConfig.direction === 'ascending' ? <FaSortUp className="inline-block ml-1 text-blue-500" /> : <FaSortDown className="inline-block ml-1 text-blue-500" />;
   };
 
-  // 6. UPDATE initial loading condition
   if (!sessionState || isLoading || isSettingsLoading) {
     return (
       <div className="p-4 sm:p-6 lg:p-8">
@@ -283,9 +294,11 @@ const Accounts = () => {
 
   return (
     <div>
-      {/* ... All your JSX ... */}
-      {/* NOTE: No changes are needed in the JSX, only in the logic above. */}
-      {/* The full JSX is omitted here for brevity but is included in the copy-paste block. */}
+      {successMessage && (
+        <div className="fixed top-5 right-5 z-[200] flex items-center gap-3 px-5 py-3 bg-green-600 text-white text-sm font-semibold rounded-lg shadow-lg">
+          <span>✓</span> {successMessage}
+        </div>
+      )}
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">User Accounts</h1>
         <div className="relative">
@@ -314,7 +327,7 @@ const Accounts = () => {
                 <button onClick={() => requestSort('last_name')} className="flex items-center w-full uppercase">Account Name {getSortIcon('last_name')}</button>
               </th>
               <th className="px-5 py-3.5 font-semibold tracking-wider">
-                <button onClick={() => requestSort('username')} className="flex items-center w-full uppercase">Username {getSortIcon('username')}</button>
+                <button onClick={() => requestSort('email')} className="flex items-center w-full uppercase">Email Address {getSortIcon('email')}</button>
               </th>
               <th className="px-5 py-3.5 font-semibold tracking-wider">
                 <button onClick={() => requestSort('role')} className="flex items-center w-full uppercase">Role {getSortIcon('role')}</button>
@@ -333,7 +346,7 @@ const Accounts = () => {
                 return (
                   <tr key={user.id} className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors duration-200">
                     <td className="px-5 py-4 font-medium text-gray-900 dark:text-white">{[user.first_name, user.middle_initial, user.last_name, user.suffix].filter(Boolean).join(' ')}</td>
-                    <td className="px-5 py-4 text-gray-700 dark:text-gray-300">{user.username}</td>
+                    <td className="px-5 py-4 text-gray-700 dark:text-gray-300">{user.email}</td>
                     <td className="px-5 py-4"><span className="relative inline-block px-3 py-1 font-semibold text-green-900 leading-tight"><span aria-hidden className="absolute inset-0 bg-green-200 opacity-50 rounded-full"></span><span className="relative">{user.role}</span></span></td>
                     <td className="px-5 py-4 text-gray-700 dark:text-gray-300">{user.created_at ? format(parseISO(user.created_at), 'MMMM d, yyyy') : 'N/A'}</td>
                     <td className="px-5 py-4">
@@ -394,8 +407,20 @@ const Accounts = () => {
                             <input type="text" id="suffix" name="suffix" value={formData.suffix || ''} onChange={handleInputChange} className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
                         </div>
                         <div className="md:col-span-2">
-                            <label htmlFor="username" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Username*</label>
-                            <input type="text" id="username" name="username" value={formData.username} onChange={handleInputChange} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
+                            <label htmlFor="email" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Email Address*</label>
+                            <input type="email" id="email" name="email" value={formData.email} onChange={handleInputChange} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
+                        </div>
+                        <div className="md:col-span-2">
+                            <label htmlFor="position" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Position</label>
+                            <input type="text" id="position" name="position" value={formData.position || ''} onChange={handleInputChange} className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
+                        </div>
+                        <div>
+                            <label htmlFor="salary" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Salary</label>
+                            <input type="number" id="salary" name="salary" value={formData.salary || ''} onChange={handleInputChange} className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
+                        </div>
+                        <div>
+                            <label htmlFor="salary_grade" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Salary Grade</label>
+                            <input type="text" id="salary_grade" name="salary_grade" value={formData.salary_grade || ''} onChange={handleInputChange} className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
                         </div>
                         <div className="md:col-span-2">
                             <label htmlFor="role" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Role*</label>
@@ -403,10 +428,24 @@ const Accounts = () => {
                                 {getAssignableRoles().map(role => (<option key={role} value={role}>{role}</option>))}
                             </select>
                         </div>
+                        <div className="md:col-span-2">
+                            <label htmlFor="opshub_role" className="block text-sm font-medium text-gray-700 dark:text-gray-300">OpsHub Role*</label>
+                            <select id="opshub_role" name="opshub_role" value={formData.opshub_role} onChange={handleInputChange} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
+                                <option value="Staff">Staff</option>
+                                <option value="Admin">Admin</option>
+                            </select>
+                        </div>
+                        <div className="md:col-span-2">
+                            <label htmlFor="status" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Status*</label>
+                            <select id="status" name="status" value={formData.status || 'Active'} onChange={handleInputChange} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
+                                <option value="Active">Active</option>
+                                <option value="Inactive">Inactive</option>
+                            </select>
+                        </div>
                     </div>
                 </form>
                 <div className="flex-shrink-0 flex justify-between items-center px-6 py-4 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-200 dark:border-gray-700 rounded-b-lg">
-                    <div>{editingUser && <button type="button" onClick={handlePasswordReset} className="px-4 py-2 font-semibold text-white bg-yellow-500 rounded-md shadow-sm hover:bg-yellow-600 transition-colors">Reset Password</button>}</div>
+                    <div></div>
                     <div className="flex space-x-2">
                         <button type="button" onClick={handleCloseModal} className="px-4 py-2 font-semibold text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 transition-colors">Cancel</button>
                         <button type="submit" form="userForm" className="px-4 py-2 font-semibold text-white bg-blue-600 rounded-md shadow-sm hover:bg-blue-700 transition-colors">Save</button>
@@ -420,7 +459,7 @@ const Accounts = () => {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
           <div className="w-full max-w-md p-6 bg-white dark:bg-gray-800 rounded-lg shadow-xl">
             <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Confirm Deletion</h2>
-            <p className="mt-2 text-gray-600 dark:text-gray-300">Are you sure you want to delete user "{userToDelete.username}"? This cannot be undone.</p>
+            <p className="mt-2 text-gray-600 dark:text-gray-300">Are you sure you want to delete user "{userToDelete.email}"? This cannot be undone.</p>
             {error?.type === 'delete' && <div className="mt-4 p-3 bg-red-100 text-red-700 rounded-lg">{error.message}</div>}
             <div className="flex justify-end mt-6 space-x-2">
               <button onClick={() => setUserToDelete(null)} className="px-4 py-2 font-semibold text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 transition-colors">Cancel</button>
@@ -433,13 +472,29 @@ const Accounts = () => {
       {showTempPasswordModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
           <div className="w-full max-w-md p-6 text-center bg-white dark:bg-gray-800 rounded-lg shadow-xl">
-            <h2 className="text-xl font-bold text-gray-800 dark:text-white">Account Created Successfully</h2>
-            <p className="mt-2 text-gray-600 dark:text-gray-300">Please provide the user with their new temporary password:</p>
+            <h2 className="text-xl font-bold text-gray-800 dark:text-white">{tempPasswordModalTitle}</h2> {/* <-- 3. USE DYNAMIC TITLE */}
+            <p className="mt-2 text-gray-600 dark:text-gray-300">The user has been notified via email.</p>
             {error?.type === 'password_reset' && <div className="mt-4 p-3 bg-red-100 text-red-700 rounded-lg">{error.message}</div>}
-            <div className="flex items-center justify-center p-3 mt-4 bg-gray-100 rounded-lg dark:bg-gray-700">
-              <p className="mr-4 text-lg font-mono font-bold text-gray-800 dark:text-white">{tempPassword}</p>
-              <button onClick={copyToClipboard} className="px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors">{copySuccess || 'Copy'}</button>
+            
+            <div className="mt-4 space-y-4">
+              {tempPassword && (
+              <div className="flex items-center justify-center p-3 bg-gray-100 rounded-lg dark:bg-gray-700">
+                <p className="mr-4 text-lg font-mono font-bold text-gray-800 dark:text-white">{tempPassword}</p>
+                <button onClick={() => copyToClipboard(tempPassword)} className="px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors">{copySuccess || 'Copy'}</button>
+              </div>
+              )}
+
+              {resetLink && (
+                <div className="text-left">
+                  <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Or send them this Reset Link:</p>
+                  <div className="flex gap-2">
+                    <input type="text" readOnly value={resetLink} className="w-full p-2 text-xs bg-gray-50 border border-gray-300 rounded dark:bg-gray-900 dark:border-gray-600 dark:text-gray-300" />
+                    <button onClick={() => copyToClipboard(resetLink)} className="px-3 py-1 text-xs font-semibold text-gray-700 bg-gray-200 rounded hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500">Copy</button>
+                  </div>
+                </div>
+              )}
             </div>
+
             <button onClick={() => setShowTempPasswordModal(false)} className="w-full px-4 py-2 mt-6 font-semibold text-gray-700 bg-gray-200 rounded-md hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500 transition-colors">Close</button>
           </div>
         </div>
