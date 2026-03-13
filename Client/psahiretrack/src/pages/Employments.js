@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { FaSort, FaSortUp, FaSortDown } from 'react-icons/fa';
-import { FiPlus } from 'react-icons/fi';
+import { FaSort, FaSortUp, FaSortDown, FaEye, FaPencilAlt, FaStar, FaTrash, FaArrowRight, FaCheck, FaArrowLeft, FaSync } from 'react-icons/fa';
+import { FiPlus, FiDownload, FiX, FiSave } from 'react-icons/fi';
 import { parseISO, format } from 'date-fns';
 import ProgressModal from '../components/Progress';
+import ToastContainer from '../components/ToastContainer';
+import useToast from '../hooks/useToast';
 import { apiFetch } from '../components/API';
 import { useSettings } from '../context/SettingsContext';
 
@@ -12,9 +14,7 @@ const INITIAL_FORM_STATE = {
   survey_id: '',
   focal_person_id: '',
   contract_start_date: '',
-  contract_end_date: '',
-  rating: '',
-  remarks: ''
+  contract_end_date: ''
 };
 
 const RATING_CRITERIA = [
@@ -111,7 +111,7 @@ const SearchableDropdown = ({ options, value, onChange, placeholder, id, require
               {filteredOptions.map((option) => (
                 <li
                   key={option.value}
-                  className={`cursor-pointer px-4 py-2 text-gray-800 dark:text-gray-200 hover:bg-blue-500 hover:text-white ${
+                  className={`cursor-pointer px-4 py-2 text-gray-800 dark:text-gray-200 hover:bg-blue-500 hover:text-white whitespace-normal break-words ${
                     option.value === value ? 'bg-blue-100 dark:bg-blue-600' : ''
                   }`}
                   onClick={() => handleSelectOption(option)}
@@ -132,26 +132,6 @@ const SearchableDropdown = ({ options, value, onChange, placeholder, id, require
 };
 
 
-const parseCSV = (text) => {
-  const lines = text.split(/\r\n|\n/).filter(line => line.trim() !== '');
-  if (lines.length < 2) return [];
-  const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
-  const data = [];
-  for (let i = 1; i < lines.length; i++) {
-    const values = lines[i].split(',');
-    const obj = {};
-    for (let j = 0; j < headers.length; j++) {
-      if (values[j]) {
-        obj[headers[j]] = values[j].replace(/"/g, '').trim();
-      }
-    }
-    if (Object.keys(obj).length > 0 && obj[headers[0]]) {
-      data.push(obj);
-    }
-  }
-  return data;
-};
-
 const formatDateForExport = (dateString) => {
     if (!dateString) return '';
     try {
@@ -162,15 +142,24 @@ const formatDateForExport = (dateString) => {
     }
 };
 
+const formatDateForInput = (dateString) => {
+  if (!dateString) return '';
+  try {
+      return format(parseISO(dateString), 'yyyy-MM-dd');
+  } catch (error) {
+      return '';
+  }
+};
+
 const Employments = () => {
   const { serverIp, isLoading: isSettingsLoading } = useSettings();
+  const { toasts, showToast, removeToast } = useToast();
   const [employments, setEmployments] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [positions, setPositions] = useState([]);
   const [surveys, setSurveys] = useState([]);
   const [focalPersons, setFocalPersons] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState(null);
   const [filters, setFilters] = useState({ query: '' });
   const [currentPage, setCurrentPage] = useState(1);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -178,14 +167,9 @@ const Employments = () => {
   const [editingRecord, setEditingRecord] = useState(null);
   const [viewingRecord, setViewingRecord] = useState(null);
   const [recordToDelete, setRecordToDelete] = useState(null);
-  const fileInputRef = useRef(null);
+  const [originalFormData, setOriginalFormData] = useState(null);
 
   const [selectedRecords, setSelectedRecords] = useState(new Set());
-  const [csvErrors, setCsvErrors] = useState([]);
-  const [isErrorPopupOpen, setIsErrorPopupOpen] = useState(false);
-  const [importResults, setImportResults] = useState(null);
-  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
-  const [csvData, setCsvData] = useState([]);
 
   const [isProgressModalOpen, setIsProgressModalOpen] = useState(false);
   const [progressMessage, setProgressMessage] = useState('');
@@ -194,6 +178,20 @@ const Employments = () => {
 
   const [isBatchEditModalOpen, setIsBatchEditModalOpen] = useState(false);
   const [batchEditFormData, setBatchEditFormData] = useState({ contract_start_date: '', contract_end_date: '' });
+
+  // Sync Modal States
+  const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+  const [syncModalStep, setSyncModalStep] = useState('filter');
+  const [isSyncLoading, setIsSyncLoading] = useState(false);
+  const [syncSelectedSurveyName, setSyncSelectedSurveyName] = useState('');
+  const [syncSelectedPosition, setSyncSelectedPosition] = useState('');
+  const [syncAvailableSurveys, setSyncAvailableSurveys] = useState([]);
+  const [syncAvailablePositions, setSyncAvailablePositions] = useState([]);
+  const [syncPendingCount, setSyncPendingCount] = useState(0);
+  const [syncPreviewApplicants, setSyncPreviewApplicants] = useState([]);
+  const [excludedApplicants, setExcludedApplicants] = useState(new Set());
+  const [syncIsSurveyDropdownOpen, setSyncIsSurveyDropdownOpen] = useState(false);
+  const [syncIsPositionDropdownOpen, setSyncIsPositionDropdownOpen] = useState(false);
 
   const [sessionState, setSessionState] = useState(null);
   const [userPermissions, setUserPermissions] = useState({
@@ -205,8 +203,6 @@ const Employments = () => {
 
   const [focalPersonView, setFocalPersonView] = useState('all');
   const [sortConfig, setSortConfig] = useState({ key: 'id', direction: 'ascending' });
-  const [successMessage, setSuccessMessage] = useState(null);
-
   const [isRatingModalOpen, setIsRatingModalOpen] = useState(false);
   const [ratingRecord, setRatingRecord] = useState(null);
   const [ratingCriteria, setRatingCriteria] = useState({ timeliness: '', quality: '', quantity: '' });
@@ -214,12 +210,25 @@ const Employments = () => {
   const [isRatingConfirmOpen, setIsRatingConfirmOpen] = useState(false);
   
   const viewModalRef = useRef(null);
+  const employeeDropdownRef = useRef(null);
+  const positionDropdownRef = useRef(null);
+  const surveyDropdownRef = useRef(null);
+  const focalPersonDropdownRef = useRef(null);
+  const startDateRef = useRef(null);
+  const endDateRef = useRef(null);
 
   const computedAverage = useMemo(() => {
     const scores = Object.values(ratingCriteria).map(v => parseInt(v)).filter(v => !isNaN(v));
     if (scores.length < 3) return null;
     return (scores.reduce((a, b) => a + b, 0) / 3);
   }, [ratingCriteria]);
+
+  const ratingScoreOptions = useMemo(() => 
+    [1, 2, 3, 4, 5].map(score => ({
+        value: score,
+        label: `${score} — ${SCORE_DESCRIPTIONS[score].label}`
+    })),
+  []);
 
   const computedRating = useMemo(() => {
     if (computedAverage === null) return '';
@@ -241,29 +250,44 @@ const Employments = () => {
     return computedRating ? map[computedRating] : 'text-gray-400 bg-gray-50 dark:bg-gray-900/30 border-gray-200 dark:border-gray-700';
   }, [computedRating]);
 
+  const isSyncSurveyContractInFuture = useMemo(() => {
+    if (!syncSelectedSurveyName || !surveys.length) {
+        return false;
+    }
+    const selectedSurvey = surveys.find(s => s.name === syncSelectedSurveyName);
+    if (!selectedSurvey || !selectedSurvey.contract_end_date) {
+        return false; // If no end date, assume it's not in the future.
+    }
+    const today = new Date();
+    today.setHours(0, 0, 0, 0); // Normalize to start of day for comparison
+    
+    const [year, month, day] = selectedSurvey.contract_end_date.split('-').map(Number);
+    const localContractEndDate = new Date(year, month - 1, day);
+    
+    return localContractEndDate > today;
+  }, [syncSelectedSurveyName, surveys]);
+
   useClickOutside(viewModalRef, () => {
       if (viewingRecord) handleCloseViewModal();
   });
 
   const handleCloseAddEditModal = useCallback(() => {
       setIsModalOpen(false);
-      setError(null);
       setFormData(INITIAL_FORM_STATE);
+      setOriginalFormData(null);
   }, []);
 
   const handleCloseViewModal = useCallback(() => {
       setViewingRecord(null);
   }, []);
 
-  const handleCloseImportModal = useCallback(() => {
-      setIsImportModalOpen(false);
-      setImportResults(null);
-      setCsvData([]);
-  }, []);
+  const handleInputChange = (e) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({ ...prev, [name]: value }));
+  };
 
   const handleCloseBatchEditModal = useCallback(() => {
       setIsBatchEditModalOpen(false);
-      setError(null);
   }, []);
 
   const fetchData = useCallback(async () => {
@@ -284,11 +308,23 @@ const Employments = () => {
       setEmployments(recordsData);
       setSurveys(surveysData);
     } catch (err) {
-      setError("Failed to fetch data. Please check server connection.");
+      showToast("Failed to fetch data. Please check server connection.", 'error');
     } finally {
       setIsLoading(false);
     }
-  }, [serverIp]); // 4. ADD serverIp dependency
+  }, [serverIp, showToast]); // 4. ADD serverIp dependency
+
+  const fetchSyncFilterOptions = useCallback(async () => {
+    if (!serverIp) return;
+    try {
+        const data = await apiFetch('employments/sync-filter-options', serverIp);
+        setSyncAvailableSurveys(data.surveys || []);
+        setSyncAvailablePositions([]);
+        setSyncPendingCount(data.pendingCount || 0);
+    } catch (err) {
+        showToast(err.message, 'error');
+    }
+  }, [serverIp, showToast]);
 
   const focalPersonMap = useMemo(() => {
       if (!focalPersons.length) return new Map();
@@ -321,23 +357,25 @@ const Employments = () => {
             canDelete: ['Super_Admin', 'Admin', 'PACD'].includes(role)
           });
         } else {
-          setError("Authentication failed. Please log in again.");
+          showToast("Authentication failed. Please log in again.", 'error');
           setIsLoading(false);
         }
       } catch (err) {
-        setError("Failed to retrieve session data.");
+        showToast("Failed to retrieve session data.", 'error');
         setIsLoading(false);
       }
     };
     getSession();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     // 5. UPDATE data fetch trigger
     if (sessionState && !isSettingsLoading) {
       fetchData();
+      fetchSyncFilterOptions();
     }
-  }, [sessionState, isSettingsLoading, fetchData]);
+  }, [sessionState, isSettingsLoading, fetchData, fetchSyncFilterOptions]);
 
 
   const accessibleEmployments = useMemo(() => {
@@ -441,11 +479,8 @@ const Employments = () => {
     setFilters({ ...filters, [e.target.name]: e.target.value });
   };
 
-  const handleInputChange = (e) => setFormData(prev => ({ ...prev, [e.target.name]: e.target.value }));
   const handleSelectSingle = (recordId) => { const newSelection = new Set(selectedRecords); newSelection.has(recordId) ? newSelection.delete(recordId) : newSelection.add(recordId); setSelectedRecords(newSelection); };
-  const handleClearSelection = () => { setSelectedRecords(new Set()); };
   const handleBatchEditClick = () => {
-    setError(null);
     if (selectedRecords.size === 0) return;
 
     const selectedItems = employments.filter(emp => selectedRecords.has(emp.id));
@@ -455,7 +490,7 @@ const Employments = () => {
     const allHaveSameSurvey = selectedItems.every(item => item.survey_id === firstSurveyId);
 
     if (!allHaveSameSurvey) {
-      setError("Batch edit is only allowed for employment records under the same survey.");
+      showToast("Batch edit is only allowed for employment records under the same survey.", 'error');
       return;
     }
 
@@ -469,7 +504,6 @@ const Employments = () => {
 
   const handleBatchUpdateSubmit = async (e) => {
     e.preventDefault();
-    setError(null);
 
     const filledUpdates = Object.entries(batchEditFormData).reduce((acc, [key, value]) => {
       if (value) {
@@ -479,13 +513,13 @@ const Employments = () => {
     }, {});
 
     if (Object.keys(filledUpdates).length === 0) {
-        setError("Please enter at least one date to update.");
+        showToast("Please enter at least one date to update.", 'error');
         return;
     }
     
     const { contract_start_date, contract_end_date } = filledUpdates;
     if (contract_start_date && contract_end_date && new Date(contract_end_date) < new Date(contract_start_date)) {
-        setError('End date cannot be earlier than the start date.');
+        showToast('End date cannot be earlier than the start date.', 'error');
         return;
     }
     const payload = {
@@ -495,17 +529,16 @@ const Employments = () => {
     };
 
     try {
-      await apiFetch('employments/batch-update', serverIp, { // 3. PASS serverIp
+      await apiFetch('employments/batch-update', serverIp, {
         method: 'PUT',
         body: JSON.stringify(payload),
       });
       setIsBatchEditModalOpen(false);
       fetchData();
       setSelectedRecords(new Set());
-      setSuccessMessage('Employment records updated successfully.');
-      setTimeout(() => setSuccessMessage(null), 3000);
+      showToast('Employment records updated successfully.', 'success');
     } catch (err) {
-      setError(err.message);
+      showToast(err.message, 'error');
     }
   };
 
@@ -533,15 +566,19 @@ const Employments = () => {
       setIsRatingConfirmOpen(false);
       setIsRatingModalOpen(false);
       fetchData();
-      setSuccessMessage('Performance rating saved successfully.');
-      setTimeout(() => setSuccessMessage(null), 3000);
+      showToast('Performance rating saved successfully.', 'success');
     } catch (err) {
       setIsRatingConfirmOpen(false);
-      setError(err.message);
+      showToast(err.message, 'error');
     }
   };
 
-  const handleAddClick = () => { setEditingRecord(null); setFormData(INITIAL_FORM_STATE); setError(null); setIsModalOpen(true); };
+  const handleAddClick = () => { 
+      setEditingRecord(null); 
+      setFormData(INITIAL_FORM_STATE); 
+      setOriginalFormData(null);
+      setIsModalOpen(true); 
+  };
   
   const handleEditClick = (record) => {
       setEditingRecord(record);
@@ -550,13 +587,11 @@ const Employments = () => {
         position_id: record.position_id ?? '',
         survey_id: record.survey_id ?? '',
         focal_person_id: record.focal_person_id ?? '',
-        contract_start_date: record.contract_start_date || '',
-        contract_end_date: record.contract_end_date || '',
-        rating: record.rating ?? '',
-        remarks: record.remarks ?? ''
+        contract_start_date: record.contract_start_date ?? '',
+        contract_end_date: record.contract_end_date ?? ''
       };
       setFormData(formValues);
-      setError(null);
+      setOriginalFormData(formValues);
       setIsModalOpen(true);
   };
 
@@ -574,7 +609,38 @@ const Employments = () => {
 
   const handleFormSubmit = async (e) => {
     e.preventDefault();
-    setError(null);
+    
+    // Validation - Required fields
+    if (!formData.employee_id) {
+      employeeDropdownRef.current?.focus();
+      employeeDropdownRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    if (!formData.position_id) {
+      positionDropdownRef.current?.focus();
+      positionDropdownRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    if (!formData.survey_id) {
+      surveyDropdownRef.current?.focus();
+      surveyDropdownRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    if (!formData.contract_start_date) {
+      startDateRef.current?.focus();
+      startDateRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    if (!formData.contract_end_date) {
+      endDateRef.current?.focus();
+      endDateRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    if (new Date(formData.contract_end_date) < new Date(formData.contract_start_date)) {
+      showToast('End date cannot be earlier than the start date.', 'error');
+      return;
+    }
+    
     const body = { ...formData, actingUserId: sessionState?.user?.id };
     const endpoint = editingRecord ? `employments/${editingRecord.id}` : 'employments';
     const method = editingRecord ? 'PUT' : 'POST';
@@ -586,17 +652,21 @@ const Employments = () => {
       });
       handleCloseAddEditModal();
       fetchData();
-      setSuccessMessage(editingRecord ? 'Employment record updated successfully.' : 'Employment record added successfully.');
-      setTimeout(() => setSuccessMessage(null), 3000);
+      showToast(editingRecord ? 'Employment record updated successfully.' : 'Employment record added successfully.', 'success');
     } catch (err) {
           try {
               const parsedError = JSON.parse(err.message);
-              setError(parsedError.error || parsedError.message || "An unknown error occurred.");
+              showToast(parsedError.error || parsedError.message || "An unknown error occurred.", 'error');
           } catch (e) {
-              setError(err.message);
+              showToast(err.message, 'error');
           }
         }
     };
+
+  const hasChanges = useMemo(() => {
+      if (!editingRecord || !originalFormData) return true;
+      return JSON.stringify(formData) !== JSON.stringify(originalFormData);
+  }, [formData, originalFormData, editingRecord]);
 
   const confirmDelete = async () => {
     if (!recordToDelete || !sessionState) return;
@@ -607,54 +677,112 @@ const Employments = () => {
       });
       setRecordToDelete(null);
       fetchData();
-      setSuccessMessage('Employment record deleted successfully.');
-      setTimeout(() => setSuccessMessage(null), 3000);
+      showToast('Employment record deleted successfully.', 'success');
     } catch (err) {
-      setError(err.message);
+      showToast(err.message, 'error');
       setRecordToDelete(null);
     }
   };
 
-  const handleConfirmImport = async () => {
-    if (csvData.length === 0 || !sessionState) return;
-    setImportResults({ status: 'importing', message: 'Importing, please wait...' });
-    
-    const dataToSend = csvData.map(({ rating, remarks, ...rest }) => rest);
-
+  const handleSyncClick = async () => {
+    setIsSyncLoading(true);
     try {
-      const result = await apiFetch('employments/import', serverIp, { // 3. PASS serverIp
-        method: 'POST',
-        body: JSON.stringify({ actingUserId: sessionState.user.id, employments: dataToSend })
-      });
-      setImportResults({ status: 'success', ...result });
-      fetchData();
+        await fetchSyncFilterOptions();
+        setSyncSelectedSurveyName('');
+        setSyncSelectedPosition('');
+        setSyncModalStep('filter');
+        setIsSyncModalOpen(true);
     } catch (err) {
-        const errorPayload = { status: 'error', message: 'An unknown error occurred.', errors: [] };
-        try {
-            const parsedError = JSON.parse(err.message);
-            if (parsedError.errors && parsedError.errors.length > 0) {
-                errorPayload.message = "Please fix the following errors in your file:";
-                errorPayload.errors = parsedError.errors;
-            } else {
-                errorPayload.message = parsedError.error || parsedError.message || errorPayload.message;
-            }
-        } catch (e) {
-            errorPayload.message = err.message;
-        }
-        setImportResults(errorPayload);
+        showToast(err.message, 'error');
+    } finally {
+        setIsSyncLoading(false);
     }
   };
 
-  const handleExportSelected = () => {
-    if (selectedRecords.size === 0) return;
-    const dataToExport = employments.filter(emp => selectedRecords.has(emp.id));
+  const handleSyncSurveySelect = async (surveyName) => {
+    setSyncSelectedSurveyName(surveyName);
+    setSyncSelectedPosition('');
+    setSyncIsSurveyDropdownOpen(false);
+    
+    if (surveyName) {
+        try {
+            const data = await apiFetch(`employments/sync-filter-options?survey=${encodeURIComponent(surveyName)}`, serverIp);
+            setSyncAvailablePositions(data.positions || []);
+        } catch (err) {
+            showToast(err.message, 'error');
+        }
+    }
+  };
+
+  const handleCloseSyncModal = useCallback(() => {
+    setIsSyncModalOpen(false);
+    setSyncModalStep('filter');
+    setSyncSelectedSurveyName('');
+    setSyncSelectedPosition('');
+    setSyncPreviewApplicants([]);
+    setExcludedApplicants(new Set());
+  }, []);
+
+  const handleConfirmSyncFilter = async (e) => {
+    if (e) e.preventDefault();
+    if (!syncSelectedSurveyName || !syncSelectedPosition) {
+        showToast('Please select a survey and position.', 'warning');
+        return;
+    }
+    setIsSyncLoading(true);
+    try {
+        const results = await apiFetch('employments/sync-preview', serverIp, {
+            method: 'POST',
+            body: JSON.stringify({ surveyName: syncSelectedSurveyName, position: syncSelectedPosition })
+        });
+        setSyncPreviewApplicants(results);
+        setSyncModalStep('preview');
+    } catch (err) {
+        showToast(err.message, 'error');
+    } finally {
+        setIsSyncLoading(false);
+    }
+  };
+
+  const handleConfirmSync = async () => {
+    setIsSyncLoading(true);
+    try {
+        const applicantIds = syncPreviewApplicants.filter(app => !excludedApplicants.has(app.id)).map(app => app.id);
+        const result = await apiFetch('employments/sync-finalize', serverIp, {
+            method: 'POST',
+            body: JSON.stringify({ applicantIds, actingUserId: sessionState?.user?.id })
+        });
+        showToast(result.message, 'success');
+        handleCloseSyncModal();
+        setTimeout(() => {
+            window.location.reload();
+        }, 1500);
+    } catch (err) {
+        showToast(err.message, 'error');
+    } finally {
+        setIsSyncLoading(false);
+    }
+  };
+
+  const handleToggleExcludeApplicant = (id) => {
+    setExcludedApplicants(prev => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+    });
+  };
+
+  const handleExportAll = () => {
+    if (employmentsWithNames.length === 0) return;
+    const dataToExport = employmentsWithNames;
     const headers = ["employee_id", "fullname", "position_title", "survey_name", "focal_person_name", "contract_start_date", "contract_end_date", "rating", "remarks"];
     const csvContent = [headers.join(','), ...dataToExport.map(item => {
       const fullName = [item.first_name, item.middle_initial, item.last_name, item.suffix].filter(Boolean).join(' ');
       const row = [item.emp_id_str, fullName, item.position_title, item.survey_name, item.focal_person_name, formatDateForExport(item.contract_start_date), formatDateForExport(item.contract_end_date), item.rating, item.remarks];
       return row.map(val => `"${String(val || '').replace(/"/g, '""')}"`).join(',');
     })].join('\n');
-    const fileName = `exported_employment_records_${new Date().toISOString().split('T')[0]}.csv`;
+    const fileName = `all_employment_records_${new Date().toISOString().split('T')[0]}.csv`;
     handleCsvDownload(csvContent, fileName);
   };
 
@@ -681,30 +809,6 @@ const Employments = () => {
       setIsProgressComplete(true);
       setProgressMessage('An unexpected error occurred. Please check the console.');
     }
-  };
-
-  const handleDownloadTemplate = () => {
-    const headers = ["employee_id", "position_title", "survey_name"];
-    
-    const exampleData = `"PSAKLG-25-0001","Enumerator","2024 POPCEN-CBMS"`;
-    
-    const content = `${headers.join(',')}\n${exampleData}`;
-    handleCsvDownload(content, 'template_employment_records_template.csv');
-};
-
-  const handleImportClick = () => { setImportResults(null); setCsvErrors([]); fileInputRef.current.click(); };
-  const handleFileSelect = (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const text = e.target.result;
-      const data = parseCSV(text);
-      setCsvData(data);
-      setIsImportModalOpen(true);
-    };
-    reader.readAsText(file);
-    event.target.value = null;
   };
 
   // 6. UPDATE initial loading condition
@@ -735,11 +839,7 @@ const Employments = () => {
 
   return (
     <div>
-      {successMessage && (
-        <div className="fixed top-5 right-5 z-[200] flex items-center gap-3 px-5 py-3 bg-green-600 text-white text-sm font-semibold rounded-lg shadow-lg">
-          <span>✓</span> {successMessage}
-        </div>
-      )}
+      <ToastContainer toasts={toasts} onClose={removeToast} />
       <div className="flex flex-col md:flex-row items-center justify-between mb-4 gap-4">
         <h1 className="text-3xl font-bold text-gray-800 dark:text-white">Employment Records</h1>
         <div className="flex items-center gap-4">
@@ -767,25 +867,20 @@ const Employments = () => {
       <div className="flex flex-wrap items-center gap-2 mb-4">
         {(userPermissions.canManage || userPermissions.isHrDesignate) && (
           <>
-            <button onClick={handleAddClick} className="flex items-center gap-2 px-4 py-2 font-semibold text-white bg-blue-600 rounded-lg shadow-md hover:bg-blue-700"><FiPlus />Add New Employment Record</button>
+            <button onClick={handleAddClick} className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600"><FiPlus className="w-4 h-4" />Add Employment Record</button>
           </>
         )}
         <div className="flex-grow" />
         {(userPermissions.canManage || userPermissions.isHrDesignate) && (
           <>
-            <button onClick={handleDownloadTemplate} className="px-4 py-2 font-semibold text-gray-800 bg-gray-300 rounded-lg shadow-md hover:bg-gray-400 dark:text-white dark:bg-gray-600 dark:hover:bg-gray-500">Download Template</button>
-            <button onClick={handleImportClick} className="px-4 py-2 font-semibold text-white bg-green-600 rounded-lg shadow-md hover:bg-green-700">Import CSV</button>
-            <button onClick={handleBatchEditClick} disabled={selectedRecords.size <= 1} className="px-4 py-2 font-semibold text-white bg-purple-600 rounded-lg shadow-md hover:bg-purple-700 disabled:opacity-50">Batch Edit ({selectedRecords.size})</button>
-            <button onClick={handleExportSelected} disabled={selectedRecords.size <= 1} className="px-4 py-2 font-semibold text-gray-800 bg-yellow-400 rounded-lg shadow-md hover:bg-yellow-500 disabled:opacity-50">Export Selected({selectedRecords.size})</button>
-            <input type="file" ref={fileInputRef} onChange={handleFileSelect} className="hidden" accept=".csv" />
-            {selectedRecords.size > 0 && (
-              <button onClick={handleClearSelection} className="px-4 py-2 font-semibold text-white bg-red-600 rounded-lg shadow-md hover:bg-red-700">Clear Selection</button>
-            )}
+            <button onClick={handleSyncClick} disabled={isSyncLoading || syncPendingCount === 0} title={syncPendingCount === 0 ? 'No applicants ready for employment sync' : `${syncPendingCount} applicants ready for employment sync`} className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-white bg-purple-600 rounded-lg hover:bg-purple-700 dark:bg-purple-700 dark:hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed"><FiDownload className="w-4 h-4" />{isSyncLoading ? 'Loading...' : `Assign Employment to Hired (${syncPendingCount})`}</button>
+            <button onClick={handleBatchEditClick} disabled={selectedRecords.size <= 1} title={selectedRecords.size <= 1 ? 'Select at least 2 records to batch edit' : `Batch edit ${selectedRecords.size} records`} className="px-3 py-2 text-xs font-semibold text-white bg-purple-600 rounded-lg hover:bg-purple-700 dark:bg-purple-700 dark:hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed">Batch Edit ({selectedRecords.size})</button>
           </>
         )}
+        {userPermissions.canManage && (
+            <button onClick={handleExportAll} className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-gray-900 dark:text-gray-100 bg-yellow-400 rounded-lg hover:bg-yellow-500 dark:bg-yellow-600 dark:hover:bg-yellow-700"><FiDownload className="w-4 h-4" />Export All</button>
+        )}
       </div>
-
-      {error && !isModalOpen && !recordToDelete && !isImportModalOpen && !isBatchEditModalOpen && (<div className="p-3 mb-4 text-center text-red-700 bg-red-100 rounded-lg">{error}</div>)}
 
       <div className="overflow-x-auto bg-white h-[760px] rounded-lg shadow dark:bg-gray-800">
         <table className="min-w-full text-sm leading-normal">
@@ -814,11 +909,11 @@ const Employments = () => {
                   <td className="px-5 py-4 text-gray-700 dark:text-gray-300">{rec.survey_name}</td>
                   <td className="px-5 py-4 text-gray-700 dark:text-gray-300">{rec.rating || 'N/A'}</td>
                   <td className="px-5 py-4">
-                    <div className="flex items-center justify-center space-x-3">
-                      <button onClick={() => handleViewClick(rec)} className="text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-white">View</button>
-                      {(userPermissions.canManage || userPermissions.isHrDesignate) && <button onClick={() => handleEditClick(rec)} className="text-indigo-600 hover:text-indigo-900 dark:hover:text-indigo-300">Edit</button>}
-                      {userPermissions.isFocalPerson && rec.focal_person_id === sessionState?.user?.id && !rec.rating && <button onClick={() => handleProvideRatingClick(rec)} className="text-green-600 hover:text-green-800 dark:text-green-400 dark:hover:text-green-200 font-medium">Provide Rating</button>}
-                      {userPermissions.canDelete && <button onClick={() => handleDeleteClick(rec)} className="text-red-600 hover:text-red-900">Delete</button>}
+                    <div className="flex items-center justify-center space-x-1">
+                      <button onClick={() => handleViewClick(rec)} title="View Employment Record" className="p-1 rounded-lg transition-colors text-gray-500 hover:text-gray-800 hover:bg-gray-100 dark:text-gray-400 dark:hover:text-white dark:hover:bg-gray-700"><FaEye className="w-4 h-4" /></button>
+                      {(userPermissions.canManage || userPermissions.isHrDesignate) && <button onClick={() => handleEditClick(rec)} title="Edit Employment Record" className="p-1 rounded-lg transition-colors text-indigo-600 hover:text-indigo-900 hover:bg-indigo-50 dark:hover:text-indigo-300 dark:hover:bg-indigo-900/20"><FaPencilAlt className="w-4 h-4" /></button>}
+                      {userPermissions.isFocalPerson && rec.focal_person_id === sessionState?.user?.id && !rec.rating && (!rec.remarks || !rec.remarks.startsWith('REPLACED')) && <button onClick={() => handleProvideRatingClick(rec)} title="Provide Rating" className="p-1 rounded-lg transition-colors text-green-600 hover:text-green-800 hover:bg-green-50 dark:text-green-400 dark:hover:text-green-200 dark:hover:bg-green-900/20"><FaStar className="w-4 h-4" /></button>}
+                      {userPermissions.canDelete && <button onClick={() => handleDeleteClick(rec)} title="Delete Employment Record" className="p-1 rounded-lg transition-colors text-red-600 hover:text-red-900 hover:bg-red-50 dark:text-red-500 dark:hover:text-red-300 dark:hover:bg-red-900/20"><FaTrash className="w-4 h-4" /></button>}
                     </div>
                   </td>
                 </tr>
@@ -835,9 +930,9 @@ const Employments = () => {
           Showing {totalItems > 0 ? (currentPage - 1) * rowsPerPage + 1 : 0} to {Math.min(currentPage * rowsPerPage, totalItems)} of {totalItems} records
         </span>
         <div className="flex items-center space-x-2">
-          <button onClick={handlePreviousPage} disabled={currentPage === 1} className="px-4 py-2 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded disabled:opacity-50">Previous</button>
+          <button onClick={handlePreviousPage} disabled={currentPage === 1} title={currentPage === 1 ? 'Already on first page' : 'Go to previous page'} className="px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed">Previous</button>
           <span className="text-gray-700 dark:text-gray-300 px-2">{currentPage}</span>
-          <button onClick={handleNextPage} disabled={currentPage >= totalPages} className="px-4 py-2 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded disabled:opacity-50">Next</button>
+          <button onClick={handleNextPage} disabled={currentPage >= totalPages} title={currentPage >= totalPages ? 'Already on last page' : 'Go to next page'} className="px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed">Next</button>
         </div>
       </div>
 
@@ -847,10 +942,9 @@ const Employments = () => {
             <div className="flex-shrink-0 px-6 py-4 border-b border-gray-200 dark:border-gray-700">
               <h2 className="text-xl font-semibold text-gray-900 dark:text-white">{editingRecord ? 'Edit' : 'Add New'} Employment Record</h2>
             </div>
-            <form onSubmit={handleFormSubmit} id="employmentForm" className="flex-auto p-6 overflow-y-auto">
-              {error && <div className="p-3 mb-4 text-sm text-red-800 bg-red-100 dark:bg-red-900/30 dark:text-red-300 rounded-lg">{error}</div>}
+            <form onSubmit={handleFormSubmit} id="employmentForm" className="flex-auto p-6">
               <div className="grid grid-cols-1 gap-x-6 gap-y-4 md:grid-cols-2">
-                <div>
+                <div ref={employeeDropdownRef}>
                   <label htmlFor="employee_id" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Employee*</label>
                   <SearchableDropdown
                     id="employee_id"
@@ -861,7 +955,7 @@ const Employments = () => {
                     required
                   />
                 </div>
-                <div>
+                <div ref={positionDropdownRef}>
                   <label htmlFor="position_id" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Position Title*</label>
                   <SearchableDropdown
                     id="position_id"
@@ -873,7 +967,7 @@ const Employments = () => {
                   />
                 </div>
 
-                <div className="md:col-span-2">
+                <div ref={surveyDropdownRef} className="md:col-span-2">
                   <label htmlFor="survey_id" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Name of Census/Survey*</label>
                   <SearchableDropdown
                     id="survey_id"
@@ -886,17 +980,15 @@ const Employments = () => {
                         setFormData(prev => ({
                           ...prev,
                           survey_id: value,
-                          contract_start_date: selectedSurvey.contract_start_date || '',
-                          contract_end_date: selectedSurvey.contract_end_date || '',
-                          focal_person_id: selectedSurvey.focal_person_id || ''
+                          focal_person_id: selectedSurvey.focal_person_id || '',
+                          contract_start_date: formatDateForInput(selectedSurvey.contract_start_date) || prev.contract_start_date,
+                          contract_end_date: formatDateForInput(selectedSurvey.contract_end_date) || prev.contract_end_date
                         }));
                       } else {
                         setFormData(prev => ({
                           ...prev,
                           survey_id: '',
-                          contract_start_date: '',
-                          contract_end_date: '',
-                          focal_person_id: ''
+                          focal_person_id: '',
                         }));
                       }
                     }}
@@ -904,21 +996,37 @@ const Employments = () => {
                     required
                   />
                 </div>
-                <div>
-                  <label htmlFor="contract_start_date" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Contract Start Date*</label>
-                  <input id="contract_start_date" type="date" name="contract_start_date" value={formData.contract_start_date} 
-                    onChange={handleInputChange} required 
-                    disabled={!editingRecord}
-                    className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100 dark:disabled:bg-gray-700/50" />
+
+                <div className="grid grid-cols-2 gap-4 md:col-span-2">
+                  <div>
+                    <label htmlFor="contract_start_date" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Contract Start Date*</label>
+                    <input
+                      ref={startDateRef}
+                      type="date"
+                      id="contract_start_date"
+                      name="contract_start_date"
+                      value={formData.contract_start_date}
+                      onChange={handleInputChange}
+                      required
+                      className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="contract_end_date" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Contract End Date*</label>
+                    <input
+                      ref={endDateRef}
+                      type="date"
+                      id="contract_end_date"
+                      name="contract_end_date"
+                      value={formData.contract_end_date}
+                      onChange={handleInputChange}
+                      required
+                      className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label htmlFor="contract_end_date" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Contract End Date*</label>
-                  <input id="contract_end_date" type="date" name="contract_end_date" value={formData.contract_end_date} 
-                    onChange={handleInputChange} required 
-                    disabled={!editingRecord}
-                    className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100 dark:disabled:bg-gray-700/50" />
-                </div>
-                <div>
+
+                <div ref={focalPersonDropdownRef} className="md:col-span-2">
                   <label htmlFor="focal_person_id" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Focal Person*</label>
                   <SearchableDropdown
                     id="focal_person_id"
@@ -929,36 +1037,153 @@ const Employments = () => {
                     required
                   />
                 </div>
-                <div>
-                <label htmlFor="rating" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                  Performance Rating
-                  {editingRecord?.rating && !userPermissions.isSuperAdmin && (
-                    <span className="ml-2 text-xs font-normal text-amber-600 dark:text-amber-400">&#128274; Locked — only Super Admin can change</span>
-                  )}
-                </label>
-                <input
-                  id="rating"
-                  type="text"
-                  name="rating"
-                  value={formData.rating || ''}
-                  onChange={handleInputChange}
-                  disabled={userPermissions.isHrDesignate || (!!editingRecord?.rating && !userPermissions.isSuperAdmin)}
-                  placeholder="e.g. 4.33 — Outstanding"
-                  className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 disabled:opacity-50"
-                />
-              </div>
-
-                <div className="md:col-span-2">
-                  <label htmlFor="remarks" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Remarks</label>
-                  <textarea id="remarks" name="remarks" value={formData.remarks || ''} onChange={handleInputChange} rows="3" disabled={userPermissions.isHrDesignate || (!!editingRecord?.rating && !userPermissions.isSuperAdmin)} className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 disabled:opacity-50"></textarea>
-                </div>
               </div>
             </form>
             <div className="flex-shrink-0 flex justify-end px-6 py-4 space-x-2 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-200 dark:border-gray-700">
-              <button type="button" onClick={handleCloseAddEditModal} className="px-4 py-2 font-semibold text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600">Cancel</button>
-              <button type="submit" form="employmentForm" className="px-4 py-2 font-semibold text-white bg-blue-600 rounded-md shadow-sm hover:bg-blue-700">Save Record</button>
+              <button type="button" onClick={handleCloseAddEditModal} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600"><FiX className="w-4 h-4" />Cancel</button>
+              <button 
+                  type="submit" 
+                  form="employmentForm" 
+                  disabled={!formData.employee_id || !formData.position_id || !formData.survey_id || (editingRecord && !hasChanges)}
+                  title={!formData.employee_id || !formData.position_id || !formData.survey_id ? 'Please fill in all required fields' : (editingRecord && !hasChanges) ? 'No changes made' : 'Save record'}
+                  className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                  <FiSave className="w-4 h-4" />Save Record
+              </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {isSyncModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
+            <div className="flex flex-col w-full max-w-4xl max-h-[90vh] bg-white dark:bg-gray-800 rounded-lg shadow-xl overflow-hidden">
+                <div className="flex-shrink-0 px-6 py-4 border-b border-gray-200 dark:border-gray-700">
+                    <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Sync Applicants to Employment</h2>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Select Survey and Position to create employment records for hired applicants.</p>
+                </div>
+
+                {syncModalStep === 'filter' ? (
+                    <form onSubmit={handleConfirmSyncFilter} className="flex flex-col flex-1 min-h-0">
+                        <div className="flex-auto p-6 overflow-y-auto space-y-4">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Survey Name <span className="text-red-500">*</span></label>
+                                    <div className="relative">
+                                        <button type="button" onClick={() => setSyncIsSurveyDropdownOpen(!syncIsSurveyDropdownOpen)} className="w-full text-left px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200">
+                                            <span className="block whitespace-normal break-words">{syncSelectedSurveyName || 'Select a survey...'}</span>
+                                        </button>
+                                        {syncIsSurveyDropdownOpen && (
+                                            <div className="absolute z-10 mt-1 w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 shadow-lg">
+                                                {syncAvailableSurveys.length > 0 ? (
+                                                    <ul className="max-h-60 overflow-y-auto">
+                                                        {syncAvailableSurveys.map((survey) => (
+                                                            <li key={survey} className="cursor-pointer px-4 py-2 hover:bg-blue-500 hover:text-white text-gray-800 dark:text-gray-200 whitespace-normal break-words" onClick={() => handleSyncSurveySelect(survey)}>{survey}</li>
+                                                        ))}
+                                                    </ul>
+                                                ) : (
+                                                    <div className="px-4 py-2 text-gray-500 dark:text-gray-400">No surveys found</div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Position <span className="text-red-500">*</span></label>
+                                    <div className="relative">
+                                        <button type="button" disabled={!syncSelectedSurveyName} onClick={() => setSyncIsPositionDropdownOpen(!syncIsPositionDropdownOpen)} className="w-full text-left px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:bg-gray-100 dark:disabled:bg-gray-700/50 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200">
+                                            <span className="block whitespace-normal break-words">{syncSelectedPosition || 'Select a position...'}</span>
+                                        </button>
+                                        {syncIsPositionDropdownOpen && (
+                                            <div className="absolute z-10 mt-1 w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 shadow-lg">
+                                                {syncAvailablePositions.length > 0 ? (
+                                                    <ul className="max-h-60 overflow-y-auto">
+                                                        {syncAvailablePositions.map((position) => (
+                                                            <li key={position} className="cursor-pointer px-4 py-2 hover:bg-blue-500 hover:text-white text-gray-800 dark:text-gray-200 whitespace-normal break-words" onClick={() => { setSyncSelectedPosition(position); setSyncIsPositionDropdownOpen(false); }}>{position}</li>
+                                                        ))}
+                                                    </ul>
+                                                ) : (
+                                                    <div className="px-4 py-2 text-gray-500 dark:text-gray-400">No positions found</div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="flex-shrink-0 flex justify-end px-6 py-4 space-x-2 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-200 dark:border-gray-700">
+                            <button type="button" onClick={handleCloseSyncModal} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors duration-200"><FiX className="w-4 h-4" />Cancel</button>
+                            <button
+                                type="submit" 
+                                disabled={!syncSelectedSurveyName || !syncSelectedPosition || isSyncLoading || isSyncSurveyContractInFuture}
+                                className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 shadow-sm hover:shadow"
+                                title={
+                                    !syncSelectedSurveyName ? 'Please select a survey' :
+                                    !syncSelectedPosition ? 'Please select a position' :
+                                    isSyncSurveyContractInFuture ? 'Cannot sync: The contract for this survey has not yet ended.' :
+                                    isSyncLoading ? 'Processing...' :
+                                    'Proceed to sync applicants'
+                                }
+                            >{isSyncLoading ? 'Processing...' : <><FaArrowRight className="w-4 h-4" />Proceed</>}</button>
+                        </div>
+                    </form>
+                ) : (
+                    <div className="flex flex-col flex-1 min-h-0">
+                        <div className="flex-auto p-6 overflow-y-auto space-y-4">
+                            <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+                                <p className="text-sm text-blue-800 dark:text-blue-300">Found <strong>{syncPreviewApplicants.length}</strong> applicant(s) ready for employment sync.</p>
+                                <p className="text-xs text-blue-700 dark:text-blue-400 mt-1 italic">Status will be changed to 'Synced Employments'.</p>
+                            </div>
+                            <div className="overflow-x-auto border border-gray-200 dark:border-gray-700 rounded-lg">
+                                <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm">
+                                    <thead className="bg-gray-50 dark:bg-gray-800">
+                                        <tr>
+                                            <th className="px-3 py-3 text-left font-semibold text-gray-900 dark:text-white">Include</th>
+                                            <th className="p-3 text-left font-semibold text-gray-900 dark:text-white">Name</th>
+                                            <th className="p-3 text-left font-semibold text-gray-900 dark:text-white">Survey</th>
+                                            <th className="p-3 text-left font-semibold text-gray-900 dark:text-white">Position</th>
+                                            <th className="p-3 text-left font-semibold text-gray-900 dark:text-white">Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                                        {syncPreviewApplicants.map((app) => {
+                                            const isDuplicate = app.isDuplicate;
+                                            const isExcluded = excludedApplicants.has(app.id);
+                                            return (
+                                                <React.Fragment key={app.id}>
+                                                    <tr className={`hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors ${isDuplicate ? (isExcluded ? 'opacity-60 bg-gray-50 dark:bg-gray-800' : 'bg-yellow-50 dark:bg-yellow-900/10') : ''}`}>
+                                                        <td className="px-3 py-3">
+                                                            {isDuplicate ? (
+                                                                <div className="flex items-center gap-2">
+                                                                    <input type="checkbox" checked={!isExcluded} onChange={() => handleToggleExcludeApplicant(app.id)} className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 cursor-pointer" />
+                                                                    <span className="text-xs font-bold text-yellow-600 dark:text-yellow-400">DUPLICATE</span>
+                                                                </div>
+                                                            ) : (
+                                                                <span className="inline-flex items-center gap-1 text-xs font-semibold text-green-600 dark:text-green-400"><FiDownload className="w-3 h-3" /> Valid</span>
+                                                            )}
+                                                        </td>
+                                                        <td className="p-3"><div className="font-medium text-gray-900 dark:text-white">{[app.first_name, app.middle_initial, app.last_name, app.suffix].filter(Boolean).join(' ')}</div></td>
+                                                        <td className="p-3 text-gray-600 dark:text-gray-400">{app.survey_name}</td>
+                                                        <td className="p-3 text-gray-600 dark:text-gray-400">{app.position_title}</td>
+                                                        <td className="p-3 text-gray-600 dark:text-gray-400">{app.assessment_remarks}</td>
+                                                    </tr>
+                                                    {isDuplicate && !isExcluded && (
+                                                        <tr className="bg-yellow-50/30 dark:bg-yellow-900/5"><td colSpan="5" className="px-6 py-2"><div className="text-xs text-gray-600 dark:text-gray-400 flex items-center gap-2"><span className="p-1 rounded-full bg-yellow-100 dark:bg-yellow-900 text-yellow-600">!</span><span>Employment record already exists for this survey and position.</span></div></td></tr>
+                                                    )}
+                                                </React.Fragment>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        <div className="flex-shrink-0 flex justify-end px-6 py-4 space-x-2 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-200 dark:border-gray-700">
+                            <button type="button" onClick={handleCloseSyncModal} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600"><FiX className="w-4 h-4" />Cancel</button>
+                            <button type="button" onClick={handleConfirmSync} disabled={isSyncLoading} className="flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 font-semibold text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed">{isSyncLoading ? 'Syncing...' : <><FaSync className="w-4 h-4" />Confirm Sync</>}</button>
+                        </div>
+                    </div>
+                )}
+            </div>
         </div>
       )}
 
@@ -980,7 +1205,7 @@ const Employments = () => {
               <div className="md:col-span-2"><label className="block font-medium text-gray-500">Remarks</label><p className="whitespace-pre-wrap">{viewingRecord.remarks || 'N/A'}</p></div>
             </div>
             <div className="flex justify-end mt-6">
-              <button type="button" onClick={() => setViewingRecord(null)} className="px-4 py-2 font-semibold text-gray-800 bg-gray-300 rounded-lg">Close</button>
+              <button type="button" onClick={() => setViewingRecord(null)} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600"><FiX className="w-4 h-4" />Close</button>
             </div>
           </div>
         </div>
@@ -991,54 +1216,9 @@ const Employments = () => {
             <h2 className="mb-4 text-xl font-bold">Confirm Deletion</h2>
             <p className="mb-6">Are you sure you want to delete this record? This cannot be undone.</p>
             <div className="flex justify-end space-x-4">
-              <button onClick={() => setRecordToDelete(null)} className="px-4 py-2 font-semibold text-gray-800 bg-gray-300 rounded-lg">Cancel</button>
-              <button onClick={confirmDelete} className="px-4 py-2 font-semibold text-white bg-red-600 rounded-lg">Delete</button>
+              <button onClick={() => setRecordToDelete(null)} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600"><FiX className="w-4 h-4" />Cancel</button>
+              <button onClick={confirmDelete} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-red-600 rounded-lg hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600"><FaTrash className="w-4 h-4" />Delete</button>
             </div>
-          </div>
-        </div>
-      )}
-      {isImportModalOpen && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center p-4 bg-black bg-opacity-50">
-          <div className="z-50 w-full max-w-4xl p-6 bg-white rounded-lg shadow-2xl dark:bg-gray-800">
-            <h2 className="mb-4 text-2xl font-bold text-gray-800 dark:text-white">Confirm Import</h2>
-            {importResults ? (
-              <div>
-                {importResults.status === 'importing' && <p>{importResults.message}</p>}
-                {importResults.status === 'success' && <div className="p-3 text-green-800 bg-green-100 rounded-lg">{importResults.message}</div>}
-                {importResults.status === 'error' && (
-                  <div className="p-3 text-red-800 bg-red-100 rounded-lg">
-                    <strong className="block mb-2">{importResults.message}</strong>
-                    {importResults.errors && importResults.errors.length > 0 && (
-                      <ul className="pl-5 text-sm list-disc max-h-48 overflow-y-auto">
-                        {importResults.errors.map((error, index) => <li key={index}>{error}</li>)}
-                      </ul>
-                    )}
-                  </div>
-                )}
-                <div className="flex justify-end mt-4">
-                  <button type="button" onClick={handleCloseImportModal} className="px-4 py-2 font-semibold text-gray-800 bg-gray-300 rounded-lg">Close</button>
-                </div>
-              </div>
-            ) : (
-              <>
-                <p className="mb-4 text-gray-700 dark:text-gray-300">Found {csvData.length} valid records to import. Please review a preview below.</p>
-                <div className="overflow-auto border rounded-lg max-h-64 dark:border-gray-600">
-                  <table className="min-w-full text-sm text-gray-900 dark:text-gray-300">
-                    <thead className="sticky top-0 bg-gray-100 dark:bg-gray-900">
-                      <tr>{csvData.length > 0 && Object.keys(csvData[0]).map(header => <th key={header} className="p-2 font-semibold text-left">{header}</th>)}</tr>
-                    </thead>
-                    <tbody className="divide-y dark:divide-gray-700">
-                      {csvData.slice(0, 10).map((row, index) => (<tr key={index}>{Object.values(row).map((val, i) => <td key={i} className="p-2 whitespace-nowrap">{val}</td>)}</tr>))}
-                    </tbody>
-                  </table>
-                </div>
-                {csvData.length > 10 && <p className="mt-2 text-xs text-gray-500">...and {csvData.length - 10} more rows.</p>}
-                <div className="flex justify-end mt-6 space-x-4">
-                  <button type="button" onClick={() => setIsImportModalOpen(false)} className="px-4 py-2 font-semibold text-gray-800 bg-gray-300 rounded-lg">Cancel</button>
-                  <button onClick={handleConfirmImport} className="px-4 py-2 font-semibold text-white bg-green-600 rounded-lg" disabled={csvData.length === 0}>Confirm Import</button>
-                </div>
-              </>
-            )}
           </div>
         </div>
       )}
@@ -1052,7 +1232,6 @@ const Employments = () => {
           </div>
           <form onSubmit={handleBatchUpdateSubmit} id="batchEditForm">
             <div className="p-6 space-y-4">
-              {error && <div className="p-3 text-sm text-red-800 bg-red-100 dark:bg-red-900/30 dark:text-red-300 rounded-lg">{error}</div>}
               
               <p className="text-sm text-gray-600 dark:text-gray-400">
                 Set new contract dates below. These dates will be applied to all selected employment records.
@@ -1087,11 +1266,11 @@ const Employments = () => {
               </div>
             </div>
             <div className="flex justify-end px-6 py-4 space-x-2 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-200 dark:border-gray-700">
-              <button type="button" onClick={handleCloseBatchEditModal} className="px-4 py-2 font-semibold text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600">
-                Cancel
+              <button type="button" onClick={handleCloseBatchEditModal} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600">
+                <FiX className="w-4 h-4" />Cancel
               </button>
-              <button type="submit" form="batchEditForm" className="px-4 py-2 font-semibold text-white bg-purple-600 rounded-md shadow-sm hover:bg-purple-700">
-                Apply Changes
+              <button type="submit" form="batchEditForm" className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600">
+                <FiSave className="w-4 h-4" />Apply Changes
               </button>
             </div>
           </form>
@@ -1101,16 +1280,16 @@ const Employments = () => {
       {/* ─── Provide Rating Modal ─── */}
       {isRatingModalOpen && ratingRecord && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
-          <div className="flex flex-col w-full max-w-3xl max-h-[90vh] bg-white dark:bg-gray-800 rounded-xl shadow-2xl overflow-hidden">
+          <div className="flex flex-col w-full max-w-3xl bg-white dark:bg-gray-800 rounded-xl shadow-2xl">
             {/* Header */}
-            <div className="flex-shrink-0 px-6 py-4 border-b border-gray-200 dark:border-gray-700">
+            <div className="flex-shrink-0 px-6 py-4 border-b border-gray-200 dark:border-gray-700 rounded-t-xl">
               <h2 className="text-xl font-bold text-gray-900 dark:text-white">Performance Rating</h2>
               <p className="mt-0.5 text-sm text-gray-500 dark:text-gray-400">
                 {[ratingRecord.first_name, ratingRecord.middle_initial, ratingRecord.last_name, ratingRecord.suffix].filter(Boolean).join(' ')} &mdash; {ratingRecord.position_title}
               </p>
             </div>
 
-            <form onSubmit={handleRatingSubmit} className="flex-1 overflow-y-auto">
+            <form onSubmit={handleRatingSubmit} className="flex-1">
               <div className="flex gap-0 divide-x divide-gray-200 dark:divide-gray-700">
                 {/* ── Left column: criteria + result + remarks ── */}
                 <div className="flex-1 px-6 py-5 space-y-5">
@@ -1123,17 +1302,14 @@ const Employments = () => {
                         <p className="font-semibold text-gray-800 dark:text-white">{criterion.label}</p>
                         <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{criterion.description}</p>
                       </div>
-                      <select
+                      <SearchableDropdown
+                        id={`rating-${criterion.key}`}
+                        options={ratingScoreOptions}
                         value={ratingCriteria[criterion.key]}
-                        onChange={e => setRatingCriteria(prev => ({ ...prev, [criterion.key]: e.target.value }))}
+                        onChange={value => setRatingCriteria(prev => ({ ...prev, [criterion.key]: value }))}
+                        placeholder="Select score..."
                         required
-                        className="flex-shrink-0 w-48 p-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 dark:text-white focus:ring-2 focus:ring-blue-500"
-                      >
-                        <option value="">Select score...</option>
-                        {[1, 2, 3, 4, 5].map(score => (
-                          <option key={score} value={score}>{score} — {SCORE_DESCRIPTIONS[score].label}</option>
-                        ))}
-                      </select>
+                      />
                     </div>
                     {/* Score description hint */}
                     {ratingCriteria[criterion.key] && (
@@ -1197,9 +1373,9 @@ const Employments = () => {
               </div>{/* end two-column */}
 
               {/* Footer */}
-              <div className="flex-shrink-0 flex justify-end gap-3 px-6 py-4 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-200 dark:border-gray-700">
-                <button type="button" onClick={() => setIsRatingModalOpen(false)} className="px-4 py-2 text-sm font-semibold text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600">Cancel</button>
-                <button type="submit" disabled={!computedRating} className="px-5 py-2 text-sm font-semibold text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed">Submit Rating</button>
+              <div className="flex-shrink-0 flex justify-end gap-3 px-6 py-4 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-200 dark:border-gray-700 rounded-b-xl">
+                <button type="button" onClick={() => setIsRatingModalOpen(false)} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600"><FiX className="w-4 h-4" />Cancel</button>
+                <button type="submit" disabled={!computedRating} title={!computedRating ? 'Select a rating option' : 'Submit rating'} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-green-600 rounded-lg hover:bg-green-700 dark:bg-green-700 dark:hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed"><FaStar className="w-4 h-4" />Submit Rating</button>
               </div>
             </form>
 
@@ -1221,8 +1397,8 @@ const Employments = () => {
                     &#128274; This rating cannot be changed once saved. Are you sure?
                   </p>
                   <div className="flex gap-3">
-                    <button type="button" onClick={() => setIsRatingConfirmOpen(false)} className="flex-1 px-4 py-2 text-sm font-semibold text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600">Go Back</button>
-                    <button type="button" onClick={handleRatingConfirm} className="flex-1 px-4 py-2 text-sm font-semibold text-white bg-green-600 rounded-lg hover:bg-green-700">Yes, Submit</button>
+                    <button type="button" onClick={() => setIsRatingConfirmOpen(false)} className="flex-1 flex items-center justify-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"><FaArrowLeft className="w-4 h-4" />Go Back</button>
+                    <button type="button" onClick={handleRatingConfirm} className="flex-1 flex items-center justify-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-green-600 rounded-lg hover:bg-green-700"><FaCheck className="w-4 h-4" />Yes, Submit</button>
                   </div>
                 </div>
               </div>
@@ -1238,20 +1414,6 @@ const Employments = () => {
         isComplete={isProgressComplete}
         filePath={savedFilePath}
       />
-      {isErrorPopupOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50">
-          <div className="w-full max-w-2xl p-6 bg-white rounded-lg shadow-2xl dark:bg-gray-800">
-            <h2 className="text-xl font-bold text-red-600 dark:text-red-400">CSV Validation Failed</h2>
-            <p className="mt-2 mb-4 text-gray-700 dark:text-gray-300">Please correct the following errors in your file and try again:</p>
-            <ul className="pl-5 space-y-1 text-sm list-disc list-inside bg-red-50 dark:bg-red-900/50 p-4 rounded-md max-h-64 overflow-y-auto">
-              {csvErrors.map((err, i) => <li key={i}>{err}</li>)}
-            </ul>
-            <div className="flex justify-end mt-6">
-              <button onClick={() => setIsErrorPopupOpen(false)} className="px-4 py-2 font-semibold text-gray-800 bg-gray-300 rounded-lg hover:bg-gray-400 dark:bg-gray-600 dark:hover:bg-gray-500">Close</button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

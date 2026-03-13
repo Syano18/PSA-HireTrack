@@ -644,26 +644,49 @@ router.post('/generate-employment-certificate', async (req, res) => {
                 refNum = tursoInsertResult?.results?.[0]?.response?.result?.last_insert_rowid;
 
                 if (refNum) {
-                    // Step 2: Fetch the actual REFERENCE_NUMBER from Turso
-                    const fetchRefResult = await executeTurso(
-                        "SELECT REFERENCE_NUMBER FROM Digital_Logbook WHERE id = ?",
-                        [refNum]
-                    );
-                    
-                    const rows = fetchRefResult?.results?.[0]?.response?.result?.rows;
-                    if (rows && rows.length > 0 && rows[0][0]) {
-                        fullRefNumber = rows[0][0].value;
+                    // Step 2: Fetch the actual REFERENCE_NUMBER from Turso (with retry logic)
+                    let fullRefNumberResult = null;
+                    let retries = 0;
+                    const maxRetries = 5;
+                    const retryDelay = 100; // milliseconds
+
+                    while (!fullRefNumberResult && retries < maxRetries) {
+                        try {
+                            const fetchRefResult = await executeTurso(
+                                "SELECT REFERENCE_NUMBER FROM Digital_Logbook WHERE id = ?",
+                                [refNum]
+                            );
+                            
+                            const rows = fetchRefResult?.results?.[0]?.response?.result?.rows;
+                            if (rows && rows.length > 0 && rows[0][0]) {
+                                fullRefNumberResult = rows[0][0].value;
+                                break; // Success
+                            }
+                        } catch (fetchErr) {
+                            // Fetch attempt failed, will retry
+                        }
+
+                        retries++;
+                        if (!fullRefNumberResult && retries < maxRetries) {
+                            await new Promise(resolve => setTimeout(resolve, retryDelay));
+                        }
+                    }
+
+                    if (fullRefNumberResult) {
+                        fullRefNumber = fullRefNumberResult;
+                    } else {
+                        throw new Error(`[generate-employment-certificate] Could not fetch REFERENCE_NUMBER after ${maxRetries} retries for row ID ${refNum}. Turso may be unavailable.`);
                     }
                 } else {
-                    console.error("Failed to get reference number from Turso:", JSON.stringify(tursoInsertResult));
+                    throw new Error(`Failed to insert into Turso Digital_Logbook: ${JSON.stringify(tursoInsertResult)}`);
                 }
             } catch (tursoError) {
-                console.error("Turso database operation failed:", tursoError.message);
+                throw new Error(`Turso database operation failed: ${tursoError.message}`);
             }
         }
 
         if (!fullRefNumber) {
-            fullRefNumber = crypto.randomUUID();
+            throw new Error('Reference number is required but was not generated from Turso');
         }
 
         // --- Generate encrypted QR code for online validation (computed first so token can be stored) ---
@@ -728,26 +751,49 @@ router.post('/generate-multi-employment-certificate', async (req, res) => {
                 refNum = tursoInsertResult?.results?.[0]?.response?.result?.last_insert_rowid;
 
                 if (refNum) {
-                    // Step 2: Fetch the actual REFERENCE_NUMBER from Turso
-                    const fetchRefResult = await executeTurso(
-                        "SELECT REFERENCE_NUMBER FROM Digital_Logbook WHERE id = ?",
-                        [refNum]
-                    );
-                    
-                    const rows = fetchRefResult?.results?.[0]?.response?.result?.rows;
-                    if (rows && rows.length > 0 && rows[0][0]) {
-                        fullRefNumber = rows[0][0].value;
+                    // Step 2: Fetch the actual REFERENCE_NUMBER from Turso (with retry logic)
+                    let fullRefNumberResult = null;
+                    let retries = 0;
+                    const maxRetries = 5;
+                    const retryDelay = 100; // milliseconds
+
+                    while (!fullRefNumberResult && retries < maxRetries) {
+                        try {
+                            const fetchRefResult = await executeTurso(
+                                "SELECT REFERENCE_NUMBER FROM Digital_Logbook WHERE id = ?",
+                                [refNum]
+                            );
+                            
+                            const rows = fetchRefResult?.results?.[0]?.response?.result?.rows;
+                            if (rows && rows.length > 0 && rows[0][0]) {
+                                fullRefNumberResult = rows[0][0].value;
+                                break; // Success
+                            }
+                        } catch (fetchErr) {
+                            // Fetch attempt failed, will retry
+                        }
+
+                        retries++;
+                        if (!fullRefNumberResult && retries < maxRetries) {
+                            await new Promise(resolve => setTimeout(resolve, retryDelay));
+                        }
+                    }
+
+                    if (fullRefNumberResult) {
+                        fullRefNumber = fullRefNumberResult;
+                    } else {
+                        throw new Error(`[generate-multi-employment] Could not fetch REFERENCE_NUMBER after ${maxRetries} retries for row ID ${refNum}. Turso may be unavailable.`);
                     }
                 } else {
-                    console.error("Failed to get reference number from Turso:", JSON.stringify(tursoInsertResult));
+                    throw new Error(`Failed to insert into Turso Digital_Logbook: ${JSON.stringify(tursoInsertResult)}`);
                 }
             } catch (tursoError) {
-                console.error("Turso database operation failed:", tursoError.message);
+                throw new Error(`Turso database operation failed: ${tursoError.message}`);
             }
         }
 
         if (!fullRefNumber) {
-            fullRefNumber = crypto.randomUUID();
+            throw new Error('Reference number is required but was not generated from Turso');
         }
 
         // --- Local DB Logging (certificate_registry) ---

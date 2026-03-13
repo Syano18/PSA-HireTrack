@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { FaSort, FaSortUp, FaSortDown } from 'react-icons/fa';
-import { FiX } from 'react-icons/fi';
+import { FaSort, FaSortUp, FaSortDown, FaExclamationTriangle, FaPlay, FaArrowLeft, FaCheck } from 'react-icons/fa';
+import { FiX, FiSave } from 'react-icons/fi';
 import { apiFetch } from '../components/API';
+import ToastContainer from '../components/ToastContainer';
+import useToast from '../hooks/useToast';
 import { useSettings } from '../context/SettingsContext';
 import { useAuth } from '../context/AuthContext';
 
@@ -47,9 +49,9 @@ const DEFAULT_CRITERIA = [
 const Interview = () => {
   const { serverIp, isLoading: isSettingsLoading } = useSettings();
   const { session } = useAuth();
+  const { toasts, showToast, removeToast } = useToast();
   const [assignedApplicants, setAssignedApplicants] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState(null);
   const [sortConfig, setSortConfig] = useState({ key: 'last_name', direction: 'ascending' });
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
@@ -66,18 +68,36 @@ const Interview = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
   const [interviewConfirm, setInterviewConfirm] = useState(false);
-  const [successMessage, setSuccessMessage] = useState(null);
+
 
 
 
   const computedAverage = useMemo(() => {
+    // Only average enabled criteria (those that aren't marked as N/A)
     const scores = criteria
-      .filter(c => interviewForm[c.key] !== 'N/A' && interviewForm[c.key] !== '')
+      .filter(c => c.enabled && interviewForm[c.key] !== 'N/A' && interviewForm[c.key] !== '')
       .map(c => parseFloat(interviewForm[c.key]))
       .filter(v => !isNaN(v));
     if (scores.length === 0) return null;
     return (scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(2);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [interviewForm, criteria]);
+
+  const isFormValid = useMemo(() => {
+    // each enabled criterion must have a score between 1 and 100
+    for (const criterion of criteria) {
+      if (criterion.enabled === false) continue; // skip disabled
+      const val = interviewForm[criterion.key];
+
+      if (val === '' || val === undefined || val === null || val === 'N/A') {
+        return false; // must have a value
+      }
+
+      const numVal = parseFloat(val);
+      if (isNaN(numVal) || numVal < 1 || numVal > 100) {
+        return false; // must be a number in range
+      }
+    }
+    return true; // all valid
   }, [interviewForm, criteria]);
 
   const fetchAssignedApplicants = useCallback(async () => {
@@ -91,11 +111,11 @@ const Interview = () => {
         : [];
       setAssignedApplicants(filtered);
     } catch (err) {
-      setError(err.message);
+      showToast(err.message, 'error');
     } finally {
       setIsLoading(false);
     }
-  }, [serverIp, session]);
+  }, [serverIp, session, showToast]);
 
   useEffect(() => {
     if (!isSettingsLoading && session) {
@@ -142,17 +162,28 @@ const Interview = () => {
 
   const handleProceedInterview = async (applicant) => {
     setSelectedApplicant(applicant);
-    // always start with all default criteria, but flag which ones are enabled by the survey
+    // Default: all criteria enabled until we confirm otherwise
     let list = DEFAULT_CRITERIA.map(c => ({ ...c, enabled: true }));
+    
     if (applicant.survey_name) {
       try {
         const crit = await apiFetch(`applicants/surveys/${encodeURIComponent(applicant.survey_name)}/rating-criteria`, serverIp);
-        if (Array.isArray(crit.interview)) {
+        
+        // Check if we got a valid response with interview criteria
+        if (crit && Array.isArray(crit.interview) && crit.interview.length > 0) {
+          // Survey HAS configured criteria - only enable those in the list
           const allowed = new Set(crit.interview);
           list = DEFAULT_CRITERIA.map(c => ({ ...c, enabled: allowed.has(c.key) }));
+          console.log(`Rating criteria loaded for survey "${applicant.survey_name}":`, crit.interview);
+        } else {
+          // Survey criteria not yet configured or empty - enable all
+          console.warn(`No interview criteria configured for survey "${applicant.survey_name}", enabling all criteria`);
+          list = DEFAULT_CRITERIA.map(c => ({ ...c, enabled: true }));
         }
       } catch (e) {
-        // ignore, keep all enabled
+        // If fetch fails, enable all as fallback
+        console.warn(`Could not fetch rating criteria for survey "${applicant.survey_name}":`, e.message);
+        list = DEFAULT_CRITERIA.map(c => ({ ...c, enabled: true }));
       }
     }
     setCriteria(list);
@@ -181,6 +212,7 @@ const Interview = () => {
     } catch (err) {
         console.error("Failed to fetch history:", err);
         setSaveError(err.message);
+        setTimeout(() => setSaveError(null), 3000);
     } finally {
         setHistoryLoading(false);
     }
@@ -217,10 +249,17 @@ const Interview = () => {
     const err = validateInterview();
     if (err) {
       setSaveError(err);
+      setTimeout(() => setSaveError(null), 3000);
       setInterviewConfirm(false);
       return;
     }
     setInterviewConfirm(true);
+  };
+
+  // Helper function to format numbers to 2 decimal places
+  const formatTo2Decimals = (num) => {
+    if (num === null || num === undefined) return null;
+    return parseFloat(parseFloat(num).toFixed(2));
   };
 
   const handleConfirmSaveInterview = async () => {
@@ -228,19 +267,27 @@ const Interview = () => {
     const err = validateInterview();
     if (err) {
       setSaveError(err);
+      setTimeout(() => setSaveError(null), 3000);
       return;
     }
     setIsSaving(true);
     setSaveError(null);
     const normalize = (val) => {
       if (val === '' || val === undefined || val === null) return 'N/A';
+      // Format numeric values to 2 decimal places
+      if (!isNaN(val) && val !== '') {
+        return formatTo2Decimals(val).toFixed(2);
+      }
       return val;
     };
     try {
-        // build payload based on active criteria
+        // build payload based on ENABLED criteria only (don't save disabled criteria)
         const payload = { average_score: computedAverage, remarks: interviewForm.remarks, interview_status: 'Done Interview' };
         criteria.forEach(c => {
-          payload[c.key] = normalize(interviewForm[c.key]);
+          // Only include criteria that are enabled for this survey
+          if (c.enabled) {
+            payload[c.key] = normalize(interviewForm[c.key]);
+          }
         });
         await apiFetch(`applicants/${selectedApplicant.id}/interview-result`, serverIp, {
           method: 'PUT',
@@ -249,11 +296,10 @@ const Interview = () => {
         setInterviewConfirm(false);
         setIsModalOpen(false);
         fetchAssignedApplicants();
-        setSuccessMessage('Interview results saved successfully.');
-        setTimeout(() => setSuccessMessage(null), 3000);
+        showToast('Interview results saved successfully.', 'success');
     } catch (err) {
         setInterviewConfirm(false);
-        setSaveError(err.message);
+        showToast(err.message, 'error');
     } finally {
         setIsSaving(false);
     }
@@ -265,17 +311,12 @@ const Interview = () => {
 
   return (
     <div>
-      {successMessage && (
-        <div className="fixed top-5 right-5 z-[200] flex items-center gap-3 px-5 py-3 bg-green-600 text-white text-sm font-semibold rounded-lg shadow-lg">
-          <span>✓</span> {successMessage}
-        </div>
-      )}
+      <ToastContainer toasts={toasts} onClose={removeToast} />
       <div className="flex items-center justify-between mb-4">
-        <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">My Interviews</h1>
+        <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">Assigned Interviews</h1>
         <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search applicants..." className="w-64 py-2 pl-4 pr-10 border rounded dark:bg-gray-900 dark:border-gray-600 focus:ring-blue-500 focus:border-blue-500" />
       </div>
 
-      {error && <div className="p-3 mb-4 text-center text-red-700 bg-red-100 rounded-lg">{error}</div>}
 
       <div className="overflow-x-auto bg-white rounded-lg shadow dark:bg-gray-800">
         <table className="min-w-full text-sm leading-normal">
@@ -297,7 +338,7 @@ const Interview = () => {
                   <td className="px-5 py-4 text-gray-700 dark:text-gray-300">{app.phone_number}</td>
                   <td className="px-5 py-4 text-gray-700 dark:text-gray-300">{[app.barangay, app.city_municipality].filter(Boolean).join(', ')}</td>
                   <td className="px-5 py-4 text-center">
-                    <button onClick={() => handleProceedInterview(app)} className="font-medium text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300">Proceed for Interview</button>
+                    <button onClick={() => handleProceedInterview(app)} title="Proceed for Interview" className="p-1 rounded-lg transition-colors text-blue-600 hover:text-blue-900 hover:bg-blue-50 dark:text-blue-400 dark:hover:text-blue-300 dark:hover:bg-blue-900/20"><FaPlay className="w-4 h-4" /></button>
                   </td>
                 </tr>
               ))
@@ -309,11 +350,11 @@ const Interview = () => {
       </div>
 
       <div className="flex justify-between items-center mt-4">
-        <span className="text-sm text-gray-700 dark:text-gray-300">Showing {Math.min((currentPage - 1) * rowsPerPage + 1, sortedApplicants.length)} to {Math.min(currentPage * rowsPerPage, sortedApplicants.length)} of {sortedApplicants.length} records</span>
+        <span className="text-sm text-gray-700 dark:text-gray-300">Showing {sortedApplicants.length === 0 ? 0 : Math.min((currentPage - 1) * rowsPerPage + 1, sortedApplicants.length)} to {Math.min(currentPage * rowsPerPage, sortedApplicants.length)} of {sortedApplicants.length} records</span>
         <div className="flex items-center space-x-2">
-          <button onClick={() => setCurrentPage(p => Math.max(p - 1, 1))} disabled={currentPage === 1} className="px-4 py-2 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded disabled:opacity-50">Previous</button>
+          <button onClick={() => setCurrentPage(p => Math.max(p - 1, 1))} disabled={currentPage === 1} title={currentPage === 1 ? 'Already on first page' : 'Go to previous page'} className="px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50">Previous</button>
           <span className="text-gray-700 dark:text-gray-300 px-2">{currentPage}</span>
-          <button onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))} disabled={currentPage === totalPages} className="px-4 py-2 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded disabled:opacity-50">Next</button>
+          <button onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))} disabled={currentPage === totalPages} title={currentPage === totalPages ? 'Already on last page' : 'Go to next page'} className="px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50">Next</button>
         </div>
       </div>
 
@@ -354,34 +395,41 @@ const Interview = () => {
                         <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-6">Interview Assessment</h3>
                         <div className="space-y-4">
                           {criteria.map(criterion => (
-                            <div key={criterion.key} className="border rounded-lg p-4 bg-gray-50 dark:bg-gray-700/30 dark:border-gray-600">
+                            <div key={criterion.key} className={`border rounded-lg p-4 ${criterion.enabled ? 'bg-gray-50 dark:bg-gray-700/30 dark:border-gray-600' : 'bg-gray-100 dark:bg-gray-700/10 dark:border-gray-600 opacity-60'}`}>
                               <div className="flex items-start justify-between gap-4">
                                 <div className="flex-1">
                                   <p className="text-sm font-semibold text-gray-900 dark:text-white">{criterion.label}</p>
                                   <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{criterion.description}</p>
                                 </div>
                                 <div className="flex-shrink-0 flex items-center gap-2">
-                                  {criterion.enabled ? (
-                                    <div className="flex items-center gap-1">
-                                      <input
-                                        type="number"
-                                        min="1"
-                                        max="100"
-                                        step="0.01"
-                                        value={interviewForm[criterion.key]}
-                                        onChange={e => {
-                                          let v = e.target.value;
-                                          if (v !== '' && (parseInt(v) < 1 || parseInt(v) > 100)) return;
-                                          setInterviewForm(p => ({ ...p, [criterion.key]: v }));
-                                        }}
-                                        placeholder="1–100"
-                                        className="w-20 text-center p-2 text-sm border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-800 dark:border-gray-600 dark:text-white"
-                                      />
-                                      <span className="text-xs text-gray-500 dark:text-gray-400"></span>
-                                    </div>
-                                  ) : (
-                                    <span className="text-sm italic text-gray-500 dark:text-gray-400">N/A</span>
-                                  )}
+                                  <div className="flex items-center gap-1">
+                                    <input
+                                      type={criterion.enabled ? 'number' : 'text'}
+                                      min={criterion.enabled ? 1 : undefined}
+                                      max={criterion.enabled ? 100 : undefined}
+                                      step={criterion.enabled ? '1' : undefined}
+                                      disabled={!criterion.enabled}
+                                      value={criterion.enabled ? interviewForm[criterion.key] : 'N/A'}
+                                      onChange={e => {
+                                        if (!criterion.enabled) return;
+                                        let v = e.target.value;
+                                        if (v !== '' && (parseInt(v) < 1 || parseInt(v) > 100)) return;
+                                        if (v !== '') {
+                                          // Limit to 2 decimal places
+                                          let num = parseFloat(v);
+                                          if (!isNaN(num)) {
+                                            const limited = Math.round(num * 100) / 100;
+                                            setInterviewForm(p => ({ ...p, [criterion.key]: limited.toString() }));
+                                            return;
+                                          }
+                                        }
+                                        setInterviewForm(p => ({ ...p, [criterion.key]: v }));
+                                      }}
+                                      placeholder={criterion.enabled ? '1–100' : 'N/A'}
+                                      className="w-20 text-center p-2 text-sm border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-800 dark:border-gray-600 dark:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                                    />
+                                    <span className="text-xs text-gray-500 dark:text-gray-400"></span>
+                                  </div>
                                 </div>
                               </div>
                             </div>
@@ -447,20 +495,25 @@ const Interview = () => {
                     <p className="text-sm font-semibold text-amber-800 dark:text-amber-300 mb-1">⚠ Once saved, this interview rating cannot be edited.</p>
                     <p className="text-xs text-amber-700 dark:text-amber-400 mb-3">Are you sure you want to save and mark this interview as complete?</p>
                     <div className="flex justify-end gap-2">
-                      <button onClick={() => setInterviewConfirm(false)} disabled={isSaving} className="px-4 py-2 bg-gray-200 text-gray-800 rounded hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600 disabled:opacity-50">Go Back</button>
-                      <button onClick={handleConfirmSaveInterview} disabled={isSaving} className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">{isSaving ? 'Saving...' : 'Confirm & Save'}</button>
+                      <button onClick={() => setInterviewConfirm(false)} disabled={isSaving} title={isSaving ? 'Saving - please wait' : 'Go back and edit'} className="flex items-center gap-2 px-4 py-2 bg-gray-200 text-gray-800 rounded hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600 disabled:opacity-50"><FaArrowLeft className="w-4 h-4" />Go Back</button>
+                      <button onClick={handleConfirmSaveInterview} disabled={isSaving} title={isSaving ? 'Saving interview...' : 'Confirm and save interview'} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">{isSaving ? 'Saving...' : <><FaCheck className="w-4 h-4" />Confirm & Save</>}</button>
                     </div>
                   </div>
                 ) : (
                   <div className="p-6 border-t border-gray-200 dark:border-gray-700">
-                    {saveError && <div className="mb-3 p-3 text-sm text-red-700 bg-red-100 rounded-lg">{saveError}</div>}
                     <div className="flex justify-end gap-2">
-                        <button onClick={() => setIsModalOpen(false)} className="px-4 py-2 bg-gray-200 text-gray-800 rounded hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600">Close</button>
-                        <button onClick={handleSaveInterview} disabled={isSaving} className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">{isSaving ? 'Saving...' : 'Save Interview'}</button>
+                        <button type="button" onClick={() => setIsModalOpen(false)} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600"><FiX className="w-4 h-4" />Close</button>
+                        <button onClick={handleSaveInterview} disabled={isSaving || !isFormValid} title={isSaving ? 'Saving interview...' : !isFormValid ? 'Please fill all required score fields with valid scores (1-100).' : 'Save interview assessment'} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed">{isSaving ? 'Saving...' : <><FiSave className="w-4 h-4" />Save Interview</>}</button>
                     </div>
                   </div>
                 )}
             </div>
+        </div>
+      )}
+      
+      {saveError && (
+        <div className="fixed top-5 right-5 z-[200] flex items-center gap-3 px-5 py-3 bg-red-600 text-white text-sm font-semibold rounded-lg shadow-lg">
+          <FaExclamationTriangle className="w-5 h-5" /> {saveError}
         </div>
       )}
     </div>

@@ -1,26 +1,42 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { FiPlus, FiX } from 'react-icons/fi';
+import { useLocation } from 'react-router-dom';
+import { FiPlus, FiX, FiSave } from 'react-icons/fi';
 import { parseISO, format } from 'date-fns';
-import { FaSort, FaSortUp, FaSortDown, FaExclamationTriangle } from 'react-icons/fa';
+import { FaSort, FaSortUp, FaSortDown, FaPencilAlt, FaTrash } from 'react-icons/fa';
 import { apiFetch } from '../components/API';
+import ToastContainer from './ToastContainer';
+import useToast from '../hooks/useToast';
 import { useSettings } from '../context/SettingsContext'; // 1. IMPORT THE HOOK
 
 const MANAGABLE_ROLES = ['Super_Admin', 'Admin', 'PACD'];
 const INITIAL_FORM_STATE = { id: null, title: '', start_date: '', end_date: '', hours: '', venue: '' };
 
 const ManageTrainings = ({ session }) => {
+    const location = useLocation();
     const { serverIp, isLoading: isSettingsLoading } = useSettings(); // 2. USE THE HOOK
+    const { toasts, showToast, removeToast } = useToast();
     const [titles, setTitles] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
-    const [error, setError] = useState(null);
-    const [successMessage, setSuccessMessage] = useState(null);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [currentTraining, setCurrentTraining] = useState(INITIAL_FORM_STATE);
     const [searchQuery, setSearchQuery] = useState('');
+    const [originalTrainingData, setOriginalTrainingData] = useState(null);
+
+    useEffect(() => {
+        if (location.state?.filterSurvey && location.state?.filterPosition) {
+            setCurrentTraining(prev => ({
+                ...prev,
+                title: `${location.state.filterSurvey} - ${location.state.filterPosition}`
+            }));
+            setIsModalOpen(true);
+        }
+    }, [location.state]);
+
     const [currentPage, setCurrentPage] = useState(1);
     const rowsPerPage = 9;
     const [sortConfig, setSortConfig] = useState({ key: 'title', direction: 'ascending' });
     const [titleToDelete, setTitleToDelete] = useState(null);
+    const [nonDeletableTitles, setNonDeletableTitles] = useState(new Set());
 
     const canManage = useMemo(() => {
         return session && MANAGABLE_ROLES.includes(session.user?.role);
@@ -29,16 +45,29 @@ const ManageTrainings = ({ session }) => {
     const fetchTitles = useCallback(async () => {
         if (!session?.token || !serverIp) return; // Wait for session and serverIp
         setIsLoading(true);
-        setError(null);
         try {
             const data = await apiFetch('trainings/titles', serverIp); // 3. PASS serverIp
             setTitles(data);
+            
+            // Fetch usage info for each title
+            const nonDeletable = new Set();
+            for (const title of data) {
+                try {
+                    const usage = await apiFetch(`trainings/titles/${title.id}/usage`, serverIp);
+                    if (usage.count > 0) {
+                        nonDeletable.add(title.id);
+                    }
+                } catch (err) {
+                    console.warn(`Could not check usage for title ${title.id}:`, err);
+                }
+            }
+            setNonDeletableTitles(nonDeletable);
         } catch (err) {
-            setError(err.message);
+            showToast(err.message, 'error');
         } finally {
             setIsLoading(false);
         }
-    }, [session, serverIp]); // 4. ADD serverIp dependency
+    }, [session, serverIp, showToast]); // 4. ADD serverIp dependency
 
     useEffect(() => {
         // 5. UPDATE data fetch trigger
@@ -103,29 +132,35 @@ const ManageTrainings = ({ session }) => {
             }
         };
         
-        setCurrentTraining({
+        const formattedTraining = {
             ...training,
             start_date: formatForInput(training.start_date),
             end_date: formatForInput(training.end_date)
-        });
+        };
+        setCurrentTraining(formattedTraining);
 
+        if (training.id) {
+            setOriginalTrainingData(formattedTraining);
+        } else {
+            setOriginalTrainingData(null);
+        }
         setIsModalOpen(true);
-        setError(null);
     };
 
     const handleCloseModal = () => {
         setIsModalOpen(false);
         setCurrentTraining(INITIAL_FORM_STATE);
+        setOriginalTrainingData(null);
     };
 
     const handleSave = async (e) => {
         e.preventDefault();
         if (!currentTraining.title.trim()) {
-            setError("Title cannot be empty.");
+            showToast("Title cannot be empty.", 'error');
             return;
         }
         if (!canManage) {
-            setError("You do not have permission.");
+            showToast("You do not have permission.", 'error');
             return;
         }
 
@@ -139,14 +174,13 @@ const ManageTrainings = ({ session }) => {
             });
             fetchTitles();
             handleCloseModal();
-            setSuccessMessage(currentTraining.id ? 'Training title updated successfully.' : 'Training title added successfully.');
-            setTimeout(() => setSuccessMessage(null), 3000);
+            showToast(currentTraining.id ? 'Training title updated successfully.' : 'Training title added successfully.', 'success');
         } catch (err) {
             try {
                 const parsedError = JSON.parse(err.message);
-                setError(parsedError.error || parsedError.message || "An unknown error occurred.");
+                showToast(parsedError.error || parsedError.message || "An unknown error occurred.", 'error');
             } catch (e) {
-                setError(err.message);
+                showToast(err.message, 'error');
             }
         }
     };
@@ -158,26 +192,47 @@ const ManageTrainings = ({ session }) => {
                 method: 'DELETE',
                 body: JSON.stringify({ actingUserId: session.user.id })
             });
-            setSuccessMessage('Training title deleted successfully.');
-            setTimeout(() => setSuccessMessage(null), 3000);
+            showToast('Training title deleted successfully.', 'success');
             fetchTitles();
         } catch (err) {
-            setError(err.message);
+            showToast(err.message, 'error');
         } finally {
             setTitleToDelete(null);
         }
     };
 
     const handleDeleteClick = (title) => {
-        setError(null);
         setTitleToDelete(title);
     };
+
+    const hasChanges = useMemo(() => {
+        if (!currentTraining.id || !originalTrainingData) return false;
+        
+        return (
+            currentTraining.title !== originalTrainingData.title ||
+            currentTraining.start_date !== originalTrainingData.start_date ||
+            currentTraining.end_date !== originalTrainingData.end_date ||
+            String(currentTraining.hours) !== String(originalTrainingData.hours) ||
+            currentTraining.venue !== originalTrainingData.venue
+        );
+    }, [currentTraining, originalTrainingData]);
+
+    const isSaveDisabled = useMemo(() => {
+        const { title, start_date, end_date, hours, venue } = currentTraining;
+        const requiredFilled = title?.trim() && start_date && end_date && hours && venue?.trim();
+
+        if (currentTraining.id) {
+            return !hasChanges || !requiredFilled;
+        }
+        
+        return !requiredFilled;
+    }, [currentTraining, hasChanges]);
 
     // 6. UPDATE initial loading condition
     if (isLoading || isSettingsLoading) {
         return (
             <div className="p-4 sm:p-6 lg:p-8">
-                <h1 className="mb-4 text-3xl font-bold tracking-tight text-gray-900 dark:text-white">Manage Training Titles</h1>
+                <h1 className="mb-4 text-2xl font-bold tracking-tight text-gray-900 dark:text-white">Manage Training Titles</h1>
                 <div className="w-full p-4 space-y-4 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow animate-pulse">
                     {[...Array(10)].map((_, i) => (
                         <div key={i} className="flex items-center justify-between pt-2">
@@ -192,13 +247,9 @@ const ManageTrainings = ({ session }) => {
 
     return (
         <div>
-            {successMessage && (
-                <div className="fixed top-5 right-5 z-[200] flex items-center gap-3 px-5 py-3 bg-green-600 text-white text-sm font-semibold rounded-lg shadow-lg animate-fade-in">
-                    <span>✓</span> {successMessage}
-                </div>
-            )}
+            <ToastContainer toasts={toasts} onClose={removeToast} />
             <div className="flex justify-between items-center mb-4">
-                <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">Manage Training Titles</h1>
+                <h1 className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white">Manage Training Titles</h1>
                 <div className="flex items-center gap-4">
                     <div className="relative">
                         <input
@@ -212,30 +263,13 @@ const ManageTrainings = ({ session }) => {
                         )}
                     </div>
                     {canManage && (
-                        <button onClick={() => handleOpenModal()} className="flex items-center gap-2 px-4 py-2 font-semibold text-white bg-blue-600 rounded-lg shadow-md hover:bg-blue-700 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
-                            <FiPlus />
-                            Add New Training Title
+                        <button onClick={() => handleOpenModal()} className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600">
+                            <FiPlus className="w-4 h-4" />
+                            Add Training Title
                         </button>
                     )}
                 </div>
             </div>
-
-            {error && !isModalOpen && !titleToDelete && (
-                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black bg-opacity-70">
-                    <div className="w-full max-w-md p-6 bg-white rounded-lg shadow-xl dark:bg-gray-800">
-                        <div className="text-center">
-                            <div className="flex items-center justify-center w-12 h-12 mx-auto bg-red-100 rounded-full dark:bg-red-900/50">
-                                <FaExclamationTriangle className="w-6 h-6 text-red-600 dark:text-red-400" />
-                            </div>
-                            <h3 className="mt-4 text-lg font-medium text-gray-900 dark:text-white">Error</h3>
-                            <div className="mt-2 text-sm text-gray-600 dark:text-gray-300">{error}</div>
-                        </div>
-                        <div className="mt-5">
-                            <button type="button" onClick={() => setError(null)} className="inline-flex justify-center w-full px-4 py-2 text-base font-medium text-white bg-red-600 border border-transparent rounded-md shadow-sm hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500">OK</button>
-                        </div>
-                    </div>
-                </div>
-            )}
 
             <div className="overflow-x-auto bg-white h-[680px] rounded-lg shadow dark:bg-gray-800">
                 <table className="min-w-full text-sm leading-normal">
@@ -264,9 +298,15 @@ const ManageTrainings = ({ session }) => {
                                 <td className="px-6 py-4 font-medium text-gray-800 dark:text-gray-200">{title.hours}</td>
                                 <td className="px-6 py-4 font-medium text-gray-800 dark:text-gray-200">{title.venue}</td>
                                 {canManage && (
-                                    <td className="px-6 py-4 flex items-center justify-center space-x-3">
-                                        <button onClick={() => handleOpenModal(title)} className="font-medium text-blue-600 transition-colors hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300">Edit</button>
-                                        <button onClick={() => handleDeleteClick(title)} className="font-medium text-red-600 transition-colors hover:text-red-900 dark:text-red-400 dark:hover:text-red-300">Delete</button>
+                                    <td className="px-6 py-4 align-middle">
+                                        <div className="flex items-center justify-center space-x-1">
+                                            <button onClick={() => handleOpenModal(title)} title="Edit Training Title" className="p-1 rounded-lg transition-colors text-blue-600 hover:text-blue-900 hover:bg-blue-50 dark:text-blue-400 dark:hover:text-blue-300 dark:hover:bg-blue-900/20"><FaPencilAlt className="w-4 h-4" /></button>
+                                            {nonDeletableTitles.has(title.id) ? (
+                                                <button disabled title="This training title is assigned to employees" className="p-1 rounded-lg transition-colors text-gray-400 cursor-not-allowed opacity-50"><FaTrash className="w-4 h-4" /></button>
+                                            ) : (
+                                                <button onClick={() => handleDeleteClick(title)} title="Delete Training Title" className="p-1 rounded-lg transition-colors text-red-600 hover:text-red-900 hover:bg-red-50 dark:text-red-400 dark:hover:text-red-300 dark:hover:bg-red-900/20"><FaTrash className="w-4 h-4" /></button>
+                                            )}
+                                        </div>
                                     </td>
                                 )}
                             </tr>
@@ -287,9 +327,9 @@ const ManageTrainings = ({ session }) => {
                         Showing {Math.min((currentPage - 1) * rowsPerPage + 1, sortedTitles.length)} to {Math.min(currentPage * rowsPerPage, sortedTitles.length)} of {sortedTitles.length} records
                     </span>
                     <div className="flex items-center space-x-2">
-                        <button onClick={handlePreviousPage} disabled={currentPage === 1} className="px-4 py-2 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md disabled:opacity-50">Previous</button>
+                        <button onClick={handlePreviousPage} disabled={currentPage === 1} className="px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed">Previous</button>
                         <span className="text-gray-700 dark:text-gray-300 px-2">{currentPage}</span>
-                        <button onClick={handleNextPage} disabled={currentPage >= totalPages} className="px-4 py-2 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md disabled:opacity-50">Next</button>
+                        <button onClick={handleNextPage} disabled={currentPage >= totalPages} className="px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed">Next</button>
                     </div>
                 </div>
             )}
@@ -301,7 +341,6 @@ const ManageTrainings = ({ session }) => {
                             <h2 className="text-xl font-semibold text-gray-900 dark:text-white">{currentTraining.id ? 'Edit' : 'Add'} Training Title</h2>
                         </div>
                         <form id="titleForm" onSubmit={handleSave} className="flex-auto p-6 overflow-y-auto space-y-4">
-                            {error && <p className="mb-4 text-sm text-red-500">{error}</p>}
                             <div>
                                 <label htmlFor="title-input" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Training Title*</label>
                                 <textarea
@@ -332,12 +371,20 @@ const ManageTrainings = ({ session }) => {
 
                             <div>
                                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Venue*</label>
-                                <input type="text" value={currentTraining.venue} onChange={(e) => setCurrentTraining({ ...currentTraining, venue: e.target.value })} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
+                                <textarea type="text" value={currentTraining.venue} onChange={(e) => setCurrentTraining({ ...currentTraining, venue: e.target.value })} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
                             </div>
                         </form>
                         <div className="flex-shrink-0 flex justify-end px-6 py-4 space-x-2 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-200 dark:border-gray-700">
                             <button type="button" onClick={handleCloseModal} className="px-4 py-2 font-semibold text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600">Cancel</button>
-                            <button type="submit" form="titleForm" className="px-4 py-2 font-semibold text-white bg-blue-600 rounded-md shadow-sm hover:bg-blue-700">Save</button>
+                            <button 
+                                type="submit" 
+                                form="titleForm" 
+                                disabled={isSaveDisabled}
+                                title={isSaveDisabled ? (currentTraining.id ? 'No changes made or missing fields' : 'Please fill all required fields') : 'Save training title'}
+                                className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                <FiSave className="w-4 h-4" />Save
+                            </button>
                         </div>
                     </div>
                 </div>

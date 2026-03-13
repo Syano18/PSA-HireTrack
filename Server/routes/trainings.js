@@ -6,6 +6,25 @@ const getUserWithRole = async (userId) => {
     return rows[0];
 };
 
+// --- Helper: Levenshtein Distance for Fuzzy Matching ---
+const levenshtein = (a, b) => {
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  const matrix = [];
+  for (let i = 0; i <= b.length; i++) { matrix[i] = [i]; }
+  for (let j = 0; j <= a.length; j++) { matrix[0][j] = j; }
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      if (b.charAt(i - 1) === a.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(matrix[i - 1][j - 1] + 1, Math.min(matrix[i][j - 1] + 1, matrix[i - 1][j] + 1));
+      }
+    }
+  }
+  return matrix[b.length][a.length];
+};
+
 // This parseDate function is a utility and does not need changes.
 const parseDate = (dateInput) => {
     if (!dateInput || String(dateInput).trim() === '') return null;
@@ -77,16 +96,36 @@ router.post('/titles', async (req, res) => {
       return res.status(400).json({ error: 'Title cannot be empty.' });
     }
     
+    // ✅ Check for duplicate training title (case-insensitive)
+    const [existing] = await dbPool.query(
+      'SELECT id FROM training_titles WHERE LOWER(title) = LOWER(?)',
+      [title.trim()]
+    );
+    if (existing.length > 0) {
+      return res.status(409).json({ error: 'This training title already exists.' });
+    }
+    
+    // ✅ Check for fuzzy matches (similar titles)
+    const [allTitles] = await dbPool.query('SELECT id, title FROM training_titles');
+    const lowercaseInput = title.trim().toLowerCase();
+    for (const item of allTitles) {
+      const distance = levenshtein(lowercaseInput, item.title.toLowerCase());
+      if (distance <= 2 && distance > 0) {
+        return res.status(409).json({ 
+          error: `Did you mean "${item.title}"? If not, you can proceed with caution.`,
+          suggestion: item.title,
+          code: 'FUZZY_MATCH'
+        });
+      }
+    }
+    
     // ✅ Include ALL new fields in the INSERT statement
     const [result] = await dbPool.query(
       'INSERT INTO training_titles (title, start_date, end_date, hours, venue) VALUES (?, ?, ?, ?, ?)', 
       [title.trim(), start_date || null, end_date || null, hours || null, venue || null]
     );
     
-    // Log the complete new record
-    const newData = { id: result.insertId, title, start_date, end_date, hours, venue };
-
-    res.status(201).json({ message: 'Title created successfully', ...newData });
+    res.status(201).json({ message: 'Title created successfully', id: result.insertId });
   } catch (err) {
     if (err.code === 'ER_DUP_ENTRY') {
       return res.status(409).json({ error: 'The training title already exists.' });
@@ -110,18 +149,51 @@ router.put('/titles/:id', async (req, res) => {
         const [oldRecord] = await dbPool.query('SELECT * FROM training_titles WHERE id = ?', [id]);
         if (oldRecord.length === 0) return res.status(404).json({ error: 'Title not found.' });
 
+        // ✅ Check for duplicate training title (excluding current record)
+        const [existing] = await dbPool.query(
+            'SELECT id FROM training_titles WHERE LOWER(title) = LOWER(?) AND id != ?',
+            [title.trim(), id]
+        );
+        if (existing.length > 0) {
+            return res.status(409).json({ error: 'This training title already exists.' });
+        }
+
+        // ✅ Check for fuzzy matches (similar titles, excluding current record)
+        const [allTitles] = await dbPool.query('SELECT id, title FROM training_titles WHERE id != ?', [id]);
+        const lowercaseInput = title.trim().toLowerCase();
+        for (const item of allTitles) {
+          const distance = levenshtein(lowercaseInput, item.title.toLowerCase());
+          if (distance <= 2 && distance > 0) {
+            return res.status(409).json({ 
+              error: `Did you mean "${item.title}"? If not, you can proceed with caution.`,
+              suggestion: item.title,
+              code: 'FUZZY_MATCH'
+            });
+          }
+        }
+
         // ✅ Include ALL new fields in the UPDATE statement
         await dbPool.query(
             'UPDATE training_titles SET title = ?, start_date = ?, end_date = ?, hours = ?, venue = ? WHERE id = ?', 
             [title.trim(), start_date || null, end_date || null, hours || null, venue || null, id]
         );
         
-        const newData = { title, start_date, end_date, hours, venue };
-        
         res.json({ message: 'Training title updated successfully' });
     } catch (err) {
         console.error('Error updating training title:', err);
         res.status(500).json({ error: 'Database error updating title.' });
+    }
+});
+
+// GET /api/trainings/titles/:id/usage (Check if training title is used)
+router.get('/titles/:id/usage', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const [usage] = await dbPool.query('SELECT COUNT(*) as count FROM trainings WHERE training_title_id = ?', [id]);
+        res.json({ count: usage[0].count });
+    } catch (err) {
+        console.error(`Database error checking usage: ${err.message}`);
+        res.status(500).json({ error: 'Failed to check usage.' });
     }
 });
 
@@ -137,10 +209,11 @@ router.delete('/titles/:id', async (req, res) => {
     }
 
     try {
-        const [oldRecord] = await dbPool.query('SELECT * FROM training_titles WHERE id = ?', [id]);
-        if (oldRecord.length === 0) return res.status(404).json({ error: 'Title not found.' });
+        const [result] = await dbPool.query('DELETE FROM training_titles WHERE id = ?', [id]);
         
-        await dbPool.query('DELETE FROM training_titles WHERE id = ?', [id]);
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ error: 'Title not found.' });
+        }
         
         res.json({ message: 'Training title deleted successfully' });
     } catch (err) {
@@ -208,7 +281,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-// POST /api/trainings (Create a new training record)
+// POST /api/trainings (Assign training to an employee)
 router.post('/', async (req, res) => {
     const { actingUserId, ...trainingData } = req.body;
     if (!actingUserId) return res.status(403).json({ error: 'Permission denied.' });
@@ -216,7 +289,7 @@ router.post('/', async (req, res) => {
     try {
         const actingUser = await getUserWithRole(actingUserId);
         if (!['Super_Admin', 'Admin', 'PACD'].includes(actingUser.role)) {
-            return res.status(403).json({ error: 'You do not have permission to add training records.' });
+            return res.status(403).json({ error: 'You do not have permission to assign training records.' });
         }
         
         const { employee_id, training_title_id, start_date, end_date, hours, venue } = trainingData;
@@ -232,7 +305,7 @@ router.post('/', async (req, res) => {
             [employee_id, training_title_id, start_date]
         );
         if (existing.length > 0) {
-            return res.status(409).json({ error: 'An employment record with this employee, title, and start date already exists.' });
+            return res.status(409).json({ error: 'A training record with this employee, title, and start date already exists.' });
         }
 
         const columns = ['employee_id', 'training_title_id', 'start_date', 'end_date', 'hours', 'venue'];
@@ -240,104 +313,10 @@ router.post('/', async (req, res) => {
         
         const [result] = await dbPool.query(`INSERT INTO trainings (${columns.join(', ')}) VALUES (?, ?, ?, ?, ?, ?)`, values);
 
-        res.status(201).json({ message: 'Training record created successfully', trainingId: result.insertId });
+        res.status(201).json({ message: 'Training assigned successfully', trainingId: result.insertId });
     } catch (dbErr) {
-        console.error(`Database error during training creation: ${dbErr.message}`);
+        console.error(`Database error during training assignment: ${dbErr.message}`);
         return res.status(500).json({ error: 'Database error.' });
-    }
-});
-
-// POST /api/trainings/import (REVISED to auto-populate details)
-router.post('/import', async (req, res) => {
-    const { actingUserId, trainings } = req.body;
-    if (!actingUserId) return res.status(403).json({ error: 'Permission denied.' });
-    if (!Array.isArray(trainings) || trainings.length === 0) return res.status(400).json({ error: 'No training data provided.' });
-
-    const connection = await dbPool.getConnection();
-    try {
-        await connection.beginTransaction();
-
-        // --- Fetch all master data for validation and lookup ---
-        const [existingEmployees] = await connection.query("SELECT id, employee_id FROM employees");
-        const employeeIdMap = new Map(existingEmployees.map(emp => [String(emp.employee_id).trim(), emp.id]));
-        
-        // ✅ Fetch the FULL training title records, including the details to auto-populate
-        const [officialTitles] = await connection.query("SELECT id, title, start_date, end_date, hours, venue FROM training_titles");
-        const titleMap = new Map(officialTitles.map(t => [t.title.trim().toLowerCase(), t]));
-
-        const [dbTrainings] = await connection.query("SELECT employee_id, training_title_id, DATE_FORMAT(start_date, '%Y-%m-%d') AS formatted_start_date FROM trainings");
-        const existingDbKeys = new Set(dbTrainings.map(t => `${t.employee_id}-${t.training_title_id}-${t.formatted_start_date}`));
-        
-        const errors = [];
-        const validTrainings = [];
-        const requiredFields = ['employee_id', 'training_title']; // 🖊️ Simplified required fields
-
-        for (let i = 0; i < trainings.length; i++) {
-            const record = trainings[i];
-            const rowNum = i + 2;
-            let hasError = false;
-
-            const missingFields = requiredFields.filter(field => !record[field] || String(record[field]).trim() === '');
-            if (missingFields.length > 0) {
-                errors.push(`Row ${rowNum}: Missing required fields: ${missingFields.join(', ')}.`);
-                hasError = true;
-            }
-
-            const db_employee_id = employeeIdMap.get(String(record.employee_id || '').trim());
-            if (record.employee_id && !db_employee_id) {
-                errors.push(`Row ${rowNum}: Employee ID "${record.employee_id}" not found.`);
-                hasError = true;
-            }
-            
-            // ✅ Find the full title object from the map
-            const titleObject = titleMap.get(String(record.training_title || '').trim().toLowerCase());
-            if (record.training_title && !titleObject) {
-                errors.push(`Row ${rowNum}: Training title "${record.training_title}" not found.`);
-                hasError = true;
-            }
-
-            if (hasError) continue;
-            const date = new Date(titleObject.start_date);
-            const formattedDate = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-            const uniqueKey = `${db_employee_id}-${titleObject.id}-${formattedDate}`;
-
-            if (existingDbKeys.has(uniqueKey)) {
-                errors.push(`Row ${rowNum}: This training record already exists in the database.`);
-                continue;
-            }
-            
-            // ✅ Push the looked-up details into the record to be inserted
-            validTrainings.push({
-                employee_id: db_employee_id,
-                training_title_id: titleObject.id,
-                start_date: titleObject.start_date,
-                end_date: titleObject.end_date,
-                hours: titleObject.hours,
-                venue: titleObject.venue
-            });
-        }
-
-        if (errors.length > 0) {
-            await connection.rollback();
-            const message = `Import failed. ${errors.length} error(s) found. First error: ${errors[0]}`;
-            return res.status(400).json({ message, errors });
-        }
-
-        if (validTrainings.length > 0) {
-            const insertQuery = `INSERT INTO trainings (employee_id, training_title_id, start_date, end_date, hours, venue) VALUES ?`;
-            const valuesToInsert = validTrainings.map(t => [t.employee_id, t.training_title_id, t.start_date, t.end_date, t.hours, t.venue]);
-            await connection.query(insertQuery, [valuesToInsert]);
-        }
-        
-        await connection.commit();
-        res.status(201).json({ message: `Successfully imported ${validTrainings.length} training records.` });
-
-    } catch (dbErr) {
-        await connection.rollback();
-        console.error(`Database error during training import: ${dbErr.message}`);
-        return res.status(500).json({ error: dbErr.message });
-    } finally {
-        if (connection) connection.release();
     }
 });
 
@@ -369,8 +348,6 @@ router.put('/:id', async (req, res) => {
             return res.status(409).json({ error: 'Another training record with these details (Employee, Title, Start Date) already exists.' });
         }
 
-        const [oldRecord] = await dbPool.query('SELECT * FROM trainings WHERE id = ?', [id]);
-
         const columns = ['employee_id', 'training_title_id', 'start_date', 'end_date', 'hours', 'venue'];
         const values = [employee_id, training_title_id, start_date, end_date, hours, venue.trim()];
         
@@ -397,8 +374,6 @@ router.delete('/:id', async (req, res) => {
             return res.status(403).json({ error: 'You do not have permission to delete training records.' });
         }
 
-        const [oldRecord] = await dbPool.query('SELECT * FROM trainings WHERE id = ?', [id]);
-        
         const [result] = await dbPool.query('DELETE FROM trainings WHERE id = ?', [id]);
         if (result.affectedRows === 0) {
             return res.status(404).json({ error: 'Training record not found.' });
@@ -409,6 +384,302 @@ router.delete('/:id', async (req, res) => {
         console.error(`Database error during training deletion: ${err.message}`);
         return res.status(500).json({ error: 'Database error.' });
     }
+});
+
+// GET /api/trainings/unsynced-titles (Get training titles to sync if there are any Synced Employees)
+router.get('/unsynced-titles', async (req, res) => {
+  try {
+    // 1. Check if there are any Synced Employees at all
+    const [syncedEmployees] = await dbPool.query(
+      "SELECT COUNT(id) as count FROM profile_entries WHERE interview_status = 'Synced Employees'"
+    );
+
+    if (syncedEmployees[0].count === 0) {
+      return res.json([]);
+    }
+
+    // 2. Return all available training titles so the user can choose which one to sync them to
+    const [allTitles] = await dbPool.query(
+      `SELECT id, title FROM training_titles ORDER BY title ASC`
+    );
+
+    res.json(allTitles);
+  } catch (err) {
+    console.error(`Database error fetching unsynced training titles: ${err.message}`);
+    res.status(500).json({ error: 'Failed to retrieve unsynced training titles.' });
+  }
+});
+
+// GET /api/trainings/sync-filter-options (Get surveys and positions for Synced Employees, plus training titles)
+router.get('/sync-filter-options', async (req, res) => {
+  try {
+    const survey = req.query.survey;
+    
+    if (!survey) {
+      // Return all surveys and training titles for Synced Employees
+      const [surveys] = await dbPool.query(`
+        SELECT DISTINCT s.name
+        FROM surveys s
+        WHERE s.id IN (
+          SELECT DISTINCT survey_id FROM profile_entries 
+          WHERE interview_status = 'Synced Employees' AND survey_id IS NOT NULL
+        )
+        ORDER BY s.name
+      `);
+
+      const [titles] = await dbPool.query(`
+        SELECT id, title FROM training_titles ORDER BY title ASC
+      `);
+
+      const [pendingCount] = await dbPool.query(`
+        SELECT COUNT(*) as count FROM profile_entries 
+        WHERE interview_status = 'Synced Employees' AND assessment_remarks = 'Hired'
+      `);
+
+      res.json({
+        surveys: surveys.map(s => s.name),
+        positions: [],
+        titles: titles,
+        pendingCount: pendingCount[0].count
+      });
+    } else {
+      // Return positions for the selected survey
+      const [positions] = await dbPool.query(`
+        SELECT DISTINCT p.title as title
+        FROM positions p
+        WHERE p.id IN (
+          SELECT DISTINCT position_id FROM profile_entries
+          WHERE interview_status = 'Synced Employees' AND survey_id IN (
+            SELECT id FROM surveys WHERE name = ?
+          ) AND position_id IS NOT NULL AND assessment_remarks = 'Hired'
+        )
+        ORDER BY p.title
+      `, [survey]);
+
+      res.json({
+        surveys: [],
+        positions: positions.map(p => p.title),
+        titles: []
+      });
+    }
+  } catch (err) {
+    console.error(`Database error fetching sync filter options: ${err.message}`);
+    res.status(500).json({ error: 'Failed to retrieve filter options.' });
+  }
+});
+
+// POST /api/trainings/sync-bulk-update (Update profile_entries with training_title_id for selected survey and position)
+router.post('/sync-bulk-update', async (req, res) => {
+  const { actingUserId, surveyName, position, trainingTitleId } = req.body;
+
+  if (!actingUserId) {
+    return res.status(403).json({ error: 'Authentication required.' });
+  }
+
+  if (!surveyName || !position || !trainingTitleId) {
+    return res.status(400).json({ error: 'Survey, Position, and Training Title are required.' });
+  }
+
+  try {
+    const actingUser = await getUserWithRole(actingUserId);
+    if (!['Super_Admin', 'Admin', 'PACD'].includes(actingUser.role)) {
+      return res.status(403).json({ error: 'You do not have permission to sync training data.' });
+    }
+
+    // Update profile_entries with training_title_id (do not change interview status)
+    const [result] = await dbPool.query(`
+      UPDATE profile_entries SET 
+        training_title_id = ?
+      WHERE interview_status = 'Synced Employees'
+      AND survey_id IN (SELECT id FROM surveys WHERE name = ?)
+      AND position_id IN (SELECT id FROM positions WHERE title = ?)
+      AND assessment_remarks = 'Hired'
+    `, [trainingTitleId, surveyName, position]);
+
+    // Fetch the updated applicants to return for preview/duplicate validation
+    const [updatedApplicants] = await dbPool.query(`
+      SELECT 
+        pe.id, pe.first_name, pe.middle_initial, pe.last_name, pe.suffix, pe.assessment_remarks,
+        pe.email_address, pe.phone_number, DATE_FORMAT(pe.date_of_birth, '%Y-%m-%d') as date_of_birth,
+        s.name as survey_name, pos.title as position
+      FROM profile_entries pe
+      JOIN surveys s ON pe.survey_id = s.id
+      JOIN positions pos ON pe.position_id = pos.id
+      WHERE pe.training_title_id = ? 
+      AND pe.interview_status = 'Synced Employees'
+      AND s.name = ?
+      AND pos.title = ?
+    `, [trainingTitleId, surveyName, position]);
+
+    res.json({
+      message: `Successfully updated ${result.affectedRows} applicant(s) with training title.`,
+      updatedCount: result.affectedRows,
+      applicants: updatedApplicants,
+      trainingTitleId: trainingTitleId
+    });
+  } catch (err) {
+    console.error(`Database error updating training titles: ${err.message}`);
+    res.status(500).json({ error: 'Failed to update training data.' });
+  }
+});
+
+// POST /api/trainings/sync-finalize (Finalize training sync to trainings table)
+router.post('/sync-finalize', async (req, res) => {
+  const { actingUserId, applicantIds, trainingTitleId } = req.body;
+
+  if (!actingUserId) {
+    return res.status(403).json({ error: 'Authentication required.' });
+  }
+
+  if (!applicantIds || !Array.isArray(applicantIds) || applicantIds.length === 0 || !trainingTitleId) {
+    return res.status(400).json({ error: 'Missing applicant list or training title identification.' });
+  }
+
+  const connection = await dbPool.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    const actingUser = await getUserWithRole(actingUserId);
+    if (!['Super_Admin', 'Admin', 'PACD'].includes(actingUser.role)) {
+      await connection.rollback();
+      connection.release();
+      return res.status(403).json({ error: 'Permission denied.' });
+    }
+
+    // 1. Get training title details
+    const [titleRows] = await connection.query(
+      'SELECT id, start_date, end_date, hours, venue FROM training_titles WHERE id = ?',
+      [trainingTitleId]
+    );
+    if (titleRows.length === 0) {
+      await connection.rollback();
+      connection.release();
+      return res.status(404).json({ error: 'Training title not found.' });
+    }
+    const trainingDetails = titleRows[0];
+
+    // 2. Fetch or Match existing employees for these applicants 
+    // We expect applicants to exist in employees table if they are being synced to trainings
+    // If they aren't employees yet, we search for them by name/dob
+    const [applicants] = await connection.query(
+      `SELECT id, first_name, last_name, DATE_FORMAT(date_of_birth, '%Y-%m-%d') as dob 
+       FROM profile_entries WHERE id IN (?)`,
+      [applicantIds]
+    );
+
+    const createdTrainings = [];
+    const skippedApplicants = [];
+
+    for (const app of applicants) {
+      // Find matching employee ID
+      const [empRows] = await connection.query(
+        "SELECT id FROM employees WHERE LOWER(first_name) = LOWER(?) AND LOWER(last_name) = LOWER(?) AND DATE(date_of_birth) = ?",
+        [app.first_name, app.last_name, app.dob]
+      );
+
+      if (empRows.length > 0) {
+        const employeeId = empRows[0].id;
+        
+        // Check if training record already exists for this employee/title
+        const [existing] = await connection.query(
+          'SELECT id FROM trainings WHERE employee_id = ? AND training_title_id = ? AND DATE(start_date) = ?',
+          [employeeId, trainingTitleId, trainingDetails.start_date]
+        );
+
+        if (existing.length === 0) {
+          // Insert into trainings table
+          await connection.query(
+            'INSERT INTO trainings (employee_id, training_title_id, start_date, end_date, hours, venue) VALUES (?, ?, ?, ?, ?, ?)',
+            [
+              employeeId, 
+              trainingTitleId, 
+              trainingDetails.start_date, 
+              trainingDetails.end_date, 
+              trainingDetails.hours, 
+              trainingDetails.venue
+            ]
+          );
+          createdTrainings.push(app.id);
+        } else {
+          skippedApplicants.push({ name: `${app.first_name} ${app.last_name}`, reason: 'Already exists in trainings' });
+        }
+      } else {
+        skippedApplicants.push({ name: `${app.first_name} ${app.last_name}`, reason: 'Not found in employees table' });
+      }
+    }
+
+    // 3. Update status to 'Prospective Employees' for those successfully synced to trainings
+    if (createdTrainings.length > 0) {
+      await connection.query(
+        "UPDATE profile_entries SET interview_status = 'Synced Trainings' WHERE id IN (?)",
+        [createdTrainings]
+      );
+    }
+
+    await connection.commit();
+    res.json({
+      message: `Successfully finalized sync for ${createdTrainings.length} applicant(s).`,
+      syncedCount: createdTrainings.length,
+      skipped: skippedApplicants
+    });
+  } catch (err) {
+    await connection.rollback();
+    console.error(`Error finalizing training sync: ${err.message}`);
+    res.status(500).json({ error: 'Failed to finalize training sync.' });
+  } finally {
+    connection.release();
+  }
+});
+
+// POST /api/trainings/sync-titles (Sync selected training titles from profile_entries) [DEPRECATED - kept for compatibility]
+router.post('/sync-titles', async (req, res) => {
+  const { actingUserId, trainingTitleIds } = req.body;
+
+  if (!actingUserId) {
+    return res.status(403).json({ error: 'Authentication required.' });
+  }
+
+  if (!trainingTitleIds || !Array.isArray(trainingTitleIds) || trainingTitleIds.length === 0) {
+    return res.status(400).json({ error: 'No training titles selected for sync.' });
+  }
+
+  try {
+    const actingUser = await getUserWithRole(actingUserId);
+    if (!['Super_Admin', 'Admin', 'PACD'].includes(actingUser.role)) {
+      return res.status(403).json({ error: 'You do not have permission to sync training titles.' });
+    }
+
+    // Get details of selected training titles from profile_entries
+    const [titlesToSync] = await dbPool.query(
+      `SELECT DISTINCT 
+        tt.id,
+        tt.title,
+        tt.start_date,
+        tt.end_date,
+        tt.hours,
+        tt.venue
+       FROM training_titles tt
+       WHERE tt.id IN (?)`,
+      [trainingTitleIds]
+    );
+
+    if (titlesToSync.length === 0) {
+      return res.status(404).json({ error: 'No training titles found to sync.' });
+    }
+
+    // For now, training titles are already in the training_titles table
+    // The "sync" here represents confirming/acknowledging these titles are in use
+    // In a future enhancement, this could create training records in profile_entries for applicants
+
+    res.json({
+      message: `Successfully synced ${titlesToSync.length} training title(s).`,
+      syncedCount: titlesToSync.length,
+      titles: titlesToSync
+    });
+  } catch (err) {
+    console.error(`Database error syncing training titles: ${err.message}`);
+    res.status(500).json({ error: 'Failed to sync training titles.' });
+  }
 });
 
 module.exports = router;

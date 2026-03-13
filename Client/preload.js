@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   login: (credentials) => ipcRenderer.invoke('login', credentials),
   loginGoogleLoopback: () => ipcRenderer.invoke('login-google-loopback'),
   loginGoogleSilent: () => ipcRenderer.invoke('login-google-silent'),
+  clearGoogleRefreshToken: () => ipcRenderer.invoke('clear-google-refresh-token'),
 
   // ADD THIS LINE
   handleSessionExpired: () => ipcRenderer.invoke('session-expired'),
@@ -31,8 +32,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Download handlers for certificate generation
   prepareDownload: (payload) => ipcRenderer.invoke('prepare-download', payload),
   saveFile: (payload) => ipcRenderer.invoke('save-file', payload),
+  autoSaveCertificate: (payload) => ipcRenderer.invoke('auto-save-certificate', payload),
   openFile: (filePath) => ipcRenderer.invoke('open-file', filePath),
   saveCsvFile: (args) => ipcRenderer.invoke('save-csv-file', args),
+  savePDF: (pdfData, fileName, folderName = 'Pre-Assessment Report') => ipcRenderer.invoke('save-pdf', pdfData, fileName, folderName),
 
   // Backup/Restore handlers
   backupDatabase: () => ipcRenderer.invoke('backup-database'),

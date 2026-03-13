@@ -68,4 +68,50 @@ router.post('/login', async (req, res) => {
     }
 });
 
+// --- SESSION VALIDATION ENDPOINT ---
+// This endpoint verifies if a stored session/token is still valid
+router.get('/session/validate', async (req, res) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ message: 'No token provided.' });
+    }
+
+    const token = authHeader.substring('Bearer '.length);
+
+    try {
+        // Verify the JWT token
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        
+        // Check if the token is still in the active_jwts table
+        const [results] = await dbPool.query(
+            'SELECT * FROM active_jwts WHERE user_id = ? AND token = ?',
+            [decoded.id, token]
+        );
+
+        if (results.length === 0) {
+            return res.status(401).json({ message: 'Session is no longer valid.' });
+        }
+
+        // Check if user is still active
+        const [userResults] = await dbPool.query('SELECT status FROM users WHERE id = ?', [decoded.id]);
+        if (userResults.length === 0 || userResults[0].status === 'Inactive') {
+            return res.status(403).json({ message: 'User account is no longer active.' });
+        }
+
+        res.json({ 
+            valid: true, 
+            message: 'Session is valid',
+            userId: decoded.id,
+            email: decoded.email,
+            role: decoded.role
+        });
+    } catch (err) {
+        if (err.name === 'TokenExpiredError') {
+            return res.status(401).json({ message: 'Session has expired.' });
+        }
+        console.error(`Session validation error: ${err.message}`);
+        res.status(401).json({ message: 'Session validation failed.' });
+    }
+});
+
 module.exports = router;

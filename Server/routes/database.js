@@ -53,7 +53,6 @@ router.post('/backup', (req, res) => {
     }
 
     const command = `${dumpBinary} --host=${dbHost} --user=${dbUser} --password=${dbPassword} ${dbName}`;
-    console.log('Using dump command:', command);
 
     try {
         const mysqldumpProcess = exec(command, { encoding: 'utf8' });

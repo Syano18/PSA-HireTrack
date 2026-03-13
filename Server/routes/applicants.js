@@ -29,7 +29,6 @@ const executeTurso = async (sql, args = []) => {
   const authToken = process.env.TURSO_AUTH_TOKEN;
   
   if (!dbUrl || !authToken) {
-    console.warn("Turso DB URL or Token is not configured. Skipping Logbook entry.");
     return null;
   }
  
@@ -81,10 +80,29 @@ const formatTursoResponse = (tursoResult) => {
     });
 };
 
+// Whitelist of columns that can be updated via the generic PUT /:id endpoint.
+// Using a whitelist prevents SQL injection through dynamic column names.
+const ALLOWED_UPDATE_COLUMNS = new Set([
+  'first_name', 'middle_initial', 'last_name', 'suffix',
+  'email_address', 'phone_number', 'date_of_birth',
+  'highest_grade_completed', 'address', 'barangay',
+  'city_municipality', 'province', 'position',
+  'survey_name', 'focal_name', 'training_title_id',
+]);
+
 // --- GET /api/applicants ---
-router.get('/', async (req, res) => {
+router.get('/', verifyToken, async (req, res) => {
   try {
-    const [results] = await dbPool.query("SELECT * FROM profile_entries WHERE focal_id IS NULL ORDER BY last_name, first_name");
+    const [results] = await dbPool.query(`
+      SELECT 
+        pe.*,
+        s.name as survey_name,
+        p.title as position
+      FROM profile_entries pe
+      LEFT JOIN surveys s ON pe.survey_id = s.id
+      LEFT JOIN positions p ON pe.position_id = p.id
+      ORDER BY pe.last_name, pe.first_name
+    `);
     res.json(results);
   } catch (err) {
     console.error(`Local DB error fetching applicants: ${err.message}`);
@@ -115,10 +133,17 @@ router.get('/assigned-to-me', verifyToken, async (req, res) => {
 
     // 2. Fetch applicants assigned to this interviewer
     //    only those that are still pending interview work (For Interview or Ongoing Interview).
-    //    Previously we excluded only 'Done Interview'; narrowing the condition here
-    //    ensures the interviewer page only shows the relevant applicants.
+    //    JOIN with surveys to include survey_name for criteria lookup
     const [applicants] = await dbPool.query(
-      "SELECT * FROM profile_entries WHERE interviewer = ? AND interview_status IN ('For Interview','Ongoing Interview') ORDER BY last_name, first_name",
+      `SELECT 
+        pe.*,
+        s.name as survey_name,
+        p.title as position
+      FROM profile_entries pe
+      LEFT JOIN surveys s ON pe.survey_id = s.id
+      LEFT JOIN positions p ON pe.position_id = p.id
+      WHERE pe.interviewer = ? AND pe.interview_status IN ('For Interview','Ongoing Interview') 
+      ORDER BY pe.last_name, pe.first_name`,
       [interviewerName]
     );
 
@@ -130,200 +155,314 @@ router.get('/assigned-to-me', verifyToken, async (req, res) => {
 });
 
 // --- POST /api/applicants/sync ---
-router.post('/sync', async (req, res) => {
+// Syncs profile_entries from Turso to local MariaDB, updating only matching fields
+router.post('/sync', verifyToken, async (req, res) => {
   try {
-    const tursoResult = await executeTurso("SELECT * FROM profile_entries ORDER BY rowid ASC");
-    
-    // Filter out hiring_end_date, keep position and other fields
-    const applicants = formatTursoResponse(tursoResult).map(app => {
-        const { hiring_end_date, ...rest } = app;
-        return rest;
-    });
-
-    if (!applicants || applicants.length === 0) {
-      return res.json({ message: 'No new applicants found.' });
+    // Fetch all records from Turso profile_entries
+    const tursoQuery = `
+      SELECT id, first_name, middle_initial, last_name, suffix, email_address, phone_number, 
+             date_of_birth, sex, tin, barangay, city_municipality, highest_grade_completed, 
+             created_at, survey_id, interviewer, position_id 
+      FROM profile_entries
+    `;
+    const tursoResult = await executeTurso(tursoQuery);
+    if (!tursoResult) {
+      return res.status(500).json({ error: 'Failed to fetch from Turso database.' });
     }
-
-    // 2. Deduplicate Turso Data (Keep most recent entry from Turso)
-    const uniqueTursoApplicants = [];
-
-    applicants.forEach(app => {
-      const name1 = [app.first_name, app.middle_initial, app.last_name, app.suffix]
-        .filter(Boolean).join(' ').toLowerCase().trim();
-      const dob1 = app.date_of_birth;
-      //const focal1 = (app.focal_name || '').trim().toLowerCase();
-
-      let matchIndex = -1;
-
-      for (let i = 0; i < uniqueTursoApplicants.length; i++) {
-        const existing = uniqueTursoApplicants[i];
-        const name2 = [existing.first_name, existing.middle_initial, existing.last_name, existing.suffix]
-          .filter(Boolean).join(' ').toLowerCase().trim();
-        const dob2 = existing.date_of_birth;
-        const focal2 = (existing.focal_name || '').trim().toLowerCase();
-
-        if (dob1 && dob2 && dob1 !== dob2) continue;
-        //if (focal1 !== focal2) continue;
-
-        if (Math.abs(name1.length - name2.length) > 3) continue;
-        const dist = levenshtein(name1, name2);
-        const threshold = name1.length > 4 ? 2 : 0;
-
-        if (dist <= threshold) {
-          matchIndex = i;
-          break;
-        }
-      }
-
-      if (matchIndex !== -1) {
-        uniqueTursoApplicants[matchIndex] = app; // Replace with newer version
-      } else {
-        uniqueTursoApplicants.push(app);
-      }
-    });
+    const applicants = formatTursoResponse(tursoResult);
+    if (!applicants || applicants.length === 0) {
+      return res.json({ message: 'No applicants found in Turso.' });
+    }
 
     const connection = await dbPool.getConnection();
     try {
       await connection.beginTransaction();
 
-      // 3. Fetch Local Data for Comparison
-      const [localApplicants] = await connection.query("SELECT * FROM profile_entries");
+      let inserted = 0;
+      let updated = 0;
 
-      const toInsert = [];
-      const toUpdate = [];
+      for (const app of applicants) {
+        // Process name fields: uppercase and format middle initial
+        let firstName = app.first_name ? app.first_name.trim().toUpperCase() : null;
+        let lastName = app.last_name ? app.last_name.trim().toUpperCase() : null;
+        let suffix = app.suffix ? app.suffix.trim().toUpperCase() : null;
+        let middleInitial = app.middle_initial ? app.middle_initial.trim().toUpperCase() : null;
 
-      // 4. Compare Turso vs Local
-      for (const tApp of uniqueTursoApplicants) {
-        const name1 = [tApp.first_name, tApp.middle_initial, tApp.last_name, tApp.suffix]
-            .filter(Boolean).join(' ').toLowerCase().trim();
-        const dob1 = tApp.date_of_birth; // String from Turso
-        //const focal1 = (tApp.focal_name || '').trim().toLowerCase();
-
-        let localMatch = null;
-
-        for (const lApp of localApplicants) {
-            const name2 = [lApp.first_name, lApp.middle_initial, lApp.last_name, lApp.suffix]
-                .filter(Boolean).join(' ').toLowerCase().trim();
-            
-            // Normalize Local Date (Date object) to String YYYY-MM-DD
-            let dob2 = lApp.date_of_birth;
-            if (dob2 && dob2 instanceof Date) {
-                // Use local time components to avoid UTC shift causing wrong date
-                const year = dob2.getFullYear();
-                const month = String(dob2.getMonth() + 1).padStart(2, '0');
-                const day = String(dob2.getDate()).padStart(2, '0');
-                dob2 = `${year}-${month}-${day}`;
-            }
-            
-            const focal2 = (lApp.focal_name || '').trim().toLowerCase();
-
-            // Strict checks
-            if (dob1 && dob2 && dob1 !== dob2) continue;
-            // Only enforce strict focal match if Turso has a value. 
-            // If Turso is empty/null, allow match with Local (which might be assigned).
-            //if (focal1 && focal1 !== focal2) continue;
-
-            // Fuzzy Name check
-            if (Math.abs(name1.length - name2.length) > 3) continue;
-            const dist = levenshtein(name1, name2);
-            const threshold = name1.length > 4 ? 2 : 0;
-
-            if (dist <= threshold) {
-                localMatch = lApp;
-                break;
-            }
-        }
-
-        if (localMatch) {
-            // Found in local DB -> Update it using the local ID
-            // Preserve local focal_name if Turso's is empty (don't overwrite assignment with null)
-            const mergedApp = { ...tApp, id: localMatch.id };
-            if (!tApp.focal_name && localMatch.focal_name) {
-                mergedApp.focal_name = localMatch.focal_name;
-            }
-            toUpdate.push(mergedApp);
-        } else {
-            // Not found -> Insert
-            toInsert.push(tApp);
-        }
-      }
-      
-      // 5. Execute Batch Operations
-
-      // Batch Insert
-      if (toInsert.length > 0) {
-          const sample = toInsert[0];
-          const columns = Object.keys(sample).filter(key => key !== 'id' && key !== 'rowid');
-          if (columns.length > 0) {
-            const sql = `INSERT INTO profile_entries (${columns.join(', ')}) VALUES ?`;
-            const values = toInsert.map(app => columns.map(col => app[col]));
-            await connection.query(sql, [values]);
+        // Format middle initial: if >2 chars, take first, ensure ends with period
+        if (middleInitial) {
+          if (middleInitial.length > 2) {
+            middleInitial = middleInitial.charAt(0);
           }
-      }
+          if (!middleInitial.endsWith('.')) {
+            middleInitial += '.';
+          }
+        }
 
-      // Batch Update (using INSERT ... ON DUPLICATE KEY UPDATE with ID)
-      if (toUpdate.length > 0) {
-          const sample = toUpdate[0];
-          // Ensure 'id' is the first column for clarity
-          const columns = ['id', ...Object.keys(sample).filter(key => key !== 'id' && key !== 'rowid')];
-          
-          // Generate update clause: col=VALUES(col) for all columns EXCEPT id
-          const updateClause = columns
-            .filter(col => col !== 'id')
-            .map(col => `${col}=VALUES(${col})`)
-            .join(', ');
-
-          const sql = `INSERT INTO profile_entries (${columns.join(', ')}) VALUES ? ON DUPLICATE KEY UPDATE ${updateClause}`;
-          const values = toUpdate.map(app => columns.map(col => app[col]));
-          
-          await connection.query(sql, [values]);
+        // Insert or update record (exclude created_at from sync)
+        await connection.query(`
+          INSERT INTO profile_entries (
+            id, first_name, middle_initial, last_name, suffix,
+            email_address, phone_number, date_of_birth, sex,
+            tin, barangay, city_municipality, highest_grade_completed,
+            survey_id, interviewer, position_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON DUPLICATE KEY UPDATE
+            first_name = VALUES(first_name), middle_initial = VALUES(middle_initial),
+            last_name = VALUES(last_name), suffix = VALUES(suffix),
+            email_address = VALUES(email_address), phone_number = VALUES(phone_number),
+            date_of_birth = VALUES(date_of_birth), sex = VALUES(sex),
+            tin = VALUES(tin), barangay = VALUES(barangay),
+            city_municipality = VALUES(city_municipality), highest_grade_completed = VALUES(highest_grade_completed),
+            survey_id = VALUES(survey_id), interviewer = VALUES(interviewer), position_id = VALUES(position_id)
+        `, [
+          app.id, firstName, middleInitial, lastName, suffix,
+          app.email_address, app.phone_number, app.date_of_birth, app.sex,
+          app.tin, app.barangay, app.city_municipality, app.highest_grade_completed,
+          app.survey_id, app.interviewer, app.position_id
+        ]);
+        // Note: We can't easily count inserted vs updated without checking affectedRows
       }
 
       await connection.commit();
-
-      // 6. Delete synced records from Turso (clear the online queue)
-      const syncedApps = [...toInsert, ...toUpdate];
-      if (syncedApps.length > 0) {
-        for (const app of syncedApps) {
-          try {
-            const deleteSql = `
-              DELETE FROM profile_entries
-              WHERE (first_name = ? OR (first_name IS NULL AND ? IS NULL))
-                AND (last_name = ? OR (last_name IS NULL AND ? IS NULL))
-                AND (date_of_birth = ? OR (date_of_birth IS NULL AND ? IS NULL))
-            `;
-            const dob = app.date_of_birth instanceof Date
-              ? `${app.date_of_birth.getFullYear()}-${String(app.date_of_birth.getMonth()+1).padStart(2,'0')}-${String(app.date_of_birth.getDate()).padStart(2,'0')}`
-              : app.date_of_birth;
-            await executeTurso(deleteSql, [
-              app.first_name, app.first_name,
-              app.last_name, app.last_name,
-              dob, dob,
-            ]);
-          } catch (tursoErr) {
-            console.warn(`Could not delete synced record from Turso: ${tursoErr.message}`);
-          }
-        }
-      }
-
       res.json({ 
-          message: `Sync complete. Added: ${toInsert.length}, Updated: ${toUpdate.length}.`,
-          stats: { added: toInsert.length, updated: toUpdate.length }
+        message: `Sync completed. ${applicants.length} records processed.`,
+        processed: applicants.length
       });
     } catch (dbErr) {
       await connection.rollback();
-      throw dbErr;
+      console.error('Database error during sync:', dbErr);
+      res.status(500).json({ error: 'Database error during sync.' });
     } finally {
       connection.release();
     }
   } catch (err) {
-    console.error(`Sync error: ${err.message}`);
+    console.error('Sync error:', err);
     res.status(500).json({ error: 'Failed to sync data.' });
   }
 });
 
+// --- POST /api/applicants/comprehensive-sync ---
+// Syncs assessed applicants into employees, trainings, and employments tables
+// Returns counts of newly created/updated records only (not checked records)
+router.post('/comprehensive-sync', verifyToken, async (req, res) => {
+  const connection = await dbPool.getConnection();
+  const fs = require('fs');
+  const path = require('path');
+  
+  try {
+    await connection.beginTransaction();
+
+    // 1. Fetch all assessed applicants with training_title_id
+    const [assessedApplicants] = await connection.query(`
+      SELECT 
+        pe.id, pe.first_name, pe.middle_initial, pe.last_name, pe.suffix,
+        pe.date_of_birth, pe.sex,
+        pe.survey_id, s.name as survey_name,
+        pe.position_id, p.title as position,
+        pe.training_title_id,
+        COALESCE(pe.contract_start_date, CURDATE()) as contract_start_date
+      FROM profile_entries pe
+      LEFT JOIN surveys s ON pe.survey_id = s.id
+      LEFT JOIN positions p ON pe.position_id = p.id
+      WHERE pe.interview_status = 'Assessed' AND pe.training_title_id IS NOT NULL
+      ORDER BY pe.id
+    `);
+
+    if (!assessedApplicants || assessedApplicants.length === 0) {
+      await connection.commit();
+      return res.json({ 
+        message: 'No assessed applicants to sync.',
+        created: { employees: 0, trainings: 0, employments: 0 },
+        updated: { employees: 0 },
+        reportPath: null
+      });
+    }
+
+    const stats = {
+      created: { employees: 0, trainings: 0, employments: 0 },
+      updated: { employees: 0 }
+    };
+
+    // Track sync results for CSV report
+    const syncResults = [];
+
+    // 2. Fetch all existing employees and trainings for duplicate checking
+    const [existingEmployees] = await connection.query('SELECT id, first_name, last_name, date_of_birth FROM employees');
+    const [existingTrainings] = await connection.query('SELECT employee_id, training_title_id, start_date FROM trainings');
+    const [existingEmployments] = await connection.query('SELECT employee_id, position_id, survey_id FROM employments');
+
+    // 3. Process each applicant
+    for (const applicant of assessedApplicants) {
+      const normalize = (str) => {
+        if (!str) return '';
+        return `${str}`.toLowerCase().trim();
+      };
+
+      const applicantFullName = [applicant.first_name, applicant.middle_initial, applicant.last_name, applicant.suffix]
+        .filter(Boolean).join(' ');
+      const applicantNameLower = normalize([applicant.first_name, applicant.last_name].filter(Boolean).join(' '));
+
+      let syncStatus = 'Success';
+      let syncMessage = '';
+      let employeeId = null;
+
+      try {
+        // Find matching employee using exact or fuzzy matching
+        let matchedEmployee = null;
+        let matchType = null;
+
+        for (const emp of existingEmployees) {
+          const empNameLower = normalize([emp.first_name, emp.last_name].filter(Boolean).join(' '));
+
+          // Exact match: first + last names (case-insensitive) + DOB exact
+          if (applicantNameLower === empNameLower && applicant.date_of_birth === emp.date_of_birth) {
+            matchedEmployee = emp;
+            matchType = 'Exact Match';
+            break;
+          }
+
+          // Fuzzy match: Levenshtein ≤ 2 on first/last names, DOB within ±1 day
+          if (Math.abs(applicantNameLower.length - empNameLower.length) <= 3) {
+            const distance = levenshtein(applicantNameLower, empNameLower);
+            if (distance <= 2) {
+              // Check DOB tolerance: ±1 day
+              if (applicant.date_of_birth && emp.date_of_birth) {
+                const appDob = new Date(applicant.date_of_birth);
+                const empDob = new Date(emp.date_of_birth);
+                const dayDiff = Math.abs((appDob - empDob) / (1000 * 60 * 60 * 24));
+                if (dayDiff <= 1) {
+                  matchedEmployee = emp;
+                  matchType = 'Fuzzy Match';
+                  break;
+                }
+              }
+            }
+          }
+        }
+
+        if (matchedEmployee) {
+          employeeId = matchedEmployee.id;
+          // Employee exists - no update needed since email/phone are not available
+          syncMessage = `Employee already exists (${matchType})`;
+        } else {
+          // Create new employee
+          // Generate employee_id: PSAKLG-YY-XXXX format
+          const idPrefix = 'PSAKLG';
+          const currentYear = new Date().getFullYear().toString().slice(-2);
+          const [latestEmployee] = await connection.query(
+            "SELECT employee_id FROM employees WHERE employee_id LIKE ? ORDER BY id DESC LIMIT 1",
+            [`${idPrefix}-%`]
+          );
+          let newSequenceNumber = 1;
+          if (latestEmployee.length > 0) {
+            const lastIdParts = latestEmployee[0].employee_id.split('-');
+            const lastSequence = parseInt(lastIdParts[lastIdParts.length - 1], 10);
+            newSequenceNumber = lastSequence + 1;
+          }
+          const newEmployeeId = `${idPrefix}-${currentYear}-${String(newSequenceNumber).padStart(4, '0')}`;
+
+          const [insertResult] = await connection.query(
+            `INSERT INTO employees 
+             (employee_id, first_name, middle_initial, last_name, suffix, date_of_birth, sex)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [newEmployeeId, applicant.first_name, applicant.middle_initial, applicant.last_name, applicant.suffix,
+             applicant.date_of_birth, applicant.sex]
+          );
+          employeeId = insertResult.insertId;
+          stats.created.employees++;
+          syncMessage = `Created new employee (${newEmployeeId})`;
+        }
+
+        // 4. Create training record if doesn't exist
+        if (employeeId && applicant.training_title_id) {
+          // Check if training record already exists
+          const trainingExists = existingTrainings.some(t => 
+            t.employee_id === employeeId && 
+            t.training_title_id === applicant.training_title_id &&
+            t.start_date === applicant.contract_start_date
+          );
+
+          if (!trainingExists) {
+            // Get training title details
+            const [trainingTitle] = await connection.query(
+              'SELECT start_date, end_date, hours, venue FROM training_titles WHERE id = ?',
+              [applicant.training_title_id]
+            );
+
+            if (trainingTitle.length > 0) {
+              const tt = trainingTitle[0];
+              await connection.query(
+                `INSERT INTO trainings (employee_id, training_title_id, start_date, end_date, hours, venue)
+                 VALUES (?, ?, ?, ?, ?, ?)`,
+                [employeeId, applicant.training_title_id, tt.start_date, tt.end_date, tt.hours, tt.venue]
+              );
+              stats.created.trainings++;
+              syncMessage += '; Training record created';
+            }
+          } else {
+            syncMessage += '; Training already exists';
+          }
+        }
+
+        // 5. Create employment record if doesn't exist
+        if (employeeId && applicant.survey_id && applicant.position_id) {
+          const employmentExists = existingEmployments.some(e =>
+            e.employee_id === employeeId &&
+            e.position_id === applicant.position_id &&
+            e.survey_id === applicant.survey_id
+          );
+
+          if (!employmentExists) {
+            await connection.query(
+              `INSERT INTO employments (employee_id, position_id, survey_id, contract_start_date)
+               VALUES (?, ?, ?, ?)`,
+              [employeeId, applicant.position_id, applicant.survey_id, applicant.contract_start_date]
+            );
+            stats.created.employments++;
+            syncMessage += '; Employment record created';
+          } else {
+            syncMessage += '; Employment already exists';
+          }
+        }
+      } catch (error) {
+        syncStatus = 'Failed';
+        syncMessage = error.message;
+      }
+
+      // Add to sync results for CSV report
+      syncResults.push({
+        applicantId: applicant.id,
+        name: applicantFullName,
+        surveyName: applicant.survey_name || '',
+        position: applicant.position || '',
+        dateOfBirth: applicant.date_of_birth ? new Date(applicant.date_of_birth).toISOString().split('T')[0] : '',
+        status: syncStatus,
+        message: syncMessage
+      });
+    }
+
+    await connection.commit();
+
+    res.json({
+      message: `Sync complete. Employees created: ${stats.created.employees}, updated: ${stats.updated.employees}. Trainings created: ${stats.created.trainings}. Employments created: ${stats.created.employments}.`,
+      created: stats.created,
+      updated: stats.updated,
+      totalProcessed: syncResults.length,
+      successCount: syncResults.filter(r => r.status === 'Success').length,
+      failedCount: syncResults.filter(r => r.status === 'Failed').length
+    });
+
+  } catch (err) {
+    await connection.rollback();
+    console.error(`Comprehensive sync error: ${err.message}`);
+    res.status(500).json({ error: 'Failed to sync data: ' + err.message });
+  } finally {
+    connection.release();
+  }
+});
+
 // --- PUT /api/applicants/:id/assign ---
-router.put('/:id/assign', async (req, res) => {
+router.put('/:id/assign', verifyToken, async (req, res) => {
   const { id } = req.params;
   const { interviewer_id } = req.body;
 
@@ -360,9 +499,10 @@ router.put('/:id/assign', async (req, res) => {
 router.get('/transmit-options', verifyToken, async (req, res) => {
   try {
       const query = `
-          SELECT DISTINCT pe.survey_name, s.focal_person_id, CONCAT(u.first_name, ' ', u.last_name) as focal_person_name
+          SELECT DISTINCT s.name as survey_name, s.focal_person_id, CONCAT(u.first_name, ' ', u.last_name) as focal_person_name, p.title as position
           FROM profile_entries pe
-          LEFT JOIN surveys s ON pe.survey_name = s.name
+          LEFT JOIN surveys s ON pe.survey_id = s.id
+          LEFT JOIN positions p ON pe.position_id = p.id
           LEFT JOIN users u ON s.focal_person_id = u.id
           WHERE pe.interview_status = 'Done Interview' 
             AND pe.pre_assessment IS NOT NULL
@@ -374,9 +514,9 @@ router.get('/transmit-options', verifyToken, async (req, res) => {
             AND JSON_EXTRACT(pe.pre_assessment,'$.written_examination') IS NOT NULL
             AND JSON_EXTRACT(pe.pre_assessment,'$.interview_average') IS NOT NULL
             AND pe.focal_id IS NULL
-            AND pe.survey_name IS NOT NULL 
-            AND pe.survey_name != ''
-          ORDER BY pe.survey_name
+            AND s.name IS NOT NULL 
+            AND s.name != ''
+          ORDER BY s.name
       `;
       const [rows] = await dbPool.query(query);
       res.json(rows);
@@ -389,26 +529,54 @@ router.get('/transmit-options', verifyToken, async (req, res) => {
 // --- POST /api/applicants/transmit ---
 // Transmit applicants of a specific survey to a focal person
 router.post('/transmit', verifyToken, async (req, res) => {
-  const { survey_name, focal_id } = req.body;
-  if (!survey_name || !focal_id) return res.status(400).json({ error: 'Missing survey or focal person information.' });
+  const { survey_name, position, focal_id } = req.body;
+  if (!survey_name || !position || !focal_id) return res.status(400).json({ error: 'Missing survey, position, or focal person information.' });
 
   try {
+      // Get the survey_id from the survey name
+      const [surveyRows] = await dbPool.query('SELECT id, rating_criteria FROM surveys WHERE name = ?', [survey_name]);
+      if (!surveyRows.length) return res.status(404).json({ error: 'Survey not found.' });
+      const survey_id = surveyRows[0].id;
+
+      // Get the position_id from the position title
+      const [positionRows] = await dbPool.query('SELECT id FROM positions WHERE title = ?', [position]);
+      if (!positionRows.length) return res.status(404).json({ error: 'Position not found.' });
+      const position_id = positionRows[0].id;
+      
+      // Get the enabled pre_assessment criteria for this survey
+      let enabledCriteria = ['educational_attainment', 'relevant_training', 'relevant_work_experience', 'written_examination', 'interview_average'];
+      const rc = surveyRows[0].rating_criteria;
+      if (rc) {
+        try {
+          const parsed = typeof rc === 'string' ? JSON.parse(rc) : rc;
+          if (parsed.pre_assessment && Array.isArray(parsed.pre_assessment)) {
+            // Only require criteria that are in the survey's pre_assessment list
+            enabledCriteria = parsed.pre_assessment.concat(['interview_average']);
+          }
+        } catch (e) {
+          console.error('Error parsing rating_criteria:', e);
+          // Use all criteria as fallback
+        }
+      }
+
+      // Build the WHERE clause to check only enabled criteria
+      let whereConditions = [
+        'pre_assessment IS NULL',
+        "pre_assessment = 'null'"
+      ];
+      enabledCriteria.forEach(c => {
+        whereConditions.push(`JSON_EXTRACT(pre_assessment,'$.${c}') IS NULL`);
+      });
+      const whereClause = whereConditions.join(' OR ');
+
       // Check for applicants missing a pre-assessment score
       const [unscored] = await dbPool.query(
           `SELECT first_name, last_name FROM profile_entries
-           WHERE survey_name = ?
+           WHERE survey_id = ? AND position_id = ?
              AND interview_status = 'Done Interview'
              AND focal_id IS NULL
-             AND (
-                  pre_assessment IS NULL
-                  OR pre_assessment = 'null'
-                  OR JSON_EXTRACT(pre_assessment,'$.educational_attainment') IS NULL
-                  OR JSON_EXTRACT(pre_assessment,'$.relevant_training') IS NULL
-                  OR JSON_EXTRACT(pre_assessment,'$.relevant_work_experience') IS NULL
-                  OR JSON_EXTRACT(pre_assessment,'$.written_examination') IS NULL
-                  OR JSON_EXTRACT(pre_assessment,'$.interview_average') IS NULL
-               )`,
-          [survey_name]
+             AND (${whereClause})`,
+          [survey_id, position_id]
       );
       if (unscored.length > 0) {
           const names = unscored.map(r => `${r.first_name} ${r.last_name}`).join(', ');
@@ -416,8 +584,8 @@ router.post('/transmit', verifyToken, async (req, res) => {
       }
 
       const [result] = await dbPool.query(
-          "UPDATE profile_entries SET focal_id = ?, interview_status = 'Transmitted to Focal Person' WHERE survey_name = ? AND interview_status = 'Done Interview' AND focal_id IS NULL",
-          [focal_id, survey_name]
+          "UPDATE profile_entries SET focal_id = ?, interview_status = 'Transmitted to Focal Person' WHERE survey_id = ? AND position_id = ? AND interview_status = 'Done Interview' AND focal_id IS NULL",
+          [focal_id, survey_id, position_id]
       );
       res.json({ message: `Successfully transmitted ${result.affectedRows} applicant(s).` });
   } catch (err) {
@@ -429,10 +597,22 @@ router.post('/transmit', verifyToken, async (req, res) => {
 // --- PUT /api/applicants/:id/interview-status ---
 // Update only the interview_status field
 router.put('/:id/interview-status', verifyToken, async (req, res) => {
-  const { id } = req.params;
-  const { interview_status } = req.body;
-  if (!interview_status) return res.status(400).json({ error: 'interview_status is required.' });
+  const userId = req.user?.id;
+  if (!userId) return res.status(401).json({ error: 'Authentication required.' });
+
   try {
+    const [userRows] = await dbPool.query('SELECT hiretrack_role AS role FROM users WHERE id = ?', [userId]);
+    const userRole = userRows[0]?.role;
+
+    // Only allow interview status updates for admin roles and Focal Persons
+    if (!['Super_Admin', 'Admin', 'PACD', 'Focal Person'].includes(userRole)) {
+      return res.status(403).json({ error: 'Access denied. Only authorized personnel can update interview status.' });
+    }
+
+    const { id } = req.params;
+    const { interview_status } = req.body;
+    if (!interview_status) return res.status(400).json({ error: 'interview_status is required.' });
+    
     await dbPool.query("UPDATE profile_entries SET interview_status = ? WHERE id = ?", [interview_status, id]);
     res.json({ message: 'Status updated successfully.' });
   } catch (err) {
@@ -447,11 +627,23 @@ router.get('/surveys/:name/rating-criteria', verifyToken, async (req, res) => {
   const { name } = req.params;
   try {
     const [rows] = await dbPool.query('SELECT rating_criteria FROM surveys WHERE name = ?', [name]);
-    if (rows.length === 0) return res.status(404).json({ error: 'Survey not found.' });
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Survey not found.' });
+    }
+    
     const rc = rows[0].rating_criteria;
-    let parsed = {};
+    let parsed = { pre_assessment: [], interview: [] };
+    
     if (rc) {
-      try { parsed = typeof rc === 'string' ? JSON.parse(rc) : rc; } catch (e) { parsed = {}; }
+      try { 
+        parsed = typeof rc === 'string' ? JSON.parse(rc) : rc; 
+        // Ensure the structure is valid
+        if (!parsed.interview) parsed.interview = [];
+        if (!parsed.pre_assessment) parsed.pre_assessment = [];
+      } catch (e) { 
+        console.error('Error parsing rating_criteria:', e);
+        parsed = { pre_assessment: [], interview: [] };
+      }
     }
     res.json(parsed);
   } catch (err) {
@@ -538,7 +730,7 @@ router.put('/:id/interview-result', verifyToken, async (req, res) => {
 });
 
 // --- PUT /api/applicants/:id ---
-router.put('/:id', async (req, res) => {
+router.put('/:id', verifyToken, async (req, res) => {
   const { id } = req.params;
   const updates = req.body;
 
@@ -550,8 +742,8 @@ router.put('/:id', async (req, res) => {
     }
     const currentRecord = rows[0];
 
-    // 2. Update Local DB
-    const columns = Object.keys(updates).filter(k => k !== 'id' && k !== 'actingUserId');
+    // 2. Update Local DB — only allow pre-approved column names to prevent SQL injection
+    const columns = Object.keys(updates).filter(k => ALLOWED_UPDATE_COLUMNS.has(k));
     if (columns.length > 0) {
         const setClause = columns.map(col => `${col} = ?`).join(', ');
         const values = columns.map(col => updates[col]);
@@ -592,7 +784,7 @@ router.put('/:id', async (req, res) => {
 
 // --- DELETE /api/applicants/:id ---
 // Deletes from local DB only
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', verifyToken, async (req, res) => {
   const { id } = req.params;
   try {
     await dbPool.query("DELETE FROM profile_entries WHERE id = ?", [id]);
@@ -614,11 +806,31 @@ router.get('/for-assessment', verifyToken, async (req, res) => {
     const userRole = userRows[0]?.role;
     let sql, params;
     if (['Super_Admin', 'Admin', 'PACD'].includes(userRole)) {
-      sql = "SELECT * FROM profile_entries WHERE focal_id IS NOT NULL ORDER BY last_name, first_name";
+      // Include survey contract_end_date and positions for assessment requirements
+      sql = `SELECT 
+        pe.*,
+        s.name as survey_name,
+        s.contract_end_date,
+        s.positions,
+        p.title as position
+      FROM profile_entries pe
+      LEFT JOIN surveys s ON pe.survey_id = s.id
+      LEFT JOIN positions p ON pe.position_id = p.id
+      ORDER BY pe.last_name, pe.first_name`;
       params = [];
     } else if (userRole === 'Focal Person') {
-      sql = "SELECT * FROM profile_entries WHERE focal_id = ? ORDER BY last_name, first_name";
-      params = [userId];
+      // For Focal person, also include survey information
+      sql = `SELECT 
+        pe.*,
+        s.name as survey_name,
+        s.contract_end_date,
+        s.positions,
+        p.title as position
+      FROM profile_entries pe
+      LEFT JOIN surveys s ON pe.survey_id = s.id
+      LEFT JOIN positions p ON pe.position_id = p.id
+      ORDER BY pe.last_name, pe.first_name`;
+      params = [];
     } else {
       return res.status(403).json({ error: 'Access denied.' });
     }
@@ -631,14 +843,25 @@ router.get('/for-assessment', verifyToken, async (req, res) => {
 });
 
 // --- PUT /api/applicants/:id/assessment ---
-// Saves assessment_status and assessment_remarks to dedicated columns.
+// Saves assessment_remarks and grand_total to dedicated columns.
 router.put('/:id/assessment', verifyToken, async (req, res) => {
-  const { id } = req.params;
-  const { assessment_status, assessment_remarks } = req.body;
+  const userId = req.user?.id;
+  if (!userId) return res.status(401).json({ error: 'Authentication required.' });
+
   try {
+    const [userRows] = await dbPool.query('SELECT hiretrack_role AS role FROM users WHERE id = ?', [userId]);
+    const userRole = userRows[0]?.role;
+
+    // Only allow assessment updates for admin roles and Focal Persons
+    if (!['Super_Admin', 'Admin', 'PACD', 'Focal Person'].includes(userRole)) {
+      return res.status(403).json({ error: 'Access denied. Only authorized personnel can update assessments.' });
+    }
+
+    const { id } = req.params;
+    const { assessment_remarks, grand_total } = req.body;
     const [result] = await dbPool.query(
-      'UPDATE profile_entries SET assessment_status = ?, assessment_remarks = ? WHERE id = ?',
-      [assessment_status ?? null, assessment_remarks ?? null, id]
+      'UPDATE profile_entries SET assessment_remarks = ?, grand_total = ? WHERE id = ?',
+      [assessment_remarks ?? null, grand_total ?? null, id]
     );
     if (result.affectedRows === 0) return res.status(404).json({ error: 'Applicant not found.' });
     res.json({ message: 'Assessment saved.' });
@@ -649,11 +872,21 @@ router.put('/:id/assessment', verifyToken, async (req, res) => {
 });
 
 // --- PUT /api/applicants/:id/pre-assessment ---
-router.put('/:id/pre-assessment', async (req, res) => {
-  const { id } = req.params;
-  const { educational_attainment, relevant_training, relevant_work_experience, written_examination } = req.body;
+router.put('/:id/pre-assessment', verifyToken, async (req, res) => {
+  const userId = req.user?.id;
+  if (!userId) return res.status(401).json({ error: 'Authentication required.' });
 
   try {
+    const [userRows] = await dbPool.query('SELECT hiretrack_role AS role FROM users WHERE id = ?', [userId]);
+    const userRole = userRows[0]?.role;
+
+    // Only allow pre-assessment updates for admin roles and Focal Persons
+    if (!['Super_Admin', 'Admin', 'PACD', 'Focal Person'].includes(userRole)) {
+      return res.status(403).json({ error: 'Access denied. Only authorized personnel can update pre-assessments.' });
+    }
+
+    const { id } = req.params;
+    const { educational_attainment, relevant_training, relevant_work_experience, written_examination } = req.body;
     // fetch existing JSON so we don't overwrite interview_average or other fields
     const [rows] = await dbPool.query('SELECT pre_assessment FROM profile_entries WHERE id = ?', [id]);
     let existing = {};
@@ -679,6 +912,231 @@ router.put('/:id/pre-assessment', async (req, res) => {
   } catch (err) {
     console.error('Pre-assessment save error:', err.message);
     res.status(500).json({ error: 'Failed to save pre-assessment.' });
+  }
+});
+
+// --- GET /api/applicants/weights/:survey/:position ---
+// Fetch saved weights for a specific survey and position combination
+router.get('/weights/:survey/:position', verifyToken, async (req, res) => {
+  const { survey, position } = req.params;
+  try {
+    // First, get survey_id and position_id from their respective tables
+    const [surveyRows] = await dbPool.query('SELECT id FROM surveys WHERE name = ?', [survey]);
+    const [positionRows] = await dbPool.query('SELECT id FROM positions WHERE title = ?', [position]);
+    
+    if (surveyRows.length === 0 || positionRows.length === 0) {
+      res.json(null); // Survey or position not found
+      return;
+    }
+    
+    const surveyId = surveyRows[0].id;
+    const positionId = positionRows[0].id;
+    
+    // Query using survey_id and position_id
+    const [rows] = await dbPool.query(
+      'SELECT educational_attainment, relevant_training, relevant_work_experience, written_examination, interview_average FROM assessment_weights WHERE survey_id = ? AND position_id = ?',
+      [surveyId, positionId]
+    );
+    if (rows.length > 0) {
+      res.json(rows[0]);
+    } else {
+      res.json(null); // No saved weights for this combination
+    }
+  } catch (err) {
+    console.error('Error fetching weights:', err.message);
+    res.status(500).json({ error: 'Failed to fetch weights.' });
+  }
+});
+
+// --- POST /api/applicants/weights ---
+// Save weights for a specific survey and position combination and update grand totals for all applicants in that group
+router.post('/weights', verifyToken, async (req, res) => {
+  const userId = req.user?.id;
+  if (!userId) return res.status(401).json({ error: 'Authentication required.' });
+
+  try {
+    const [userRows] = await dbPool.query('SELECT hiretrack_role AS role FROM users WHERE id = ?', [userId]);
+    const userRole = userRows[0]?.role;
+
+    // Only allow weights management for admin roles and Focal Persons
+    if (!['Super_Admin', 'Admin', 'PACD', 'Focal Person'].includes(userRole)) {
+      return res.status(403).json({ error: 'Access denied. Only authorized personnel can manage assessment weights.' });
+    }
+
+    const { survey_name, position, educational_attainment, relevant_training, relevant_work_experience, written_examination, interview_average, applicant_totals } = req.body;
+    // Get survey_id and position_id from their respective tables
+    const [surveyRows] = await dbPool.query('SELECT id FROM surveys WHERE name = ?', [survey_name]);
+    const [positionRows] = await dbPool.query('SELECT id FROM positions WHERE title = ?', [position]);
+    
+    if (surveyRows.length === 0 || positionRows.length === 0) {
+      res.status(400).json({ error: 'Survey or position not found.' });
+      return;
+    }
+    
+    const surveyId = surveyRows[0].id;
+    const positionId = positionRows[0].id;
+    
+    // Save weights using survey_id and position_id only
+    await dbPool.query(
+      `INSERT INTO assessment_weights (survey_id, position_id, educational_attainment, relevant_training, relevant_work_experience, written_examination, interview_average)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE 
+       educational_attainment = VALUES(educational_attainment),
+       relevant_training = VALUES(relevant_training),
+       relevant_work_experience = VALUES(relevant_work_experience),
+       written_examination = VALUES(written_examination),
+       interview_average = VALUES(interview_average)`,
+      [surveyId, positionId, educational_attainment, relevant_training, relevant_work_experience, written_examination, interview_average]
+    );
+
+    // Update grand totals and weighted scores for all applicants
+    if (applicant_totals && Array.isArray(applicant_totals) && applicant_totals.length > 0) {
+      for (const { id, grand_total } of applicant_totals) {
+        // Fetch the applicant's pre_assessment scores
+        const [appRows] = await dbPool.query('SELECT pre_assessment FROM profile_entries WHERE id = ?', [id]);
+        if (appRows.length > 0) {
+          const preAssessment = typeof appRows[0].pre_assessment === 'string'
+            ? JSON.parse(appRows[0].pre_assessment)
+            : appRows[0].pre_assessment;
+
+          // Calculate weighted scores
+          const ed_att = parseFloat(preAssessment?.educational_attainment) || 0;
+          const rel_train = parseFloat(preAssessment?.relevant_training) || 0;
+          const rel_work = parseFloat(preAssessment?.relevant_work_experience) || 0;
+          const written = parseFloat(preAssessment?.written_examination) || 0;
+          const interview = parseFloat(preAssessment?.interview_average) || 0;
+
+          const weightedScores = {
+            educational_attainment: ed_att ? parseFloat((ed_att * educational_attainment / 100).toFixed(2)) : null,
+            relevant_training: rel_train ? parseFloat((rel_train * relevant_training / 100).toFixed(2)) : null,
+            relevant_work_experience: rel_work ? parseFloat((rel_work * relevant_work_experience / 100).toFixed(2)) : null,
+            written_examination: written ? parseFloat((written * written_examination / 100).toFixed(2)) : null,
+            interview_average: interview ? parseFloat((interview * interview_average / 100).toFixed(2)) : null,
+          };
+
+          await dbPool.query(
+            'UPDATE profile_entries SET grand_total = ?, weighted_scores = ? WHERE id = ?',
+            [grand_total, JSON.stringify(weightedScores), id]
+          );
+        }
+      }
+    }
+
+    res.json({ message: 'Weights and grand totals saved successfully.' });
+  } catch (err) {
+    console.error('Error saving weights:', err.message);
+    res.status(500).json({ error: 'Failed to save weights.' });
+  }
+});
+
+// --- GET /api/applicants/reviewed ---
+// Returns applicants with completed pre-assessments (marked as "Assessed")
+// Accessible only to Super_Admin, Admin, and PACD
+// --- Get Assessed Applicants (for Employee Sync) ---
+router.get('/assessed', verifyToken, async (req, res) => {
+  const userId = req.user?.id;
+  if (!userId) return res.status(401).json({ error: 'Authentication required.' });
+
+  try {
+    const [userRows] = await dbPool.query('SELECT hiretrack_role AS role FROM users WHERE id = ?', [userId]);
+    const userRole = userRows[0]?.role;
+
+    // Check if user has permission (Super_Admin, Admin, or PACD)
+    if (!['Super_Admin', 'Admin', 'PACD'].includes(userRole)) {
+      return res.status(403).json({ error: 'Access denied. Only Admin, Super Admin, or PACD can view assessed applicants.' });
+    }
+
+    // Fetch applicants with interview_status = 'Assessed'
+    const [results] = await dbPool.query(`
+      SELECT
+        pe.*,
+        s.name as survey_name,
+        p.title as position
+      FROM profile_entries pe
+      LEFT JOIN surveys s ON pe.survey_id = s.id
+      LEFT JOIN positions p ON pe.position_id = p.id
+      WHERE pe.interview_status = 'Assessed'
+      ORDER BY pe.last_name, pe.first_name
+    `);
+    
+    res.json(results);
+  } catch (err) {
+    console.error(`Error fetching assessed applicants: ${err.message}`);
+    res.status(500).json({ error: 'Failed to retrieve assessed applicant data.' });
+  }
+});
+
+router.get('/reviewed', verifyToken, async (req, res) => {
+  const userId = req.user?.id;
+  if (!userId) return res.status(401).json({ error: 'Authentication required.' });
+
+  try {
+    const [userRows] = await dbPool.query('SELECT hiretrack_role AS role FROM users WHERE id = ?', [userId]);
+    const userRole = userRows[0]?.role;
+
+    // Check if user has permission (Super_Admin, Admin, or PACD)
+    if (!['Super_Admin', 'Admin', 'PACD'].includes(userRole)) {
+      return res.status(403).json({ error: 'Access denied. Only Admin, Super Admin, or PACD can view reviewed applicants.' });
+    }
+
+    // Fetch applicants with completed pre-assessments (non-null and non-'null' string)
+    const [results] = await dbPool.query(`
+      SELECT 
+        pe.*,
+        s.name as survey_name,
+        p.title as position
+      FROM profile_entries pe
+      LEFT JOIN surveys s ON pe.survey_id = s.id
+      LEFT JOIN positions p ON pe.position_id = p.id
+      WHERE pe.pre_assessment IS NOT NULL 
+        AND pe.pre_assessment != 'null'
+        AND pe.pre_assessment != ''
+        AND JSON_EXTRACT(pe.pre_assessment, '$.educational_attainment') IS NOT NULL
+        AND JSON_EXTRACT(pe.pre_assessment, '$.relevant_training') IS NOT NULL
+        AND JSON_EXTRACT(pe.pre_assessment, '$.relevant_work_experience') IS NOT NULL
+        AND JSON_EXTRACT(pe.pre_assessment, '$.written_examination') IS NOT NULL
+      ORDER BY pe.last_name, pe.first_name
+    `);
+    res.json(results);
+  } catch (err) {
+    console.error(`Error fetching reviewed applicants: ${err.message}`);
+    res.status(500).json({ error: 'Failed to retrieve reviewed applicant data.' });
+  }
+});
+
+router.post('/update-interview-status', verifyToken, async (req, res) => {
+  const { applicantIds, newStatus, actingUserId } = req.body;
+
+  if (!applicantIds || !Array.isArray(applicantIds) || applicantIds.length === 0) {
+    return res.status(400).json({ error: 'applicantIds must be a non-empty array' });
+  }
+
+  if (!newStatus) {
+    return res.status(400).json({ error: 'newStatus is required' });
+  }
+
+  try {
+    // Update interview_status for all provided applicant IDs
+    const placeholders = applicantIds.map(() => '?').join(',');
+    const query = `UPDATE profile_entries SET interview_status = ? WHERE id IN (${placeholders})`;
+    const params = [newStatus, ...applicantIds];
+
+    const [result] = await dbPool.query(query, params);
+
+    if (result.affectedRows > 0) {
+      res.status(200).json({ 
+        message: `Successfully updated interview status for ${result.affectedRows} applicant(s) to "${newStatus}"`,
+        updatedCount: result.affectedRows 
+      });
+    } else {
+      res.status(200).json({ 
+        message: 'No applicants were updated',
+        updatedCount: 0 
+      });
+    }
+  } catch (err) {
+    console.error(`Error updating interview status: ${err.message}`);
+    res.status(500).json({ error: 'Failed to update interview status.' });
   }
 });
 

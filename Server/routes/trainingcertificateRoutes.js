@@ -21,7 +21,6 @@ const executeTurso = async (sql, args) => {
   const authToken = process.env.TURSO_AUTH_TOKEN;
   
   if (!dbUrl || !authToken) {
-    console.warn("Turso DB URL or Token is not configured. Skipping Logbook entry.");
     return null;
   }
  
@@ -56,7 +55,7 @@ const executeTurso = async (sql, args) => {
 };
 
 // ─── Helper: Insert into Turso logbook and return the formatted REFERENCE_NUMBER ───
-// Falls back to crypto.randomUUID() if Turso is unavailable.
+// Throws error if Turso is unavailable or generation fails - no fallback to UUID
 const getTursoRefNumber = async (particulars, addressee, transmitterName, encodedBy) => {
   try {
     const insertResult = await executeTurso(
@@ -64,20 +63,47 @@ const getTursoRefNumber = async (particulars, addressee, transmitterName, encode
       [particulars, addressee, transmitterName || '', 'Admin', 'Walk-in', encodedBy || '', '']
     );
     const rowId = insertResult?.results?.[0]?.response?.result?.last_insert_rowid;
-    if (rowId) {
-      const fetchResult = await executeTurso(
-        "SELECT REFERENCE_NUMBER FROM Digital_Logbook WHERE id = ?",
-        [rowId]
-      );
-      const rows = fetchResult?.results?.[0]?.response?.result?.rows;
-      if (rows && rows.length > 0 && rows[0][0]) {
-        return rows[0][0].value;
+    if (!rowId) {
+      throw new Error('Failed to insert into Turso Digital_Logbook: no row ID returned');
+    }
+
+    // ✅ ADD RETRY LOGIC: Wait for Turso to generate REFERENCE_NUMBER
+    let refNumber = null;
+    let retries = 0;
+    const maxRetries = 5;
+    const retryDelay = 100; // milliseconds
+
+    while (!refNumber && retries < maxRetries) {
+      try {
+        const fetchResult = await executeTurso(
+          "SELECT REFERENCE_NUMBER FROM Digital_Logbook WHERE id = ?",
+          [rowId]
+        );
+        const rows = fetchResult?.results?.[0]?.response?.result?.rows;
+        if (rows && rows.length > 0 && rows[0][0]) {
+          refNumber = rows[0][0].value;
+          break; // Success, exit retry loop
+        }
+      } catch (fetchErr) {
+        // Fetch attempt failed, will retry
+      }
+
+      retries++;
+      if (!refNumber && retries < maxRetries) {
+        // Wait before next retry
+        await new Promise(resolve => setTimeout(resolve, retryDelay));
       }
     }
+
+    if (!refNumber) {
+      throw new Error(`[getTursoRefNumber] Could not fetch REFERENCE_NUMBER after ${maxRetries} retries for row ID ${rowId}. Turso may be unavailable or slow.`);
+    }
+
+    return refNumber;
   } catch (err) {
-    console.error('[getTursoRefNumber] Turso error, falling back to UUID:', err.message);
+    console.error('[getTursoRefNumber] Fatal error:', err.message);
+    throw new Error(`Failed to generate reference number from Turso: ${err.message}`);
   }
-  return crypto.randomUUID();
 };
 
 const formatDate = (dateString) => {

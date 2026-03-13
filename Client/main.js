@@ -47,6 +47,7 @@ async function startApp() {
       width: 1200,
       height: 800,
       show: false,
+      title: 'PSA Kalinga HireTrack',
       icon: path.join(__dirname, './System.ico'),
       backgroundColor: isDark ? '#111827' : '#ffffff',
       webPreferences: {
@@ -94,9 +95,9 @@ async function startApp() {
     const ipcHandleChannels = [
       'get-login-state','set-login-state','clear-login-state','session-expired',
       'get-dark-mode','set-dark-mode',
-      'login-google-loopback', 'login-google-silent',
+      'login-google-loopback', 'login-google-silent', 'clear-google-refresh-token',
       'get-server-ip','set-server-ip','restart-app','get-local-ip',
-      'login','prepare-download','save-file','open-file',
+      'login','prepare-download','save-file','open-file','auto-save-certificate',
       'backup-database','restore-database','save-csv-file',
       'get-app-version'
     ];
@@ -241,8 +242,9 @@ async function startApp() {
             await forceLogout(); // This now calls the refactored function
           }
         } catch (err) {
-          // network errors: ignore or log; do not force logout on transient network failure
-          // console.error('session watcher error', err.message);
+          // Network errors (server unreachable, timeout, etc.): force logout
+          // This ensures the app logs out when there's no internet or cannot reach the server
+          await forceLogout();
         }
       }, intervalMs);
     }
@@ -315,21 +317,32 @@ async function startApp() {
 
         const server = http.createServer(async (req, res) => {
           try {
-            if (req.url.startsWith('/?code=')) {
+            // Use captured serverPort to avoid "Cannot read properties of null" if server closes
+            const portToUse = serverPort || (server.address() ? server.address().port : null);
+            const urlParams = new URL(req.url, `http://127.0.0.1:${portToUse}`);
+            
+            const code = urlParams.searchParams.get('code');
+            const error = urlParams.searchParams.get('error');
+
+            if (code || error) {
               if (isProcessed) {
-                res.end('Authentication already processed.');
+                res.writeHead(200, { 'Content-Type': 'text/html' });
+                res.end('<h1>Authentication already processed.</h1><p>You can close this window.</p>');
                 return;
               }
               isProcessed = true;
 
-              // 1. Extract code from URL
-              // Use captured serverPort to avoid "Cannot read properties of null" if server closes
-              const portToUse = serverPort || (server.address() ? server.address().port : null);
-              const urlParams = new URL(req.url, `http://127.0.0.1:${portToUse}`);
-              const code = urlParams.searchParams.get('code');
+              if (error) {
+                res.writeHead(400, { 'Content-Type': 'text/html' });
+                res.end(`<h1>Authentication Failed</h1><p>Error: ${error}</p><p>You can close this window and try again.</p>`);
+                server.close();
+                resolve({ error: `Google OAuth Error: ${error}` });
+                return;
+              }
 
               // 2. Show success message to user
-              res.end('Authentication successful! You can close this window and return to the app.');
+              res.writeHead(200, { 'Content-Type': 'text/html' });
+              res.end('<h1>Authentication successful!</h1><p>You can close this window and return to the app.</p><script>window.close()</script>');
               server.close();
 
               // 3. Exchange code for tokens
@@ -353,8 +366,11 @@ async function startApp() {
                 }
                 resolve({ idToken: tokens.id_token, accessToken: tokens.access_token });
               } else {
-                resolve({ error: 'Failed to retrieve ID token from Google.' });
+                resolve({ error: tokens.error_description || 'Failed to retrieve ID token from Google.' });
               }
+            } else {
+                res.writeHead(404, {'Content-Type': 'text/plain'});
+                res.end('Not Found');
             }
           } catch (err) {
             resolve({ error: err.message });
@@ -364,8 +380,9 @@ async function startApp() {
 
         server.listen(0, '127.0.0.1', () => {
           serverPort = server.address().port;
-          // Added access_type=offline and prompt=consent to ensure we get a refresh token
-          const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?response_type=code&client_id=${client_id}&redirect_uri=http://127.0.0.1:${serverPort}&scope=openid%20email%20profile&access_type=offline&prompt=consent`;
+          // Removed prompt=consent because it can cause users to get stuck on the "Review Terms" screen 
+          // if they already consented previously.
+          const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?response_type=code&client_id=${client_id}&redirect_uri=http://127.0.0.1:${serverPort}&scope=openid%20email%20profile&access_type=offline&prompt=select_account`;
           shell.openExternal(authUrl);
         });
       });
@@ -417,6 +434,23 @@ async function startApp() {
         return { error: err.message };
       }
     });
+
+    // --- Clear Google Refresh Token Handler ---
+    // This allows users to disconnect their Google account
+    ipcMain.handle('clear-google-refresh-token', async () => {
+      try {
+        store.delete('googleRefreshToken');
+        return { 
+          success: true, 
+          message: 'Google account has been disconnected. You can now sign in with a different Google account.' 
+        };
+      } catch (err) {
+        return { 
+          success: false, 
+          message: 'Failed to disconnect Google account: ' + err.message 
+        };
+      }
+    });
     
     // --- Login handler ---
     ipcMain.handle('login', async (event, { username, password }) => {
@@ -441,8 +475,33 @@ async function startApp() {
           return { error: errorData.error || errorData.message || 'Invalid credentials' };
         }
       } catch (error) {
-        console.error(`Failed to connect to ${serverUrl}:`, error.message);
-        return { error: 'Server unreachable. Please check the IP address and your network connection.' };
+        console.error(`Failed to connect to ${serverUrl}:`, error.message, error.code);
+        
+        // Provide specific error messages based on error type
+        let errorMessage = 'Server unreachable. Please check the IP address and your network connection.';
+        let errorCode = 'CONNECTION_ERROR';
+        
+        if (error.code === 'ENOTFOUND') {
+          errorMessage = `Cannot resolve server address: ${serverIp}. Please check the Server IP Address.`;
+          errorCode = 'DNS_FAILED';
+        } else if (error.code === 'ECONNREFUSED') {
+          errorMessage = `Connection refused by ${serverIp}:3001. Server may be offline or not listening.`;
+          errorCode = 'CONNECTION_REFUSED';
+        } else if (error.code === 'ETIMEDOUT') {
+          errorMessage = `Connection timeout to ${serverIp}:3001. Server is not responding. Check IP address and network.`;
+          errorCode = 'TIMEOUT';
+        } else if (error.code === 'EHOSTUNREACH') {
+          errorMessage = `Host ${serverIp} is unreachable. Check your network connection and IP address.`;
+          errorCode = 'HOST_UNREACHABLE';
+        } else if (error.code === 'ENETUNREACH') {
+          errorMessage = 'Network is unreachable. Please check your internet connection.';
+          errorCode = 'NETWORK_UNREACHABLE';
+        } else if (error.name === 'AbortError') {
+          errorMessage = `Request timeout when connecting to ${serverIp}:3001. Server is not responding.`;
+          errorCode = 'REQUEST_TIMEOUT';
+        }
+        
+        return { error: errorMessage, errorCode };
       }
     });
     ipcMain.handle('prepare-download', async (event, { url, payload, fileType }) => {
@@ -596,31 +655,109 @@ async function startApp() {
 
     ipcMain.handle('save-csv-file', async (event, { content, fileName }) => {
         try {
-            const { filePath, canceled } = await dialog.showSaveDialog(mainWindow, {
-            defaultPath: fileName,
-            filters: [{ name: 'CSV Files', extensions: ['csv'] }]
-            });
-
-            if (canceled || !filePath) {
-            return { status: 'cancelled' };
+            // Define the target directory
+            const targetDir = path.join('C:\\', 'HireTrack PDFs', 'Employee Records');
+            
+            // Create directory if it doesn't exist
+            if (!fs.existsSync(targetDir)) {
+                fs.mkdirSync(targetDir, { recursive: true });
             }
+            
+            // Set the file path directly (auto-save without dialog)
+            const filePath = path.join(targetDir, fileName);
+            
             try {
-            fs.writeFileSync(filePath, content);
+                fs.writeFileSync(filePath, content);
             } catch (writeErr) {
-            if (writeErr.code === 'EBUSY' || writeErr.code === 'EPERM') {
-                throw new Error('The file is currently open.');
+                if (writeErr.code === 'EBUSY' || writeErr.code === 'EPERM') {
+                    throw new Error('The file is currently open.');
+                }
+                throw writeErr;
             }
-            throw writeErr;
-            }
+
+            // Auto-open the file
+            await shell.openPath(filePath);
 
             return { 
-            status: 'completed', 
-            message: 'File saved successfully!',
-            path: filePath 
+                status: 'completed', 
+                message: 'File saved to C:\\HireTrack PDFs\\Employee Records and opened!',
+                path: filePath 
             };
         } catch (err) {
             console.error('Failed to save CSV file:', err);
             return { status: 'failed', message: err.message };
+        }
+    });
+
+    ipcMain.handle('save-pdf', async (event, pdfData, fileName, folderName = 'Pre-Assessment Report') => {
+        try {
+            // Get the custom PDF folder path
+            const pdfFolderPath = path.join('C:', 'HireTrack PDFs', folderName);
+            
+            // Create the folder if it doesn't exist
+            if (!fs.existsSync(pdfFolderPath)) {
+                fs.mkdirSync(pdfFolderPath, { recursive: true });
+            }
+            
+            const filePath = path.join(pdfFolderPath, fileName);
+
+            // Convert base64 to buffer
+            const buffer = Buffer.from(pdfData, 'base64');
+
+            // Write file to the specified folder
+            fs.writeFileSync(filePath, buffer);
+
+            // Open the file with system default PDF reader
+            await shell.openPath(filePath);
+
+            return { status: 'success', path: filePath };
+        } catch (err) {
+            console.error('Failed to save or open PDF:', err);
+            return { status: 'failed', message: err.message };
+        }
+    });
+
+    // --- Auto Save Certificate Handler ---
+    // Auto-saves certificates to predefined folders without user prompt
+    ipcMain.handle('auto-save-certificate', async (event, { downloadId, fileName, certificateType }) => {
+        try {
+            const tempDir = path.join(app.getPath('temp'), 'psahired-downloads');
+            const extension = 'pdf';
+            const tempFilePath = path.join(tempDir, `${downloadId}.${extension}`);
+
+            if (!fs.existsSync(tempFilePath)) {
+                console.error(`Temp file not found at path: ${tempFilePath}`);
+                return { status: 'failed', message: 'Temporary file not found.' };
+            }
+
+            // Determine the target folder based on certificate type
+            let targetFolder;
+            if (certificateType === 'training') {
+                targetFolder = path.join('C:', 'HireTrack PDFs', 'Training Certificate');
+            } else if (certificateType === 'employment') {
+                targetFolder = path.join('C:', 'HireTrack PDFs', 'Employment Certificate');
+            } else {
+                return { status: 'failed', message: 'Invalid certificate type.' };
+            }
+
+            // Create the folder if it doesn't exist
+            if (!fs.existsSync(targetFolder)) {
+                fs.mkdirSync(targetFolder, { recursive: true });
+            }
+
+            const finalFilePath = path.join(targetFolder, `${fileName}.${extension}`);
+
+            // Move the file from temp to target folder
+            fs.renameSync(tempFilePath, finalFilePath);
+
+            return { 
+                status: 'completed', 
+                message: `Certificate saved to ${targetFolder}`,
+                path: finalFilePath
+            };
+        } catch (err) {
+            console.error('Failed to auto-save certificate:', err);
+            return { status: 'failed', message: `Auto-save failed: ${err.message}` };
         }
     });
 

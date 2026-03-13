@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { FiPlus } from 'react-icons/fi';
+import { FiPlus, FiDownload, FiSave, FiX, FiUpload } from 'react-icons/fi';
 import { parseISO, format } from 'date-fns';
-import { FaSort, FaSortUp, FaSortDown } from 'react-icons/fa';
+import { FaSort, FaSortUp, FaSortDown, FaEye, FaPencilAlt, FaTrash } from 'react-icons/fa';
 import ProgressModal from '../components/Progress';
+import ToastContainer from '../components/ToastContainer';
+import useToast from '../hooks/useToast';
 import { apiFetch } from '../components/API';
 import { useSettings } from '../context/SettingsContext';
 
@@ -23,20 +25,6 @@ const useClickOutside = (ref, handler) => {
     };
   }, [ref, handler]);
 };
-const parseCSV = (text) => {
-    const lines = text.split(/\r\n|\n/).filter(line => line.trim() !== '');
-    if (lines.length < 2) return [];
-    const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
-    return lines.slice(1).map(line => {
-        const values = line.split(',');
-        const obj = headers.reduce((acc, header, index) => {
-            if (values[index]) acc[header] = values[index].replace(/"/g, '').trim();
-            return acc;
-        }, {});
-        return Object.keys(obj).length > 0 && obj[headers[0]] ? obj : null;
-    }).filter(Boolean);
-};
-
 const formatDateForInput = (dateString) => {
     if (!dateString) return '';
     try {
@@ -102,7 +90,7 @@ const SearchableDropdown = ({ options, value, onChange, placeholder, id, require
                 {filteredOptions.map((option) => (
                   <li
                     key={option.value}
-                    className={`cursor-pointer px-4 py-2 text-gray-800 dark:text-gray-200 hover:bg-blue-500 hover:text-white ${
+                    className={`cursor-pointer px-4 py-2 text-gray-800 dark:text-gray-200 hover:bg-blue-500 hover:text-white whitespace-normal break-words ${
                       option.value === value ? 'bg-blue-100 dark:bg-blue-600' : ''
                     }`}
                     onClick={() => handleSelectOption(option)}
@@ -129,29 +117,55 @@ const Trainings = () => {
     const [employees, setEmployees] = useState([]);
     const [trainingTitles, setTrainingTitles] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
-    const [error, setError] = useState(null);
+    const { toasts, showToast, removeToast } = useToast();
     const [filters, setFilters] = useState({ query: '' });
     const [currentPage, setCurrentPage] = useState(1);
     const [selectedTrainings, setSelectedTrainings] = useState(new Set());
     const [isModalOpen, setIsModalOpen] = useState(false);
-    const [isImportModalOpen, setIsImportModalOpen] = useState(false);
     const [formData, setFormData] = useState(INITIAL_FORM_STATE);
     const [editingTraining, setEditingTraining] = useState(null);
     const [viewingTraining, setViewingTraining] = useState(null);
     const [trainingToDelete, setTrainingToDelete] = useState(null);
-    const [csvData, setCsvData] = useState([]);
-    const [importResults, setImportResults] = useState(null);
-    const fileInputRef = useRef(null);
+    const [originalFormData, setOriginalFormData] = useState(null);
 
     const [isProgressModalOpen, setIsProgressModalOpen] = useState(false);
     const [progressMessage, setProgressMessage] = useState('');
     const [isProgressComplete, setIsProgressComplete] = useState(false);
     const [savedFilePath, setSavedFilePath] = useState(null);
 
+    const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+    const [syncModalStep, setSyncModalStep] = useState('filter'); // 'filter', 'preview', or 'results'
+    const [isSyncLoading, setIsSyncLoading] = useState(false);
+    const [syncSelectedSurveyName, setSyncSelectedSurveyName] = useState('');
+    const [syncSelectedPosition, setSyncSelectedPosition] = useState('');
+    const [syncAvailableSurveys, setSyncAvailableSurveys] = useState([]);
+    const [syncAvailablePositions, setSyncAvailablePositions] = useState([]);
+    const [syncPendingCount, setSyncPendingCount] = useState(0);
+    const [syncModalResults, setSyncModalResults] = useState(null);
+    const [syncPreviewApplicants, setSyncPreviewApplicants] = useState([]);
+    const [duplicateMarkers, setDuplicateMarkers] = useState(new Map());
+    const [excludedApplicants, setExcludedApplicants] = useState(new Set());
+    const [syncIsSurveyDropdownOpen, setSyncIsSurveyDropdownOpen] = useState(false);
+    const [syncIsPositionDropdownOpen, setSyncIsPositionDropdownOpen] = useState(false);
+    const [isCreatingNewTitle, setIsCreatingNewTitle] = useState(false);
+
+    // Import states for sync modal
+    const [importErrors, setImportErrors] = useState({});
+    const [isImportLoading, setIsImportLoading] = useState(false);
+
+    // Form state for adding new training within sync modal
+    const [syncTrainingForm, setSyncTrainingForm] = useState({
+        title: '',
+        start_date: '',
+        end_date: '',
+        hours: '',
+        venue: ''
+    });
+
     const [sessionState, setSessionState] = useState(null);
-    const [successMessage, setSuccessMessage] = useState(null);
     const [sortConfig, setSortConfig] = useState({ key: 'id', direction: 'ascending' });
     const canManage = useMemo(() => sessionState && MANAGABLE_ROLES.includes(sessionState.user.role), [sessionState]);
+    const canExport = useMemo(() => sessionState && sessionState.user.role === 'Super_Admin', [sessionState]);
     const rowsPerPage = 9;
     const viewModalRef = useRef(null);
 
@@ -161,24 +175,221 @@ const Trainings = () => {
 
     const handleCloseAddEditModal = useCallback(() => {
         setIsModalOpen(false);
-        setError(null);
         setFormData(INITIAL_FORM_STATE);
+        setOriginalFormData(null);
     }, []);
 
     const handleCloseViewModal = useCallback(() => {
         setViewingTraining(null);
     }, []);
 
-    const handleCloseImportModal = useCallback(() => {
-        setIsImportModalOpen(false);
-        setImportResults(null);
-        setCsvData([]);
+    const fetchSyncFilterOptions = useCallback(async () => {
+        if (!serverIp) return;
+        try {
+            const data = await apiFetch('trainings/sync-filter-options', serverIp);
+            setSyncAvailableSurveys(data.surveys || []);
+            setSyncAvailablePositions([]);
+            setSyncPendingCount(data.pendingCount);
+        } catch (err) {
+            showToast(err.message, 'error');
+        }
+    }, [serverIp, showToast]);
+
+    const handleSyncClick = async () => {
+        setIsSyncLoading(true);
+        
+        try {
+            await fetchSyncFilterOptions();
+            setSyncSelectedSurveyName('');
+            setSyncSelectedPosition('');
+            setSyncModalStep('filter');
+            setSyncTrainingForm({ title: '', start_date: '', end_date: '', hours: '', venue: '' });
+            setIsCreatingNewTitle(false);
+            setIsSyncModalOpen(true);
+        } catch (err) {
+            showToast(err.message, 'error');
+        } finally {
+            setIsSyncLoading(false);
+        }
+    };
+
+    const handleSyncSurveySelect = async (surveyName) => {
+        setSyncSelectedSurveyName(surveyName);
+        setSyncSelectedPosition('');
+        setSyncIsSurveyDropdownOpen(false);
+        
+        if (surveyName) {
+            try {
+                const data = await apiFetch(`trainings/sync-filter-options?survey=${encodeURIComponent(surveyName)}`, serverIp);
+                setSyncAvailablePositions(data.positions || []);
+            } catch (err) {
+                showToast(err.message, 'error');
+            }
+        }
+    };
+
+    const handleCloseSyncModal = useCallback(() => {
+        setIsSyncModalOpen(false);
+        setSyncModalStep('filter');
+        setSyncSelectedSurveyName('');
+        setSyncSelectedPosition('');
+        setSyncModalResults(null);
+        setSyncPreviewApplicants([]);
+        setDuplicateMarkers(new Map());
+        setExcludedApplicants(new Set());
+        setSyncTrainingForm({ title: '', start_date: '', end_date: '', hours: '', venue: '' });
+        setImportErrors({});
+        setIsImportLoading(false);
+        setIsCreatingNewTitle(false);
+        setImportErrors({});
+        setIsImportLoading(false);
     }, []);
+
+    const handleSubmitImport = async () => {
+        if (Object.keys(importErrors).length > 0) {
+            showToast('Please fix all errors before importing.', 'error');
+            return;
+        }
+
+        setIsImportLoading(true);
+        try {
+            // 1. Get the list of IDs only (backend expects an array of primitives, not objects)
+            const applicantIds = syncPreviewApplicants
+                .filter(app => !excludedApplicants.has(app.id))
+                .map(app => app.id);
+
+            // 2. Extract the specific ID from your form state
+            // Verify if your state key is 'id' or 'trainingTitleId'
+            const trainingTitleId = syncModalResults?.trainingTitleId || syncTrainingForm.id || syncTrainingForm.trainingTitleId;
+
+            const result = await apiFetch('trainings/sync-finalize', serverIp, {
+                method: 'POST',
+                body: JSON.stringify({
+                    actingUserId: sessionState.user.id,
+                    applicantIds: applicantIds,     // Changed from 'applicants'
+                    trainingTitleId: trainingTitleId // Changed from 'trainingData'
+                })
+            });
+
+            showToast(result.message, 'success');
+            setIsSyncModalOpen(false); // Close the modal after successful sync
+            setTimeout(() => {
+                window.location.reload();
+            }, 1500);
+        } catch (err) {
+            showToast(err.message || 'Failed to import trainings.', 'error');
+        } finally {
+            setIsImportLoading(false);
+        }
+    };
+
+    const handleToggleExcludeApplicant = (id) => {
+        setExcludedApplicants(prev => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
+        });
+    };
+
+    const handleConfirmSyncFilter = async (e) => {
+        if (e) e.preventDefault();
+        
+        if (!syncSelectedSurveyName) {
+            showToast('Please select a survey.', 'warning');
+            return;
+        }
+        if (!syncSelectedPosition) {
+            showToast('Please select a position.', 'warning');
+            return;
+        }
+        
+        // Validation based on mode
+        if (isCreatingNewTitle && !syncTrainingForm.title.trim()) {
+            showToast('Please enter a new training title.', 'warning');
+            return;
+        }
+        if (!isCreatingNewTitle && !syncTrainingForm.id) {
+            showToast('Please select an existing training title.', 'warning');
+            return;
+        }
+
+        setIsSyncLoading(true);
+        try {
+            let trainingId = syncTrainingForm.id;
+
+            // Step 1: Create the training title ONLY if creating new
+            if (isCreatingNewTitle) {
+                const trainingResult = await apiFetch('trainings/titles', serverIp, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        ...syncTrainingForm,
+                        actingUserId: sessionState?.user?.id
+                    })
+                });
+                trainingId = trainingResult.id;
+                // Update form state with the new ID so it persists
+                setSyncTrainingForm(prev => ({ ...prev, id: trainingId }));
+            }
+
+            // Step 2: Use the new ID for bulk update and status change to 'Synced Trainings'
+            const result = await apiFetch('trainings/sync-bulk-update', serverIp, {
+                method: 'POST',
+                body: JSON.stringify({
+                    actingUserId: sessionState?.user?.id,
+                    surveyName: syncSelectedSurveyName,
+                    position: syncSelectedPosition,
+                    trainingTitleId: trainingId
+                })
+            });
+
+            // Step 3: Check for duplicates among the synced applicants
+            const duplicateCheckResult = await apiFetch('employees/check-duplicates', serverIp, {
+                method: 'POST',
+                body: JSON.stringify({ actingUserId: sessionState.user.id })
+            });
+
+            const syncedApplicants = result.applicants || [];
+
+            // Filter applicants: only those with "Hired" in assessment_remarks and not starting with "REPLACED"
+            const filteredSyncedApplicants = syncedApplicants.filter(app => app.assessment_remarks === 'Hired');
+
+            const duplicateMap = new Map();
+            const duplicateIds = new Set();
+        
+            
+            if (duplicateCheckResult.duplicateChecks && filteredSyncedApplicants.length > 0) {
+                // Create a Set of IDs from our FILTERED list for quick lookup
+                const filteredIds = new Set(filteredSyncedApplicants.map(a => a.id));
+                
+                duplicateCheckResult.duplicateChecks.forEach(check => {
+                    // If the duplicate is one of our filtered applicants, add it to the map/set
+                    if (check.duplicateStatus !== 'New Record' && filteredIds.has(check.id)) {
+                        duplicateMap.set(check.id, check);
+                        duplicateIds.add(check.id);
+                    }
+                });
+            }
+
+            setSyncPreviewApplicants(filteredSyncedApplicants);
+            setDuplicateMarkers(duplicateMap);
+            setExcludedApplicants(duplicateIds);
+            setSyncModalResults(result);
+            setSyncModalStep('preview');
+            
+            showToast(result.message || 'Applicants synced to training successfully!', 'success');
+            await fetchData();
+            await fetchSyncFilterOptions();
+        } catch (err) {
+            showToast(err.message || 'Failed to sync training applicants.', 'error');
+        } finally {
+            setIsSyncLoading(false);
+        }
+    };
 
     const fetchData = useCallback(async () => {
         if (!serverIp || !sessionState) return;
         setIsLoading(true);
-        setError(null);
         try {
             const requests = [apiFetch('trainings', serverIp)];
             if (MANAGABLE_ROLES.includes(sessionState.user.role)) {
@@ -192,11 +403,11 @@ const Trainings = () => {
             if (titlesData) setTrainingTitles(titlesData);
 
         } catch (err) {
-            setError(err.message);
+            showToast(err.message, 'error');
         } finally {
             setIsLoading(false);
         }
-    }, [sessionState, serverIp]);
+    }, [sessionState, serverIp, showToast]);
 
     useEffect(() => {
         const getSession = async () => {
@@ -208,18 +419,19 @@ const Trainings = () => {
                     throw new Error("Authentication failed. Please log in again.");
                 }
             } catch (err) {
-                setError(err.message);
+                showToast(err.message, 'error');
                 setIsLoading(false);
             }
         };
         getSession();
-    }, []);
+    }, [showToast]);
 
     useEffect(() => {
         if (sessionState && !isSettingsLoading) {
             fetchData();
+            fetchSyncFilterOptions();
         }
-    }, [sessionState, isSettingsLoading, fetchData]);
+    }, [sessionState, isSettingsLoading, fetchData, fetchSyncFilterOptions]);
 
     const filteredAndSortedTrainings = useMemo(() => {
         let processedData = [...trainings];
@@ -268,6 +480,27 @@ const Trainings = () => {
         })).sort((a, b) => a.label.localeCompare(b.label)),
     [trainingTitles]);
 
+    const hasChanges = useMemo(() => {
+        if (!editingTraining || !originalFormData) return true;
+        return JSON.stringify(formData) !== JSON.stringify(originalFormData);
+    }, [formData, originalFormData, editingTraining]);
+
+    const isTrainingEndDateValid = useMemo(() => {
+        const endDateStr = syncTrainingForm.end_date;
+        if (!endDateStr) {
+            return true; // Allow if no end date is set
+        }
+        try {
+            const today = new Date();
+            today.setHours(0, 0, 0, 0); // Normalize to start of day
+            const [year, month, day] = endDateStr.split('-').map(Number);
+            const localEndDate = new Date(year, month - 1, day);
+            return localEndDate >= today;
+        } catch (e) {
+            return false; // Invalid date format
+        }
+    }, [syncTrainingForm.end_date]);
+
     if (!sessionState || isLoading || isSettingsLoading) {
         return (
           <div className="p-4 sm:p-6 lg:p-8">
@@ -314,21 +547,26 @@ const Trainings = () => {
     const handleFilterChange = (e) => setFilters({ query: e.target.value });
     const handleNextPage = () => setCurrentPage(prev => Math.min(prev + 1, totalPages));
     const handlePreviousPage = () => setCurrentPage(prev => Math.max(prev - 1, 1));
-    const handleInputChange = (e) => setFormData(prev => ({ ...prev, [e.target.name]: e.target.value }));
-    const handleAddClick = () => { setEditingTraining(null); setFormData(INITIAL_FORM_STATE); setError(null); setIsModalOpen(true); };
+    const handleAddClick = () => { 
+        setEditingTraining(null); 
+        setFormData(INITIAL_FORM_STATE); 
+        setOriginalFormData(null);
+        setIsModalOpen(true); 
+    };
     const handleViewClick = (training) => setViewingTraining(training);
     
     const handleEditClick = (training) => {
         setEditingTraining(training);
-        setFormData({
+        const initialData = {
             employee_id: training.employee_id,
             training_title_id: training.training_title_id,
             start_date: formatDateForInput(training.start_date),
             end_date: formatDateForInput(training.end_date),
             hours: training.hours,
             venue: training.venue
-        });
-        setError(null);
+        };
+        setFormData(initialData);
+        setOriginalFormData(initialData);
         setIsModalOpen(true);
     };
 
@@ -336,28 +574,22 @@ const Trainings = () => {
     
     const handleFormSubmit = async (e) => {
         e.preventDefault();
-        setError(null);
-        if (new Date(formData.end_date) < new Date(formData.start_date)) {
-            setError('End date cannot be earlier than the start date.');
-            return;
-        }
 
         const endpoint = editingTraining ? `trainings/${editingTraining.id}` : 'trainings';
         const method = editingTraining ? 'PUT' : 'POST';
         const body = { ...formData, actingUserId: sessionState?.user?.id };
 
         try {
-            await apiFetch(endpoint, serverIp, { method, body: JSON.stringify(body) }); // 3. PASS serverIp
+            await apiFetch(endpoint, serverIp, { method, body: JSON.stringify(body) });
             setIsModalOpen(false);
             fetchData();
-            setSuccessMessage(editingTraining ? 'Training record updated successfully.' : 'Training record added successfully.');
-            setTimeout(() => setSuccessMessage(null), 3000);
+            showToast(editingTraining ? 'Training record updated successfully.' : 'Training record assigned successfully.', 'success');
         } catch (err) {
             try {
                 const parsedError = JSON.parse(err.message);
-                setError(parsedError.error || parsedError.message || "An unknown error occurred.");
+                showToast(parsedError.error || parsedError.message || "An unknown error occurred.", 'error');
             } catch (e) {
-                setError(err.message);
+                showToast(err.message, 'error');
             }
         }
     };
@@ -371,10 +603,9 @@ const Trainings = () => {
             });
             setTrainingToDelete(null);
             fetchData();
-            setSuccessMessage('Training record deleted successfully.');
-            setTimeout(() => setSuccessMessage(null), 3000);
+            showToast('Training record deleted successfully.', 'success');
         } catch (err) {
-            setError(err.message);
+            showToast(err.message, 'error');
             setTrainingToDelete(null);
         }
     };
@@ -395,60 +626,6 @@ const Trainings = () => {
             }));
         }
     };
-
-    const handleConfirmImport = async () => {
-        if (csvData.length === 0) return;
-        setImportResults({ status: 'importing', message: 'Importing, please wait...' });
-        try {
-            const result = await apiFetch('trainings/import', serverIp, {
-                method: 'POST',
-            body: JSON.stringify({ actingUserId: sessionState.user.id, trainings: csvData })
-            });
-            setImportResults({ status: 'success', ...result });
-            fetchData();
-        } catch (err) {
-            let finalMessage = 'Import failed due to an unknown error.';
-            let finalErrors = [];
-
-            try {
-                const parsedError = JSON.parse(err.message);
-                finalErrors = parsedError.errors || [];
-
-                if (finalErrors.length > 0) {
-                    finalMessage = "Please fix the following errors found in your file:";
-                } else {
-                    finalMessage = parsedError.error || parsedError.message || finalMessage;
-                }
-            } catch (e) {
-                finalMessage = err.message || finalMessage;
-            }
-
-            setImportResults({
-                status: 'error',
-                message: finalMessage,
-                errors: finalErrors
-            });
-        }
-    };
-
-    const handleFileSelect = (event) => {
-        const file = event.target.files[0];
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            const parsedData = parseCSV(e.target.result);
-            if (parsedData.length === 0) {
-                setError('The selected CSV file is empty or could not be read.');
-                return;
-            }
-            setError(null);
-            setCsvData(parsedData);
-            setImportResults(null);
-            setIsImportModalOpen(true);
-        };
-        reader.readAsText(file);
-        event.target.value = null;
-    };
     
     const handleSelectSingle = (trainingId) => {
         const newSelection = new Set(selectedTrainings);
@@ -464,15 +641,12 @@ const Trainings = () => {
         }
     };
 
-    const handleClearSelection = () => setSelectedTrainings(new Set());
     const handleClearSearch = () => setFilters({ query: '' });
 
-    const handleExportSelected = () => {
-        if (selectedTrainings.size === 0) return;
-        const dataToExport = trainings.filter(t => selectedTrainings.has(t.id));
-
+    const handleExportAll = () => {
+        if (trainings.length === 0) return;
         const headers = ["employee_id", "fullname", "training_title"];
-        const csvContent = [headers.join(','), ...dataToExport.map(item => {
+        const csvContent = [headers.join(','), ...trainings.map(item => {
             const fullName = [item.first_name, item.middle_initial, item.last_name, item.suffix].filter(Boolean).join(' ');
             const row = [item.employee_identifier, fullName, item.training_title];
             return row.map(val => `"${String(val || '').replace(/"/g, '""')}"`).join(',');
@@ -507,20 +681,11 @@ const Trainings = () => {
         }
     };
 
-    const handleDownloadTemplate = () => {
-        const headers = ["employee_id", "training_title"];
-        const exampleData = `"PSAKLG-25-0001","Data Processing Using CSPro"`;
-        const content = headers.join(',') + "\n" + exampleData;
-        handleCsvDownload(content, 'template_training_records.csv');
-    };
+
 
     return (
         <div>
-            {successMessage && (
-                <div className="fixed top-5 right-5 z-[200] flex items-center gap-3 px-5 py-3 bg-green-600 text-white text-sm font-semibold rounded-lg shadow-lg">
-                    <span>✓</span> {successMessage}
-                </div>
-            )}
+            <ToastContainer toasts={toasts} onClose={removeToast} />
             <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
                 <h1 className="text-3xl font-bold text-gray-800 dark:text-white">Training Records</h1>
                 <div className="relative">
@@ -542,17 +707,12 @@ const Trainings = () => {
             
             {canManage && (
                 <div className="flex flex-wrap items-center gap-2 mb-4">
-                    <button onClick={handleAddClick} className="flex items-center gap-2 px-4 py-2 font-semibold text-white bg-blue-600 rounded-lg shadow-md hover:bg-blue-700"><FiPlus />Add New Training Record</button>
+                    <button onClick={handleAddClick} className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600"><FiPlus className="w-4 h-4" />Assign Training</button>
                     <div className="flex-grow" />
-                    <button onClick={handleDownloadTemplate} className="px-4 py-2 font-semibold text-white bg-gray-500 rounded-lg shadow-md hover:bg-gray-600">Download Template</button>
-                    <button onClick={() => fileInputRef.current.click()} className="px-4 py-2 font-semibold text-white bg-green-600 rounded-lg shadow-md hover:bg-green-700">Import CSV</button>
-                    <button onClick={handleExportSelected} disabled={selectedTrainings.size === 0} className="px-4 py-2 font-semibold text-gray-800 bg-yellow-400 rounded-lg shadow-md hover:bg-yellow-500 disabled:opacity-50">
-                        Export Selected ({selectedTrainings.size})
-                    </button>
-                    <input type="file" ref={fileInputRef} onChange={handleFileSelect} className="hidden" accept=".csv" />
-                    {selectedTrainings.size > 0 && (
-                        <button onClick={handleClearSelection} className="px-4 py-2 font-semibold text-white bg-red-600 rounded-lg shadow-md hover:bg-red-700">Clear Selection</button>
-                    )}
+                    <button onClick={handleSyncClick} disabled={isSyncLoading || syncPendingCount === 0} title={syncPendingCount === 0 ? 'No assessed applicants available for training record assignment' : `${syncPendingCount} assessed applicant/s ready for training record assignment`} className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-white bg-purple-600 rounded-lg hover:bg-purple-700 dark:bg-purple-700 dark:hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed"><FiDownload className="w-4 h-4" />{isSyncLoading ? 'Loading...' : `Assign Training to Hired (${syncPendingCount})`}</button>
+                    {canExport && <button onClick={handleExportAll} title="Export all training records" className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-gray-900 dark:text-gray-100 bg-yellow-400 rounded-lg hover:bg-yellow-500 dark:bg-yellow-600 dark:hover:bg-yellow-700">
+                        <FiDownload className="w-4 h-4" />Export All
+                    </button>}
                 </div>
             )}
             
@@ -591,10 +751,10 @@ const Trainings = () => {
                                     </td>
                                     <td className="px-5 py-4 text-gray-700 dark:text-gray-300">{rec.hours}</td>
                                     <td className="px-5 py-4">
-                                        <div className="flex items-center justify-center space-x-3">
-                                            <button onClick={() => handleViewClick(rec)} className="text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-white">View</button>
-                                            {canManage && <button onClick={() => handleEditClick(rec)} className="text-indigo-600 hover:text-indigo-900 dark:text-indigo-400 dark:hover:text-indigo-300">Edit</button>}
-                                            {canManage && <button onClick={() => handleDeleteClick(rec)} className="text-red-600 hover:text-red-900 dark:text-red-500 dark:hover:text-red-300">Delete</button>}
+                                        <div className="flex items-center justify-center space-x-1">
+                                            <button onClick={() => handleViewClick(rec)} title="View Training Record" className="p-1 rounded-lg transition-colors text-gray-500 hover:text-gray-800 hover:bg-gray-100 dark:text-gray-400 dark:hover:text-white dark:hover:bg-gray-700"><FaEye className="w-4 h-4" /></button>
+                                            {canManage && <button onClick={() => handleEditClick(rec)} title="Edit Training Record" className="p-1 rounded-lg transition-colors text-indigo-600 hover:text-indigo-900 hover:bg-indigo-50 dark:text-indigo-400 dark:hover:text-indigo-300 dark:hover:bg-indigo-900/20"><FaPencilAlt className="w-4 h-4" /></button>}
+                                            {canManage && <button onClick={() => handleDeleteClick(rec)} title="Delete Training Record" className="p-1 rounded-lg transition-colors text-red-600 hover:text-red-900 hover:bg-red-50 dark:text-red-500 dark:hover:text-red-300 dark:hover:bg-red-900/20"><FaTrash className="w-4 h-4" /></button>}
                                         </div>
                                     </td>
                                 </tr>
@@ -611,20 +771,19 @@ const Trainings = () => {
                     Showing {totalItems > 0 ? (currentPage - 1) * rowsPerPage + 1 : 0} to {Math.min(currentPage * rowsPerPage, totalItems)} of {totalItems} records
                 </span>
                 <div className="flex items-center space-x-2">
-                    <button onClick={handlePreviousPage} disabled={currentPage === 1} className="px-4 py-2 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded disabled:opacity-50">Previous</button>
-                    <span className="px-2">{currentPage}</span>
-                    <button onClick={handleNextPage} disabled={currentPage >= totalPages} className="px-4 py-2 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded disabled:opacity-50">Next</button>
+                    <button onClick={handlePreviousPage} disabled={currentPage === 1} title={currentPage === 1 ? 'Already on first page' : 'Go to previous page'} className="px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50">Previous</button>
+                    <span className="px-2 text-gray-700 dark:text-gray-300">{currentPage}</span>
+                    <button onClick={handleNextPage} disabled={currentPage >= totalPages} title={currentPage >= totalPages ? 'Already on last page' : 'Go to next page'} className="px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50">Next</button>
                 </div>
             </div>
 
             {isModalOpen && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
                     <div className="flex flex-col w-full max-w-xl max-h-[90vh] bg-white dark:bg-gray-800 rounded-lg shadow-xl">
-                        <div className="flex-shrink-0 px-6 py-4 border-b border-gray-200 dark:border-gray-700">
-                            <h2 className="text-xl font-semibold text-gray-900 dark:text-white">{editingTraining ? 'Edit Training Record' : 'Add New Training Record'}</h2>
+                        <div className="flex-shrink-0 px-6 py-4 border-b border-gray-200 dark:border-gray-700 rounded-t-lg">
+                            <h2 className="text-xl font-semibold text-gray-900 dark:text-white">{editingTraining ? 'Edit Training Record' : 'Assign Training to Employee'}</h2>
                         </div>
-                        <form onSubmit={handleFormSubmit} id="trainingForm" className="flex-auto p-6 overflow-y-auto space-y-4">
-                            {error && <div className="p-3 text-red-800 bg-red-100 dark:bg-red-900/50 dark:text-red-300 rounded-lg">{typeof error === 'object' ? error.title : error}</div>}
+                        <form onSubmit={handleFormSubmit} id="trainingForm" className="flex-auto p-6 space-y-4">
                             <div>
                                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Employee Name*</label>
                                 <SearchableDropdown
@@ -648,37 +807,10 @@ const Trainings = () => {
                                     required
                                 />
                             </div>
-
-                            <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Start Date*</label>
-                                    <input type="date" name="start_date" value={formData.start_date} onChange={handleInputChange} required 
-                                          disabled
-                                          className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">End Date*</label>
-                                    <input type="date" name="end_date" value={formData.end_date} onChange={handleInputChange} required 
-                                          disabled
-                                          className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
-                                </div>
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Duration (hours)*</label>
-                                <input type="number" name="hours" value={formData.hours} onChange={handleInputChange} required 
-                                        disabled
-                                        className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Venue*</label>
-                                <input type="text" name="venue" value={formData.venue} onChange={handleInputChange} required 
-                                        disabled
-                                        className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
-                            </div>
                         </form>
-                        <div className="flex-shrink-0 flex justify-end px-6 py-4 space-x-2 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-200 dark:border-gray-700">
-                            <button type="button" onClick={handleCloseAddEditModal} className="px-4 py-2 font-semibold text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm">Cancel</button>
-                            <button type="submit" form="trainingForm" className="px-4 py-2 font-semibold text-white bg-blue-600 rounded-md shadow-sm">Save Record</button>
+                        <div className="flex-shrink-0 flex justify-end px-6 py-4 space-x-2 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-200 dark:border-gray-700 rounded-b-lg">
+                            <button type="button" onClick={handleCloseAddEditModal} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600"><FiX className="w-4 h-4" />Cancel</button>
+                            <button type="submit" form="trainingForm" disabled={!formData.employee_id || !formData.training_title_id || (editingTraining && !hasChanges)} title={!formData.employee_id || !formData.training_title_id ? 'Please select both employee and training title' : (editingTraining && !hasChanges) ? 'No changes made' : ''} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"><FiSave className="w-4 h-4" />Save Record</button>
                         </div>
                     </div>
                 </div>
@@ -689,8 +821,8 @@ const Trainings = () => {
                         <h2 className="mb-4 text-xl font-bold text-gray-900 dark:text-white">Confirm Deletion</h2>
                         <p className="mb-6 text-gray-600 dark:text-gray-300">Are you sure? This action cannot be undone.</p>
                         <div className="flex justify-end space-x-4">
-                            <button onClick={() => setTrainingToDelete(null)} className="px-4 py-2 font-semibold bg-gray-200 text-gray-800 hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500 rounded-lg">Cancel</button>
-                            <button onClick={confirmDelete} className="px-4 py-2 font-semibold text-white bg-red-600 rounded-lg hover:bg-red-700">Delete</button>
+                            <button onClick={() => setTrainingToDelete(null)} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600"><FiX className="w-4 h-4" />Cancel</button>
+                            <button onClick={confirmDelete} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-red-600 rounded-lg hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600"><FaTrash className="w-4 h-4" />Delete</button>
                         </div>
                     </div>
                 </div>
@@ -732,7 +864,7 @@ const Trainings = () => {
                             </div>
                         </div>
                         <div className="flex justify-end mt-6">
-                            <button type="button" onClick={handleCloseViewModal} className="px-4 py-2 font-semibold bg-gray-200 text-gray-800 hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500 rounded-lg">Close</button>
+                            <button type="button" onClick={handleCloseViewModal} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600"><FiX className="w-4 h-4" />Close</button>
                         </div>
                     </div>
                 </div>
@@ -744,40 +876,312 @@ const Trainings = () => {
                 isComplete={isProgressComplete}
                 filePath={savedFilePath}
             />
-            {isImportModalOpen && (
-                <div className="fixed inset-0 z-40 flex items-center justify-center p-4 bg-black bg-opacity-50">
-                    <div className="z-50 w-full max-w-4xl p-6 bg-white rounded-lg shadow-2xl dark:bg-gray-800">
-                        <h2 className="mb-4 text-2xl font-bold text-gray-900 dark:text-white">{importResults ? 'Import Results' : 'Confirm Import'}</h2>
-                        {importResults ? (
-                            <div>
-                                {importResults.status === 'success' && <div className="p-3 text-green-800 bg-green-100 dark:bg-green-900/50 dark:text-green-300 rounded-lg">{importResults.message}</div>}
-                                {importResults.status === 'error' && (
-                                    <div className="p-3 text-red-800 bg-red-100 dark:bg-red-900/50 dark:text-red-300 rounded-lg">
-                                        <strong>{importResults.message}</strong>
-                                        {importResults.errors && importResults.errors.length > 0 && <ul className="pl-5 mt-2 text-sm list-disc">{importResults.errors.map((e, i) => <li key={i}>{e}</li>)}</ul>}
+            {isSyncModalOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
+                    <div className="flex flex-col w-full max-w-2xl max-h-[90vh] bg-white dark:bg-gray-800 rounded-lg shadow-xl overflow-hidden">
+                        <div className="flex-shrink-0 px-6 py-4 border-b border-gray-200 dark:border-gray-700">
+                            <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Sync Training to Applicants</h2>
+                            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Select Survey, Position, and Training Title to assign to applicants</p>
+                        </div>
+
+                        {syncModalStep === 'filter' ? (
+                            <form onSubmit={handleConfirmSyncFilter} className="flex flex-col min-h-0">
+                                <div className="flex-auto p-6 overflow-y-auto space-y-4">
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Survey Name <span className="text-red-500">*</span></label>
+                                            <div className="relative">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setSyncIsSurveyDropdownOpen(!syncIsSurveyDropdownOpen)}
+                                                    className="w-full text-left px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200"
+                                                >
+                                                    <span className="block whitespace-normal break-words">{syncSelectedSurveyName || 'Select a survey...'}</span>
+                                                </button>
+                                                {syncIsSurveyDropdownOpen && (
+                                                    <div className="absolute z-10 mt-1 w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 shadow-lg">
+                                                        {syncAvailableSurveys.length > 0 ? (
+                                                            <ul className="max-h-60 overflow-y-auto">
+                                                                {syncAvailableSurveys.map((survey) => (
+                                                                    <li key={survey} className="cursor-pointer px-4 py-2 hover:bg-blue-500 hover:text-white text-gray-800 dark:text-gray-200 whitespace-normal break-words" onClick={() => handleSyncSurveySelect(survey)}>
+                                                                        {survey}
+                                                                    </li>
+                                                                ))}
+                                                            </ul>
+                                                        ) : (
+                                                            <div className="px-4 py-2 text-gray-500 dark:text-gray-400">No surveys found</div>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Position <span className="text-red-500">*</span></label>
+                                            <div className="relative">
+                                                <button
+                                                    type="button"
+                                                    disabled={!syncSelectedSurveyName}
+                                                    onClick={() => setSyncIsPositionDropdownOpen(!syncIsPositionDropdownOpen)}
+                                                    className="w-full text-left px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:bg-gray-100 dark:disabled:bg-gray-700/50 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200"
+                                                >
+                                                    <span className="block whitespace-normal break-words">{syncSelectedPosition || 'Select a position...'}</span>
+                                                </button>
+                                                {syncIsPositionDropdownOpen && (
+                                                    <div className="absolute z-10 mt-1 w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 shadow-lg">
+                                                        {syncAvailablePositions.length > 0 ? (
+                                                            <ul className="max-h-60 overflow-y-auto">
+                                                                {syncAvailablePositions.map((position) => (
+                                                                    <li key={position} className="cursor-pointer px-4 py-2 hover:bg-blue-500 hover:text-white text-gray-800 dark:text-gray-200 whitespace-normal break-words" onClick={() => { setSyncSelectedPosition(position); setSyncIsPositionDropdownOpen(false); }}>
+                                                                        {position}
+                                                                    </li>
+                                                                ))}
+                                                            </ul>
+                                                        ) : (
+                                                            <div className="px-4 py-2 text-gray-500 dark:text-gray-400">No positions found</div>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
                                     </div>
-                                )}
-                                <div className="flex justify-end mt-4"><button onClick={() => setIsImportModalOpen(false)} className="px-4 py-2 font-semibold bg-gray-200 text-gray-800 hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500 rounded-lg">Close</button></div>
-                            </div>
-                        ) : (
-                            <>
-                                <p className="mb-4 text-gray-700 dark:text-gray-300">Found {csvData.length} valid records. Please review the first few rows.</p>
-                                <div className="overflow-auto border rounded-lg max-h-64 border-gray-200 dark:border-gray-700">
-                                    <table className="min-w-full text-sm">
-                                        <thead className="sticky top-0 bg-gray-100 dark:bg-gray-900">
-                                            <tr>{csvData.length > 0 && Object.keys(csvData[0]).map(h => <th key={h} className="p-2 font-semibold text-left text-gray-600 dark:text-gray-300">{h}</th>)}</tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                                            {csvData.slice(0, 5).map((row, i) => (<tr key={i}>{Object.values(row).map((val, j) => <td key={j} className="p-2 whitespace-nowrap">{val}</td>)}</tr>))}
-                                        </tbody>
-                                    </table>
+
+                                    <div className="pt-4 border-t border-gray-200 dark:border-gray-700">
+                                        <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-4">Training Information</h4>
+                                        
+                                        <div className="mb-4 flex items-center">
+                                            <input 
+                                                type="checkbox" 
+                                                id="createNewTitle" 
+                                                checked={isCreatingNewTitle} 
+                                                onChange={(e) => {
+                                                    setIsCreatingNewTitle(e.target.checked);
+                                                    // Reset form when toggling
+                                                    setSyncTrainingForm({ title: '', start_date: '', end_date: '', hours: '', venue: '' });
+                                                }}
+                                                className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600"
+                                            />
+                                            <label htmlFor="createNewTitle" className="ml-2 text-sm font-medium text-gray-900 dark:text-gray-300">Create a new Training Title</label>
+                                        </div>
+
+                                        <div className="space-y-4">
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Training Title <span className="text-red-500">*</span></label>
+                                                {isCreatingNewTitle ? (
+                                                    <textarea
+                                                        type="text"
+                                                        required
+                                                        value={syncTrainingForm.title}
+                                                        onChange={(e) => setSyncTrainingForm({ ...syncTrainingForm, title: e.target.value })}
+                                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200"
+                                                        placeholder="Enter new training title"
+                                                    />
+                                                ) : (
+                                                    <SearchableDropdown
+                                                        id="sync_training_title_id"
+                                                        options={trainingTitleOptions}
+                                                        value={syncTrainingForm.id}
+                                                        onChange={(val) => {
+                                                            const selected = trainingTitles.find(t => t.id === val);
+                                                            if (selected) {
+                                                                setSyncTrainingForm({
+                                                                    id: selected.id,
+                                                                    title: selected.title,
+                                                                    start_date: formatDateForInput(selected.start_date),
+                                                                    end_date: formatDateForInput(selected.end_date),
+                                                                    hours: selected.hours || '',
+                                                                    venue: selected.venue || ''
+                                                                });
+                                                            }
+                                                        }}
+                                                        placeholder="Select existing training..."
+                                                        required
+                                                    />
+                                                )}
+                                            </div>
+
+                                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                                <div>
+                                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Start Date</label>
+                                                    <input
+                                                        type="date"
+                                                        value={syncTrainingForm.start_date}
+                                                        onChange={(e) => setSyncTrainingForm({ ...syncTrainingForm, start_date: e.target.value })}
+                                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">End Date</label>
+                                                    <input
+                                                        type="date"
+                                                        value={syncTrainingForm.end_date}
+                                                        onChange={(e) => setSyncTrainingForm({ ...syncTrainingForm, end_date: e.target.value })}
+                                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Training Hours</label>
+                                                    <input
+                                                        type="number"
+                                                        value={syncTrainingForm.hours}
+                                                        onChange={(e) => setSyncTrainingForm({ ...syncTrainingForm, hours: e.target.value })}
+                                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200"
+                                                        placeholder="0"
+                                                    />
+                                                </div>
+                                            </div>
+
+                                            <div className="grid grid-cols-1 md:grid-cols-1 gap-4">
+                                                <div>
+                                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Venue</label>
+                                                    <textarea
+                                                        type="text"
+                                                        value={syncTrainingForm.venue}
+                                                        onChange={(e) => setSyncTrainingForm({ ...syncTrainingForm, venue: e.target.value })}
+                                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200"
+                                                        placeholder="Enter venue"
+                                                    />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
-                                <div className="flex justify-end mt-6 space-x-4">
-                                    <button onClick={handleCloseImportModal} className="px-4 py-2 font-semibold bg-gray-200 text-gray-800 hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500 rounded-lg">Cancel</button>
-                                    <button onClick={handleConfirmImport} className="px-4 py-2 font-semibold text-white bg-green-600 rounded-lg">Confirm Import</button>
+                                <div className="flex-shrink-0 flex justify-end px-6 py-4 space-x-2 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-200 dark:border-gray-700">
+                                    <button 
+                                        type="button" 
+                                        onClick={handleCloseSyncModal} 
+                                        className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors duration-200"
+                                    >
+                                        <FiX className="w-4 h-4" />Cancel
+                                    </button>
+                                    <button 
+                                        type="submit"
+                                        disabled={!syncSelectedSurveyName || !syncSelectedPosition || (!isCreatingNewTitle && !syncTrainingForm.id) || (isCreatingNewTitle && !syncTrainingForm.title) || isSyncLoading || !isTrainingEndDateValid}
+                                        className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 shadow-sm hover:shadow"
+                                        title={
+                                            !syncSelectedSurveyName ? 'Please select a survey' :
+                                            !syncSelectedPosition ? 'Please select a position' :
+                                            !isCreatingNewTitle && !syncTrainingForm.id ? 'Please select an existing training' :
+                                            isCreatingNewTitle && !syncTrainingForm.title ? 'Please enter a new training title' :
+                                            !isTrainingEndDateValid ? 'Cannot proceed: The training has already ended.' :
+                                            isSyncLoading ? 'Processing...' :
+                                            'Proceed to sync applicants'
+                                        }
+                                    >
+                                        <FiDownload className="w-4 h-4" />{isSyncLoading ? 'Processing...' : 'Proceed'}
+                                    </button>
+                                </div>
+                            </form>
+                        ) : syncModalStep === 'preview' ? (
+                            <div className="flex flex-col min-h-0">
+                                <div className="flex-auto p-6 overflow-y-auto space-y-4">
+                                    <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+                                        <p className="text-sm text-blue-800 dark:text-blue-300">
+                                            Found <strong>{syncPreviewApplicants.length}</strong> applicant(s) synced for <strong>{syncSelectedSurveyName}</strong> — <strong>{syncSelectedPosition}</strong>.
+                                            {duplicateMarkers.size > 0 && <span className="text-yellow-700 dark:text-yellow-400"> ⚠ <strong>{duplicateMarkers.size}</strong> possible duplicate(s) detected.</span>}
+                                        </p>
+                                        <p className="text-xs text-blue-700 dark:text-blue-400 mt-1 italic">Status changed to 'Synced Trainings'. Please review and confirm.</p>
+                                    </div>
+                                    
+                                    <div className="overflow-x-auto border border-gray-200 dark:border-gray-700 rounded-lg">
+                                        <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm">
+                                            <thead className="bg-gray-50 dark:bg-gray-800">
+                                                <tr>
+                                                    <th className="px-3 py-3 text-left font-semibold text-gray-900 dark:text-white">Validation</th>
+                                                    <th className="p-3 text-left font-semibold text-gray-900 dark:text-white">Name</th>
+                                                    <th className="p-3 text-left font-semibold text-gray-900 dark:text-white">Survey</th>
+                                                    <th className="p-3 text-left font-semibold text-gray-900 dark:text-white">Position</th>
+                                                    <th className="p-3 text-left font-semibold text-gray-900 dark:text-white">Assessment Remarks</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                                                {syncPreviewApplicants.map((app) => {
+                                                    const duplicate = duplicateMarkers.get(app.id);
+                                                    const isExcluded = excludedApplicants.has(app.id);
+                                                    return (
+                                                        <React.Fragment key={app.id}>
+                                                            <tr className={`hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors ${duplicate ? (isExcluded ? 'opacity-60 bg-gray-50 dark:bg-gray-800' : 'bg-yellow-50 dark:bg-yellow-900/10') : ''}`}>
+                                                                <td className="px-3 py-3">
+                                                                    {duplicate ? (
+                                                                        <div className="flex items-center gap-2">
+                                                                            <input
+                                                                                type="checkbox"
+                                                                                checked={!isExcluded}
+                                                                                onChange={() => handleToggleExcludeApplicant(app.id)}
+                                                                                className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 cursor-pointer"
+                                                                            />
+                                                                            <span className="text-xs font-bold text-yellow-600 dark:text-yellow-400">DUPLICATE</span>
+                                                                        </div>
+                                                                    ) : (
+                                                                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-green-600 dark:text-green-400">
+                                                                            <FiDownload className="w-3 h-3" /> Valid
+                                                                        </span>
+                                                                    )}
+                                                                </td>
+                                                                <td className="p-3">
+                                                                    <div className="font-medium text-gray-900 dark:text-white">
+                                                                        {[app.first_name, app.middle_initial, app.last_name, app.suffix].filter(Boolean).join(' ')}
+                                                                    </div>
+                                                                </td>
+                                                                <td className="p-3 text-gray-600 dark:text-gray-400">{app.survey_name}</td>
+                                                                <td className="p-3 text-gray-600 dark:text-gray-400">{app.position}</td>
+                                                                <td className="p-3 text-gray-600 dark:text-gray-400">{app.assessment_remarks}</td>
+                                                            </tr>
+                                                            {duplicate && !isExcluded && (
+                                                                <tr className="bg-yellow-50/30 dark:bg-yellow-900/5">
+                                                                    <td colSpan="4" className="px-6 py-2">
+                                                                        <div className="text-xs text-gray-600 dark:text-gray-400 flex items-center gap-2">
+                                                                            <span className="p-1 rounded-full bg-yellow-100 dark:bg-yellow-900 text-yellow-600">!</span>
+                                                                            <span>Matches existing: <span className="font-semibold">{duplicate.duplicateMatch?.similarName || 'Database match'}</span></span>
+                                                                            {duplicate.duplicateMatch?.existingEmployeeId && <span className="text-[10px] bg-gray-200 dark:bg-gray-700 px-1 rounded">ID: {duplicate.duplicateMatch.existingEmployeeId}</span>}
+                                                                        </div>
+                                                                    </td>
+                                                                </tr>
+                                                            )}
+                                                        </React.Fragment>
+                                                    );
+                                                })}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                                <div className="flex-shrink-0 flex justify-end px-6 py-4 space-x-2 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-200 dark:border-gray-700">
+                                    <button 
+                                        type="button" 
+                                        onClick={handleCloseSyncModal} 
+                                        className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600"
+                                    >
+                                        <FiX className="w-4 h-4" />Cancel
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={handleSubmitImport}
+                                        disabled={Object.keys(importErrors).length > 0 || isImportLoading}
+                                        title={isImportLoading ? 'Importing records...' : Object.keys(importErrors).length > 0 ? 'Please fix all errors before importing' : 'Import selected records'}
+                                        className="flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 font-semibold text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        {isImportLoading ? 'Importing...' : <><FiUpload className="w-4 h-4" />Import Records</>}
+                                    </button>
+                                </div>
+                            </div>
+                        ) : syncModalStep === 'results' && syncModalResults ? (
+                            <>
+                                <div className="flex-auto p-6 overflow-y-auto space-y-4">
+                                    <div className="bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 rounded-lg p-4">
+                                        <p className="text-sm text-green-800 dark:text-green-300 font-medium">{syncModalResults.message}</p>
+                                    </div>
+                                </div>
+                                <div className="flex-shrink-0 flex justify-end px-6 py-4 space-x-2 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-200 dark:border-gray-700">
+                                    <button 
+                                        type="button" 
+                                        onClick={handleCloseSyncModal} 
+                                        className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700"
+                                    >
+                                        <FiX className="w-4 h-4" />Close
+                                    </button>
                                 </div>
                             </>
-                        )}
+                        ) : null}
                     </div>
                 </div>
             )}

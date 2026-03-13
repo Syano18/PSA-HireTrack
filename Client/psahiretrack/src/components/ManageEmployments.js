@@ -1,40 +1,59 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { FiPlus, FiX } from 'react-icons/fi';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { FiPlus, FiX, FiSave } from 'react-icons/fi';
 import { parseISO, format } from 'date-fns';
-import { FaSort, FaSortUp, FaSortDown, FaExclamationTriangle } from 'react-icons/fa';
+import { FaSort, FaSortUp, FaSortDown, FaPencilAlt, FaTrash } from 'react-icons/fa';
 import { apiFetch } from '../components/API';
+import ToastContainer from './ToastContainer';
+import useToast from '../hooks/useToast';
 import { useSettings } from '../context/SettingsContext'; // 1. IMPORT THE HOOK
 
 const MANAGABLE_ROLES = ['Super_Admin', 'Admin', 'PACD'];
 
 const ManageSurveys = ({ session }) => {
     const { serverIp, isLoading: isSettingsLoading } = useSettings(); // 2. USE THE HOOK
+    const { toasts, showToast, removeToast } = useToast();
     const [surveys, setSurveys] = useState([]);
     const [focalPersons, setFocalPersons] = useState([]);
     const [availablePositions, setAvailablePositions] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
-    const [error, setError] = useState(null);
-    const [successMessage, setSuccessMessage] = useState(null);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [currentSurvey, setCurrentSurvey] = useState({ id: null, name: '' });
     const [searchQuery, setSearchQuery] = useState('');
     const [currentPage, setCurrentPage] = useState(1);
+    const [originalSurveyData, setOriginalSurveyData] = useState(null);
     const [surveyToDelete, setSurveyToDelete] = useState(null);
+    const [nonDeletableSurveys, setNonDeletableSurveys] = useState(new Set());
     const rowsPerPage = 10;
     const [sortConfig, setSortConfig] = useState({ key: 'name', direction: 'ascending' });
     
-    // State for hiring positions
-    const [selectedHiringPositions, setSelectedHiringPositions] = useState([]);
-    const [positionToAdd, setPositionToAdd] = useState('');
+    // State for rating criteria fields
+    const [hiringDate, setHiringDate] = useState('');
+    const [positionsToBeHired, setPositionsToBeHired] = useState([]);
+    const [ratingCriteriaPositionToAdd, setRatingCriteriaPositionToAdd] = useState('');
+    const [applicantsToHire, setApplicantsToHire] = useState('');
+
+    // Refs for field-level validation
+    const surveyNameRef = useRef(null);
+    const hiringDateRef = useRef(null);
+    const positionsDropdownRef = useRef(null);
 
     const canManage = useMemo(() => {
         return session && MANAGABLE_ROLES.includes(session.user?.role);
     }, [session]);
 
+    const handleCloseModal = useCallback(() => {
+        setIsModalOpen(false);
+        setHiringDate('');
+        setPositionsToBeHired([]);
+        setRatingCriteriaPositionToAdd('');
+        setApplicantsToHire('');
+        setCurrentSurvey({ id: null, name: '' });
+        setOriginalSurveyData(null);
+    }, []);
+
     const fetchData = useCallback(async () => {
         if (!session?.token || !serverIp) return; // Wait for session and serverIp
         setIsLoading(true);
-        setError(null);
         try {
             const [surveysData, focalPersonsData, positionsData] = await Promise.all([
                 apiFetch('employments/surveys', serverIp),        // 3. PASS serverIp
@@ -44,12 +63,26 @@ const ManageSurveys = ({ session }) => {
             setSurveys(surveysData);
             setFocalPersons(focalPersonsData);
             setAvailablePositions(positionsData);
+            
+            // Fetch usage info for each survey
+            const nonDeletable = new Set();
+            for (const survey of surveysData) {
+                try {
+                    const usage = await apiFetch(`employments/surveys/${survey.id}/usage`, serverIp);
+                    if (usage.count > 0) {
+                        nonDeletable.add(survey.id);
+                    }
+                } catch (err) {
+                    console.warn(`Could not check usage for survey ${survey.id}:`, err);
+                }
+            }
+            setNonDeletableSurveys(nonDeletable);
         } catch (err) {
-            setError(err.message);
+            showToast(err.message, 'error');
         } finally {
             setIsLoading(false);
         }
-    }, [session, serverIp]); // 4. ADD serverIp dependency
+    }, [session, serverIp, showToast]); // 4. ADD serverIp dependency
 
     useEffect(() => {
         // 5. UPDATE data fetch trigger
@@ -122,7 +155,7 @@ const ManageSurveys = ({ session }) => {
     const handleNextPage = () => setCurrentPage(prev => Math.min(prev + 1, totalPages));
     const handlePreviousPage = () => setCurrentPage(prev => Math.max(prev - 1, 1));
 
-    const handleOpenModal = (survey = { id: null, name: '', contract_start_date: null, contract_end_date: null, focal_person_id: '', hiring_end_date: '' }) => {
+    const handleOpenModal = (survey = { id: null, name: '', contract_start_date: null, contract_end_date: null, focal_person_id: '' }) => {
         const formatForInput = (dateString) => {
             if (!dateString) return '';
             try {
@@ -133,60 +166,180 @@ const ManageSurveys = ({ session }) => {
             }
         };
 
-        setCurrentSurvey({
+        const formattedSurvey = {
             ...survey,
             contract_start_date: formatForInput(survey.contract_start_date),
             contract_end_date: formatForInput(survey.contract_end_date),
-            hiring_end_date: '', // Always empty initially as it's not stored locally
-        });
-
+        };
+        setCurrentSurvey(formattedSurvey);
+        
+        // Pre-populate hiring_date and positions if survey is in future and editing existing record
+        if (survey.id) {
+            // Check if start date is in future
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const startDate = parseISO(survey.contract_start_date);
+            
+            if (startDate >= today) {
+                // Survey is still in future - pre-populate hiring data from Turso
+                if (survey.hiring_date) {
+                    setHiringDate(formatForInput(survey.hiring_date));
+                } else {
+                    setHiringDate('');
+                }
+                
+                // Parse positions from Turso (stored as JSON array or space-separated string)
+                if (survey.positions) {
+                    try {
+                        let posArray = typeof survey.positions === 'string' 
+                            ? JSON.parse(survey.positions) 
+                            : Array.isArray(survey.positions) 
+                            ? survey.positions 
+                            : [];
+                        
+                        // Handle both old format (array of strings) and new format (array of objects)
+                        if (Array.isArray(posArray)) {
+                            posArray = posArray.map(item => {
+                                if (typeof item === 'string') {
+                                    // Old format: convert to new format
+                                    const matchedPos = availablePositions.find(p => p.position_title === item);
+                                    return { position: item, position_id: matchedPos ? matchedPos.id : null, applicants_count: 0 };
+                                }
+                                return item;
+                            });
+                        }
+                        setPositionsToBeHired(Array.isArray(posArray) ? posArray : []);
+                    } catch (e) {
+                        setPositionsToBeHired([]);
+                    }
+                } else {
+                    setPositionsToBeHired([]);
+                }
+            } else {
+                // Survey is now past - reset hiring fields (no editing needed for past surveys)
+                setHiringDate('');
+                setPositionsToBeHired(survey.positions ? (typeof survey.positions === 'string' ? JSON.parse(survey.positions) : survey.positions) : []);
+            }
+        } else {
+            // New survey - reset hiring fields
+            setHiringDate('');
+            setPositionsToBeHired([]);
+        }
+        
+        if (survey.id) {
+            setOriginalSurveyData(formattedSurvey);
+        } else {
+            setOriginalSurveyData(null);
+        }
+        
+        setRatingCriteriaPositionToAdd('');
         setIsModalOpen(true);
-        setSelectedHiringPositions([]); // Reset hiring positions on open
-        setPositionToAdd('');
-        setError(null);
-    };
-
-    const handleCloseModal = () => {
-        setIsModalOpen(false);
-        setSelectedHiringPositions([]);
-        setCurrentSurvey({ id: null, name: '' });
     };
 
     const handleSave = async (e) => {
         e.preventDefault();
-        const { id, name } = currentSurvey;
+        const { id, name, contract_start_date, contract_end_date } = currentSurvey;
         if (!name.trim()) {
-            setError("Survey name cannot be empty.");
+            surveyNameRef.current?.focus();
+            surveyNameRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
             return;
         }
 
-        if (isOngoingOrUpcoming && !currentSurvey.hiring_end_date) {
-            setError("Hiring End Date is required for ongoing or upcoming surveys.");
+        // Validate contract dates
+        if (contract_start_date && contract_end_date) {
+            try {
+                const startDate = parseISO(contract_start_date);
+                const endDate = parseISO(contract_end_date);
+                
+                if (endDate <= startDate) {
+                    showToast('Contract End Date must be later than Contract Start Date.', 'error');
+                    return;
+                }
+            } catch (e) {
+                showToast('Invalid contract date format.', 'error');
+                return;
+            }
+        }
+
+        // Validate rating_criteria fields when start date is in future
+        if (isStartDateInPast === false && !hiringDate) {
+            showToast('Hiring End Date is required for future surveys.', 'error');
+            hiringDateRef.current?.focus();
+            hiringDateRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
             return;
+        }
+
+        if (isStartDateInPast === false && positionsToBeHired.length === 0) {
+            showToast('At least one position with applicant count must be selected.', 'error');
+            positionsDropdownRef.current?.focus();
+            positionsDropdownRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            return;
+        }
+
+        // Validate hiring date is not earlier than today and not later than contract start date
+        if (isStartDateInPast === false && hiringDate) {
+            try {
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                const hireDate = parseISO(hiringDate);
+                const contractStartDate = parseISO(currentSurvey.contract_start_date);
+                
+                if (hireDate < today) {
+                    showToast('Hiring date cannot be earlier than today.', 'error');
+                    hiringDateRef.current?.focus();
+                    hiringDateRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    return;
+                }
+                
+                if (hireDate > contractStartDate) {
+                    showToast('Hiring date cannot be later than the contract start date.', 'error');
+                    hiringDateRef.current?.focus();
+                    hiringDateRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    return;
+                }
+            } catch (e) {
+                showToast('Invalid hiring date format.', 'error');
+                return;
+            }
         }
 
         const endpoint = id ? `employments/surveys/${id}` : 'employments/surveys';
         const method = id ? 'PUT' : 'POST';
 
         try {
-            await apiFetch(endpoint, serverIp, { // 3. PASS serverIp
+            // Find the original survey data from the surveys array to preserve all fields
+            const originalSurvey = id ? surveys.find(s => s.id === id) : null;
+
+            // Prepare payload: merge original survey data with updated fields
+            // IMPORTANT: Do NOT include rating_criteria - it's managed separately in the Applicants page
+            const payload = {
+                ...(originalSurvey || {}), // Preserve all original fields
+                ...currentSurvey,          // Apply user edits
+                actingUserId: session.user.id
+            };
+            
+            // Remove rating_criteria from payload - it's set via the Applicants page Set Evaluation Criteria modal
+            delete payload.rating_criteria;
+
+            // If start date is in future, send hiring date and positions separately (Turso only)
+            if (isStartDateInPast === false && hiringDate && positionsToBeHired.length > 0) {
+                payload.hiring_date = hiringDate;
+                payload.positions = positionsToBeHired;
+            }
+
+            await apiFetch(endpoint, serverIp, {
                 method,
-                body: JSON.stringify({ 
-                    ...currentSurvey, 
-                    hiring_positions: selectedHiringPositions, // Send selected positions
-                    actingUserId: session.user.id 
-                }),
+                body: JSON.stringify(payload),
             });
             fetchData(); // Re-fetch all data
             handleCloseModal();
-            setSuccessMessage(currentSurvey.id ? 'Survey updated successfully.' : 'Survey added successfully.');
-            setTimeout(() => setSuccessMessage(null), 3000);
+            showToast(currentSurvey.id ? 'Survey updated successfully.' : 'Survey added successfully.', 'success');
         } catch (err) {
             try {
                 const parsedError = JSON.parse(err.message);
-                setError(parsedError.error || parsedError.message || "An unknown error occurred.");
+                showToast(parsedError.error || parsedError.message || "An unknown error occurred.", 'error');
             } catch (e) {
-                setError(err.message);
+                showToast(err.message, 'error');
             }
         }
     };
@@ -199,45 +352,108 @@ const ManageSurveys = ({ session }) => {
                 body: JSON.stringify({ actingUserId: session.user.id })
             });
             setSurveyToDelete(null);
-            setSuccessMessage('Survey deleted successfully.');
-            setTimeout(() => setSuccessMessage(null), 3000);
+            showToast('Survey deleted successfully.', 'success');
             fetchData(); // Re-fetch all data
         } catch (err) {
-            setError(err.message);
+            showToast(err.message, 'error');
             setSurveyToDelete(null);
         }
     };
 
     const handleDeleteClick = (survey) => {
-        setError(null);
         setSurveyToDelete(survey);
     };
 
-    const handleAddPosition = () => {
-        if (positionToAdd && !selectedHiringPositions.includes(parseInt(positionToAdd))) {
-            setSelectedHiringPositions([...selectedHiringPositions, parseInt(positionToAdd)]);
-            setPositionToAdd('');
+    // Determine if the contract start date is in the past, today, or future
+    const isStartDateInPast = useMemo(() => {
+        if (!currentSurvey.contract_start_date) return null;
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        try {
+            const startDate = parseISO(currentSurvey.contract_start_date);
+            return startDate < today;
+        } catch (e) {
+            return null;
+        }
+    }, [currentSurvey.contract_start_date]);
+
+    const hasChanges = useMemo(() => {
+        if (!currentSurvey.id || !originalSurveyData) {
+            return false;
+        }
+    
+        if (
+            currentSurvey.name !== originalSurveyData.name ||
+            currentSurvey.contract_start_date !== originalSurveyData.contract_start_date ||
+            currentSurvey.contract_end_date !== originalSurveyData.contract_end_date ||
+            String(currentSurvey.focal_person_id) !== String(originalSurveyData.focal_person_id)
+        ) {
+            return true;
+        }
+    
+        if (isStartDateInPast === false) {
+            if (hiringDate !== (originalSurveyData.hiring_date ? format(parseISO(originalSurveyData.hiring_date), 'yyyy-MM-dd') : '')) {
+                return true;
+            }
+            
+            const originalPositions = originalSurveyData.positions ? (typeof originalSurveyData.positions === 'string' ? JSON.parse(originalSurveyData.positions) : originalSurveyData.positions) : [];
+            if (positionsToBeHired.length !== originalPositions.length) {
+                return true;
+            }
+            
+            const originalPositionsString = JSON.stringify(originalPositions.slice().sort((a,b) => a.position.localeCompare(b.position)));
+            const currentPositionsString = JSON.stringify(positionsToBeHired.slice().sort((a,b) => a.position.localeCompare(b.position)));
+    
+            if (originalPositionsString !== currentPositionsString) {
+                return true;
+            }
+        }
+    
+        return false;
+    }, [currentSurvey, originalSurveyData, hiringDate, positionsToBeHired, isStartDateInPast]);
+
+    const isSaveDisabled = useMemo(() => {
+        if (currentSurvey.id) {
+            return !hasChanges;
+        }
+    
+        const { name, contract_start_date, contract_end_date, focal_person_id } = currentSurvey;
+        if (!name?.trim() || !contract_start_date || !contract_end_date || !focal_person_id) {
+            return true;
+        }
+    
+        if (isStartDateInPast === false && (!hiringDate || positionsToBeHired.length === 0)) {
+            return true;
+        }
+    
+        return false;
+    }, [currentSurvey, hasChanges, hiringDate, positionsToBeHired, isStartDateInPast]);
+
+    const handleAddRatingCriteriaPosition = () => {
+        if (ratingCriteriaPositionToAdd && !positionsToBeHired.some(pos => pos.position === ratingCriteriaPositionToAdd)) {
+            const count = parseInt(applicantsToHire, 10) || 0;
+            if (count <= 0) {
+                showToast('Please enter a valid number of applicants to hire (greater than 0).', 'error');
+                return;
+            }
+            const selectedPos = availablePositions.find(p => p.position_title === ratingCriteriaPositionToAdd);
+            const position_id = selectedPos ? selectedPos.id : null;
+            
+            setPositionsToBeHired([...positionsToBeHired, { position: ratingCriteriaPositionToAdd, position_id, applicants_count: count }]);
+            setRatingCriteriaPositionToAdd('');
+            setApplicantsToHire('');
         }
     };
 
-    const handleRemovePosition = (idToRemove) => {
-        setSelectedHiringPositions(selectedHiringPositions.filter(id => id !== idToRemove));
+    const handleRemoveRatingCriteriaPosition = (positionToRemove) => {
+        setPositionsToBeHired(positionsToBeHired.filter(pos => pos.position !== positionToRemove));
     };
-
-    const isOngoingOrUpcoming = useMemo(() => {
-        if (!currentSurvey.contract_end_date) return false;
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const endDate = parseISO(currentSurvey.contract_end_date);
-        // If end date is today or in the future, it's ongoing or upcoming
-        return endDate >= today;
-    }, [currentSurvey.contract_end_date]);
 
     // 6. UPDATE initial loading condition
     if (isLoading || isSettingsLoading) {
         return (
             <div className="p-4 sm:p-6 lg:p-8">
-                <h1 className="mb-4 text-3xl font-bold tracking-tight text-gray-900 dark:text-white">Manage Surveys</h1>
+                <h1 className="mb-4 text-2xl font-bold tracking-tight text-gray-900 dark:text-white">Manage Surveys</h1>
                 <div className="w-full p-4 space-y-4 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow animate-pulse">
                     {[...Array(10)].map((_, i) => (
                         <div key={i} className="flex items-center justify-between pt-2">
@@ -252,13 +468,9 @@ const ManageSurveys = ({ session }) => {
 
     return (
         <div>
-            {successMessage && (
-                <div className="fixed top-5 right-5 z-[200] flex items-center gap-3 px-5 py-3 bg-green-600 text-white text-sm font-semibold rounded-lg shadow-lg">
-                    <span>✓</span> {successMessage}
-                </div>
-            )}
+            <ToastContainer toasts={toasts} onClose={removeToast} />
             <div className="flex justify-between items-center mb-4">
-              <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">Manage Surveys</h1>
+              <h1 className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white">Manage Surveys</h1>
               <div className="flex items-center gap-4">
                   <div className="relative">
                       <input
@@ -272,30 +484,13 @@ const ManageSurveys = ({ session }) => {
                       )}
                   </div>
                   {canManage && (
-                      <button onClick={() => handleOpenModal()} className="flex items-center gap-2 px-4 py-2 font-semibold text-white bg-blue-600 rounded-lg shadow-md hover:bg-blue-700 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
-                          <FiPlus />
-                          Add New Survey/Census
+                      <button onClick={() => handleOpenModal()} className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600">
+                          <FiPlus className="w-4 h-4" />
+                          Add Survey/Census
                       </button>
                   )}
               </div>
           </div>
-
-          {error && !isModalOpen && !surveyToDelete && (
-              <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black bg-opacity-70">
-                  <div className="w-full max-w-md p-6 bg-white rounded-lg shadow-xl dark:bg-gray-800">
-                      <div className="text-center">
-                          <div className="flex items-center justify-center w-12 h-12 mx-auto bg-red-100 rounded-full dark:bg-red-900/50">
-                              <FaExclamationTriangle className="w-6 h-6 text-red-600 dark:text-red-400" />
-                          </div>
-                          <h3 className="mt-4 text-lg font-medium text-gray-900 dark:text-white">Error</h3>
-                          <div className="mt-2 text-sm text-gray-600 dark:text-gray-300">{error}</div>
-                      </div>
-                      <div className="mt-5">
-                          <button type="button" onClick={() => setError(null)} className="inline-flex justify-center w-full px-4 py-2 text-base font-medium text-white bg-red-600 border border-transparent rounded-md shadow-sm hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500">OK</button>
-                      </div>
-                  </div>
-              </div>
-          )}
 
           <div className="overflow-x-auto bg-white h-[680px] rounded-lg shadow dark:bg-gray-800">
               <table className="min-w-full text-sm leading-normal">
@@ -318,9 +513,15 @@ const ManageSurveys = ({ session }) => {
                               <td className="px-5 py-4 text-gray-700 dark:text-gray-300">{survey.contract_end_date ? format(parseISO(survey.contract_end_date), 'MM/dd/yyyy') : 'N/A'}</td>
                               <td className="px-5 py-4 text-gray-700 dark:text-gray-300">{survey.focalPersonName || '(None)'}</td>
                               {canManage && (
-                                  <td className="px-6 py-4 flex items-center justify-center space-x-3">
-                                      <button onClick={() => handleOpenModal(survey)} className="font-medium text-blue-600 transition-colors hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300">Edit</button>
-                                      <button onClick={() => handleDeleteClick(survey)} className="font-medium text-red-600 transition-colors hover:text-red-900 dark:text-red-400 dark:hover:text-red-300">Delete</button>
+                                  <td className="px-6 py-4 align-middle">
+                                      <div className="flex items-center justify-center space-x-1">
+                                          <button onClick={() => handleOpenModal(survey)} title="Edit Survey" className="p-1 rounded-lg transition-colors text-blue-600 hover:text-blue-900 hover:bg-blue-50 dark:text-blue-400 dark:hover:text-blue-300 dark:hover:bg-blue-900/20"><FaPencilAlt className="w-4 h-4" /></button>
+                                          {nonDeletableSurveys.has(survey.id) ? (
+                                              <button disabled title="This survey is assigned to employees" className="p-1 rounded-lg transition-colors text-gray-400 cursor-not-allowed opacity-50"><FaTrash className="w-4 h-4" /></button>
+                                          ) : (
+                                              <button onClick={() => handleDeleteClick(survey)} title="Delete Survey" className="p-1 rounded-lg transition-colors text-red-600 hover:text-red-900 hover:bg-red-50 dark:text-red-400 dark:hover:text-red-300 dark:hover:bg-red-900/20"><FaTrash className="w-4 h-4" /></button>
+                                          )}
+                                      </div>
                                   </td>
                               )}
                           </tr>
@@ -339,9 +540,9 @@ const ManageSurveys = ({ session }) => {
               <div className="flex justify-between items-center mt-1">
                   <span className="text-sm text-gray-700 dark:text-gray-300">Showing {Math.min((currentPage - 1) * rowsPerPage + 1, sortedSurveys.length)} to {Math.min(currentPage * rowsPerPage, sortedSurveys.length)} of {sortedSurveys.length} records</span>
                   <div className="flex items-center space-x-2">
-                      <button onClick={handlePreviousPage} disabled={currentPage === 1} className="px-4 py-2 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md disabled:opacity-50 transition-colors hover:bg-gray-50 dark:hover:bg-gray-600">Previous</button>
+                      <button onClick={handlePreviousPage} disabled={currentPage === 1} className="px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed">Previous</button>
                       <span className="text-gray-700 dark:text-gray-300 px-2">{currentPage}</span>
-                      <button onClick={handleNextPage} disabled={currentPage >= totalPages} className="px-4 py-2 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md disabled:opacity-50 transition-colors hover:bg-gray-50 dark:hover:bg-gray-600">Next</button>
+                      <button onClick={handleNextPage} disabled={currentPage >= totalPages} className="px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed">Next</button>
                   </div>
               </div>
           )}
@@ -351,14 +552,14 @@ const ManageSurveys = ({ session }) => {
                   <div className="flex flex-col w-full max-w-md max-h-[90vh] bg-white dark:bg-gray-800 rounded-lg shadow-xl">
                       <div className="flex-shrink-0 px-6 py-4 border-b border-gray-200 dark:border-gray-700"><h2 className="text-xl font-semibold text-gray-900 dark:text-white">{currentSurvey.id ? 'Edit' : 'Add'} Survey</h2></div>
                       <form id="surveyForm" onSubmit={handleSave} className="flex-auto p-6 overflow-y-auto space-y-4">
-                          {error && <p className="mb-4 text-sm text-red-500">{error}</p>}
                           
                           <div>
                               <label htmlFor="survey-name-input" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Survey Name*</label>
                               <textarea
+                                  ref={surveyNameRef}
                                   id="survey-name-input" value={currentSurvey.name}
                                   onChange={(e) => setCurrentSurvey({ ...currentSurvey, name: e.target.value })}
-                                  className="block w-full p-2 mt-1 bg-white border border-gray-300 rounded-md shadow-sm dark:bg-gray-700 dark:border-gray-600 focus:border-blue-500 focus:ring-blue-500 resize-y"
+                                  className="block w-full p-2 mt-1 bg-white border-2 border-gray-300 rounded-md shadow-sm dark:bg-gray-700 dark:border-gray-600 focus:border-blue-500 focus:ring-blue-500 resize-y"
                                   required rows="3"
                               />
                           </div>
@@ -392,54 +593,100 @@ const ManageSurveys = ({ session }) => {
                               </select>
                           </div>
 
-                          {/* Hiring Positions Section - Only if active/upcoming */}
-                          {isOngoingOrUpcoming && (
-                              <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-100 dark:border-blue-800">
-                                  <div className="mb-4">
-                                      <label htmlFor="hiring_end_date" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Hiring End Date*</label>
-                                      <input id="hiring_end_date" type="date"
-                                          value={currentSurvey.hiring_end_date || ''}
-                                          onChange={(e) => setCurrentSurvey({ ...currentSurvey, hiring_end_date: e.target.value })}
-                                          required
-                                          className="block w-full p-2 mt-1 bg-white border border-gray-300 rounded-md shadow-sm dark:bg-gray-700 dark:border-gray-600 focus:border-blue-500 focus:ring-blue-500" />
-                                  </div>
-                                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Positions to Hire</label>
-                                  <div className="flex gap-2 mb-2">
-                                      <select 
-                                          value={positionToAdd} 
-                                          onChange={(e) => setPositionToAdd(e.target.value)}
-                                          className="flex-1 p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
-                                      >
-                                          <option value="" disabled>Select a position...</option>
-                                          {availablePositions.map(pos => (
-                                              <option key={pos.id} value={pos.id} disabled={selectedHiringPositions.includes(pos.id)}>
-                                                  {pos.position_title}
-                                              </option>
-                                          ))}
-                                      </select>
-                                      <button type="button" onClick={handleAddPosition} disabled={!positionToAdd} className="px-3 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50">Add</button>
-                                  </div>
-                                  
-                                  {selectedHiringPositions.length > 0 && (
-                                      <ul className="space-y-1 max-h-32 overflow-y-auto">
-                                          {selectedHiringPositions.map(posId => {
-                                              const pos = availablePositions.find(p => p.id === posId);
-                                              return (
-                                                  <li key={posId} className="flex justify-between items-center bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700 text-sm">
-                                                      <span className="text-gray-800 dark:text-gray-200">{pos?.position_title}</span>
-                                                      <button type="button" onClick={() => handleRemovePosition(posId)} className="text-red-500 hover:text-red-700"><FiX /></button>
-                                                  </li>
-                                              );
-                                          })}
-                                      </ul>
+                          {/* Rating Criteria Section - Conditional based on start date */}
+                          {isStartDateInPast === false && (
+                              <div className="space-y-4 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-md">
+                                  {currentSurvey.id && hiringDate && (
+                                      <div className="text-sm text-blue-700 dark:text-blue-300 bg-blue-100 dark:bg-blue-900/40 p-2 rounded border-l-4 border-blue-500">
+                                          📅 <strong>Current Hiring End Date:</strong> {format(parseISO(hiringDate), 'MMMM d, yyyy')}
+                                          {positionsToBeHired.length > 0 && (
+                                              <>
+                                                  <br />
+                                                  <strong>Positions:</strong> {positionsToBeHired.map(p => `${p.position} (${p.applicants_count})`).join(', ')}
+                                              </>
+                                          )}
+                                          <br />
+                                          <span className="text-xs text-blue-600 dark:text-blue-400">You can extend this date or update positions if needed</span>
+                                      </div>
                                   )}
+                                  <div>
+                                      <label htmlFor="hiring_date" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                                          {currentSurvey.id && hiringDate ? 'New Hiring End Date*' : 'Hiring End Date*'}
+                                      </label>
+                                      <input ref={hiringDateRef} id="hiring_date" type="date"
+                                          value={hiringDate}
+                                          onChange={(e) => setHiringDate(e.target.value)}
+                                          className="block w-full p-2 mt-1 bg-white border-2 border-gray-300 rounded-md shadow-sm dark:bg-gray-700 dark:border-gray-600 focus:border-blue-500 focus:ring-blue-500" />
+                                  </div>
+                                  <div>
+                                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                          {currentSurvey.id && positionsToBeHired.length > 0 ? 'Update Positions to be Hired*' : 'Positions to be Hired*'}
+                                      </label>
+                                      {currentSurvey.id && positionsToBeHired.length > 0 && (
+                                          <div className="text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 p-2 rounded mb-2 border border-amber-200 dark:border-amber-800">
+                                              ✓ Currently assigned: {positionsToBeHired.map(p => `${p.position} (${p.applicants_count})`).join(', ')}
+                                          </div>
+                                      )}
+                                      <div className="space-y-2 mb-2">
+                                          <select 
+                                              ref={positionsDropdownRef}
+                                              value={ratingCriteriaPositionToAdd} 
+                                              onChange={(e) => setRatingCriteriaPositionToAdd(e.target.value)}
+                                              className="w-full p-2 bg-white dark:bg-gray-700 border-2 border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
+                                          >
+                                              <option value="" disabled>Select a position...</option>
+                                              {availablePositions.map(pos => (
+                                                  <option key={pos.id} value={pos.position_title} disabled={positionsToBeHired.some(p => p.position === pos.position_title)}>
+                                                      {pos.position_title}
+                                                  </option>
+                                              ))}
+                                          </select>
+                                          {ratingCriteriaPositionToAdd && (
+                                              <div className="flex gap-2">
+                                                  <input
+                                                      type="number"
+                                                      min="1"
+                                                      value={applicantsToHire}
+                                                      onChange={(e) => setApplicantsToHire(e.target.value)}
+                                                      placeholder="No. of applicants"
+                                                      className="flex-1 p-2 bg-white dark:bg-gray-700 border-2 border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
+                                                      autoFocus
+                                                  />
+                                                  <button type="button" onClick={handleAddRatingCriteriaPosition} disabled={!applicantsToHire} className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 whitespace-nowrap">Add</button>
+                                              </div>
+                                          )}
+                                      </div>
+                                      
+                                      {positionsToBeHired.length > 0 && (
+                                          <ul className="space-y-1 max-h-32 overflow-y-auto">
+                                              {positionsToBeHired.map(pos => (
+                                                  <li key={pos.position} className="flex justify-between items-center bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700 text-sm">
+                                                      <span className="text-gray-800 dark:text-gray-200"><strong>{pos.position}</strong> - {pos.applicants_count} applicant{pos.applicants_count !== 1 ? 's' : ''}</span>
+                                                      <button type="button" onClick={() => handleRemoveRatingCriteriaPosition(pos.position)} className="text-red-500 hover:text-red-700"><FiX /></button>
+                                                  </li>
+                                              ))}
+                                          </ul>
+                                      )}
+                                  </div>
                               </div>
                           )}
+
+                          {/* Hiring Positions Section removed - positions are now captured in rating criteria */}
                       </form>
                       
-                      <div className="flex-shrink-0 flex justify-end px-6 py-4 space-x-2 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-200 dark:border-gray-700">
-                          <button type="button" onClick={handleCloseModal} className="px-4 py-2 font-semibold text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 transition-colors">Cancel</button>
-                          <button type="submit" form="surveyForm" className="px-4 py-2 font-semibold text-white bg-blue-600 rounded-md shadow-sm hover:bg-blue-700 transition-colors">Save</button>
+                      <div className="flex-shrink-0 flex justify-end px-6 py-4 space-x-2 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-200 dark:border-gray-700 rounded-b-lg">
+                          <button type="button" onClick={handleCloseModal} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors">
+                              <FiX className="w-4 h-4" />Cancel
+                          </button>
+                          <button 
+                            type="submit" 
+                            form="surveyForm" 
+                            disabled={isSaveDisabled}
+                            title={isSaveDisabled ? (currentSurvey.id ? 'No changes have been made' : 'Please fill all required fields') : 'Save survey'}
+                            className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                              <FiSave className="w-4 h-4" />Save
+                          </button>
                       </div>
                   </div>
               </div>
@@ -457,6 +704,7 @@ const ManageSurveys = ({ session }) => {
                   </div>
               </div>
           )}
+          <ToastContainer toasts={toasts} onClose={removeToast} />
       </div>
   );
 };

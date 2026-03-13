@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { FiPlus, FiX } from 'react-icons/fi';
+import { FiPlus, FiX, FiSave } from 'react-icons/fi';
 import { parseISO, format } from 'date-fns';
-import { FaSort, FaSortUp, FaSortDown } from 'react-icons/fa';
+import { FaSort, FaSortUp, FaSortDown, FaTrash } from 'react-icons/fa';
+import ToastContainer from '../components/ToastContainer';
+import useToast from '../hooks/useToast';
 import { apiFetch } from '../components/API';
 import { useSettings } from '../context/SettingsContext';
 import { auth } from '../firebase';
@@ -36,15 +38,66 @@ const useClickOutside = (ref, handler) => {
   }, [ref, handler]);
 };
 
+const SearchableDropdown = ({ options, value, onChange, placeholder, id, required, disabled = false }) => {
+    const [isOpen, setIsOpen] = useState(false);
+    const [searchTerm, setSearchTerm] = useState('');
+    const dropdownRef = useRef(null);
+  
+    useClickOutside(dropdownRef, () => setIsOpen(false));
+  
+    const selectedOption = useMemo(() => {
+      return options.find((option) => String(option.value) === String(value)) || null;
+    }, [options, value]);
+  
+    const filteredOptions = useMemo(
+      () =>
+        options.filter((option) =>
+          option.label.toLowerCase().includes(searchTerm.toLowerCase())
+        ),
+      [options, searchTerm]
+    );
+  
+    const displayValue = isOpen ? searchTerm : selectedOption?.label || '';
+  
+    const handleSelectOption = (option) => {
+      onChange(option.value);
+      setSearchTerm(option.label);
+      setIsOpen(false);
+    };
+  
+    return (
+      <div className="relative" ref={dropdownRef}>
+        <input id={id} type="text" className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100 dark:disabled:bg-gray-700/50" value={displayValue} onChange={(e) => { if (disabled) return; setSearchTerm(e.target.value); if (!isOpen) setIsOpen(true); }} onFocus={() => { if (disabled) return; setIsOpen(true); setSearchTerm(''); }} placeholder={placeholder} required={required && !value} disabled={disabled} />
+        {isOpen && !disabled && (
+          <div className="absolute z-10 mt-1 w-full rounded-md border border-gray-300 bg-white shadow-lg dark:bg-gray-700">
+            {filteredOptions.length > 0 ? (
+              <ul className="max-h-60 overflow-y-auto">
+                {filteredOptions.map((option) => (
+                  <li key={option.value} className={`cursor-pointer px-4 py-2 text-gray-800 dark:text-gray-200 hover:bg-blue-500 hover:text-white whitespace-normal break-words ${ String(option.value) === String(value) ? 'bg-blue-100 dark:bg-blue-600' : '' }`} onClick={() => handleSelectOption(option)}>
+                    {option.label}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <div className="px-4 py-2 text-gray-500 dark:text-gray-400">No options found.</div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+};
+
 const Accounts = () => {
   const { serverIp, isLoading: isSettingsLoading } = useSettings();
+  const { toasts, showToast, removeToast } = useToast();
   const [users, setUsers] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [formData, setFormData] = useState(initialFormState);
   const [editingUser, setEditingUser] = useState(null);
+  const [originalFormData, setOriginalFormData] = useState(null);
   const [userToDelete, setUserToDelete] = useState(null);
+  const [assignedFocalPersonIds, setAssignedFocalPersonIds] = useState(new Set());
   const [tempPassword, setTempPassword] = useState('');
   const [resetLink, setResetLink] = useState('');
   const [showTempPasswordModal, setShowTempPasswordModal] = useState(false);
@@ -52,16 +105,21 @@ const Accounts = () => {
   const [tempPasswordModalTitle, setTempPasswordModalTitle] = useState(''); // <-- 1. ADDED STATE
   const [sessionState, setSessionState] = useState(null);
   const [canManage, setCanManage] = useState(false);
-  const [successMessage, setSuccessMessage] = useState(null);
   const [sortConfig, setSortConfig] = useState({ key: 'last_name', direction: 'ascending' });
   const [filters, setFilters] = useState({ query: '' });
   const [currentPage, setCurrentPage] = useState(1);
   const rowsPerPage = 12;
+  const firstNameRef = useRef(null);
+  const middleInitialRef = useRef(null);
+  const lastNameRef = useRef(null);
+  const emailRef = useRef(null);
+  const roleRef = useRef(null);
+  const opshubRoleRef = useRef(null);
 
   const handleCloseModal = useCallback(() => {
       setIsModalOpen(false);
-      setError(null);
       setFormData(initialFormState);
+      setOriginalFormData(null);
   }, []);
 
   const addEditModalRef = useRef(null);
@@ -79,16 +137,16 @@ const Accounts = () => {
           setSessionState(state);
           setCanManage(['Super_Admin', 'Admin', 'PACD'].includes(state.user.role));
         } else {
-          setError({ type: 'auth', message: "Authentication failed. Please log in again." });
+          showToast("Authentication failed. Please log in again.", 'error');
           setIsLoading(false);
         }
       } catch (err) {
-        setError({ type: 'session', message: "Failed to retrieve session data." });
+        showToast("Failed to retrieve session data.", 'error');
         setIsLoading(false);
       }
     };
     getSession();
-  }, []);
+  }, [showToast]);
 
   const fetchUsers = useCallback(async () => {
     if (!serverIp) return;
@@ -97,20 +155,32 @@ const Accounts = () => {
       const data = await apiFetch('users', serverIp);
       setUsers(data);
     } catch (err) {
-      setError({ type: 'api', message: err.message });
+      showToast(err.message, 'error');
     } finally {
       setIsLoading(false);
+    }
+  }, [serverIp, showToast]);
+
+  const fetchAssignedFocalPersons = useCallback(async () => {
+    if (!serverIp) return;
+    try {
+      const data = await apiFetch('employments', serverIp);
+      const ids = new Set(data.map(rec => rec.focal_person_id).filter(Boolean));
+      setAssignedFocalPersonIds(ids);
+    } catch (err) {
+      console.error("Failed to fetch assigned focal persons:", err);
     }
   }, [serverIp]);
 
   useEffect(() => {
     if (sessionState && !isSettingsLoading) {
       fetchUsers();
+      fetchAssignedFocalPersons();
       if (['Super_Admin', 'Admin', 'PACD'].includes(sessionState.user.role)) {
         fetchUsers();
       }
     }
-  }, [sessionState, isSettingsLoading, fetchUsers]);
+  }, [sessionState, isSettingsLoading, fetchUsers, fetchAssignedFocalPersons]);
 
   const getAssignableRoles = useCallback(() => {
     if (!sessionState) return [];
@@ -120,6 +190,20 @@ const Accounts = () => {
     if (role === 'PACD') return ['User'];
     return [];
   }, [sessionState]);
+
+  const roleOptions = useMemo(() => 
+    getAssignableRoles().map(role => ({ value: role, label: role })),
+  [getAssignableRoles]);
+
+  const opshubRoleOptions = useMemo(() => [
+    { value: 'Staff', label: 'Staff' },
+    { value: 'Admin', label: 'Admin' }
+  ], []);
+
+  const statusOptions = useMemo(() => [
+    { value: 'Active', label: 'Active' },
+    { value: 'Inactive', label: 'Inactive' }
+  ], []);
 
   const filteredUsers = useMemo(() => {
     return users.filter(user => {
@@ -162,20 +246,20 @@ const Accounts = () => {
   const handleAddClick = () => {
     setEditingUser(null);
     setFormData({ ...initialFormState, role: getAssignableRoles()[0] || 'User' });
-    setError(null);
+    setOriginalFormData(null);
     setIsModalOpen(true);
   };
 
   const handleEditClick = (user) => {
     setEditingUser(user);
-    setFormData({ ...user, password: '' });
-    setError(null);
+    const formDataToUse = { ...user, password: '' };
+    setFormData(formDataToUse);
+    setOriginalFormData(formDataToUse);
     setIsModalOpen(true);
   };
 
   const handleDeleteClick = (user) => {
     setUserToDelete(user);
-    setError(null);
   };
 
   const confirmDelete = async () => {
@@ -187,17 +271,71 @@ const Accounts = () => {
       });
       setUserToDelete(null);
       fetchUsers();
-      setSuccessMessage('User deleted successfully.');
-      setTimeout(() => setSuccessMessage(null), 3000);
+      showToast('User deleted successfully.', 'success');
     } catch (err) {
-      setError({ type: 'delete', message: err.message });
+      showToast(err.message, 'error');
       setUserToDelete(null);
     }
   };
 
+  const isFormValid = useMemo(() => {
+    const requiredFields = ['first_name', 'middle_initial', 'last_name', 'email', 'role', 'opshub_role', 'status'];
+    return requiredFields.every(field => formData[field] && String(formData[field]).trim() !== '');
+  }, [formData]);
+
+  const hasChanges = useMemo(() => {
+      if (!editingUser || !originalFormData) {
+          return false;
+      }
+      const fieldsToCompare = [
+          'first_name', 'middle_initial', 'last_name', 'suffix', 'email', 
+          'role', 'opshub_role', 'position', 'salary', 'salary_grade', 'status'
+      ];
+      for (const key of fieldsToCompare) {
+          const originalValue = originalFormData[key] ?? '';
+          const currentValue = formData[key] ?? '';
+          if (String(originalValue).trim() !== String(currentValue).trim()) {
+              return true;
+          }
+      }
+      return false;
+  }, [formData, originalFormData, editingUser]);
+
   const handleFormSubmit = async (e) => {
       e.preventDefault();
-      setError(null);
+      
+      // Validation - Required fields
+      if (!formData.first_name.trim()) {
+        firstNameRef.current?.focus();
+        firstNameRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return;
+      }
+      if (!formData.middle_initial.trim()) {
+        middleInitialRef.current?.focus();
+        middleInitialRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return;
+      }
+      if (!formData.last_name.trim()) {
+        lastNameRef.current?.focus();
+        lastNameRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return;
+      }
+      if (!formData.email.trim()) {
+        emailRef.current?.focus();
+        emailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return;
+      }
+      if (!formData.role) {
+        roleRef.current?.focus();
+        roleRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return;
+      }
+      if (!formData.opshub_role) {
+        opshubRoleRef.current?.focus();
+        opshubRoleRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return;
+      }
+      
       const endpoint = editingUser ? `users/${editingUser.id}` : 'users';
       const method = editingUser ? 'PUT' : 'POST';
       const body = { ...formData, actingUserId: sessionState.user.id };
@@ -221,8 +359,7 @@ const Accounts = () => {
               }
               setShowTempPasswordModal(true);
           } else {
-              setSuccessMessage('User updated successfully.');
-              setTimeout(() => setSuccessMessage(null), 3000);
+              showToast('User updated successfully.', 'success');
           }
           
           setIsModalOpen(false);
@@ -235,7 +372,7 @@ const Accounts = () => {
           } catch (parseErr) {
               errorMessage = err.message || errorMessage;
           }
-          setError({ type: 'form', message: errorMessage });
+          showToast(errorMessage, 'error');
       }
   };
 
@@ -294,11 +431,8 @@ const Accounts = () => {
 
   return (
     <div>
-      {successMessage && (
-        <div className="fixed top-5 right-5 z-[200] flex items-center gap-3 px-5 py-3 bg-green-600 text-white text-sm font-semibold rounded-lg shadow-lg">
-          <span>✓</span> {successMessage}
-        </div>
-      )}
+
+      <ToastContainer toasts={toasts} onClose={removeToast} />
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">User Accounts</h1>
         <div className="relative">
@@ -317,7 +451,6 @@ const Accounts = () => {
           </button>
         )}
       </div>
-      {error && !isModalOpen && !userToDelete && <div className="mb-4 text-center p-3 bg-red-100 text-red-700 rounded-lg">{error.message}</div>}
       
       <div className="overflow-x-auto bg-white rounded-lg shadow h-[760px] dark:bg-gray-800">
         <table className="min-w-full text-sm leading-normal">
@@ -347,12 +480,21 @@ const Accounts = () => {
                   <tr key={user.id} className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors duration-200">
                     <td className="px-5 py-4 font-medium text-gray-900 dark:text-white">{[user.first_name, user.middle_initial, user.last_name, user.suffix].filter(Boolean).join(' ')}</td>
                     <td className="px-5 py-4 text-gray-700 dark:text-gray-300">{user.email}</td>
-                    <td className="px-5 py-4"><span className="relative inline-block px-3 py-1 font-semibold text-green-900 leading-tight"><span aria-hidden className="absolute inset-0 bg-green-200 opacity-50 rounded-full"></span><span className="relative">{user.role}</span></span></td>
+                    <td className="px-5 py-4"><span className="relative inline-block px-3 py-1 font-semibold text-green-900 dark:text-green-200 leading-tight"><span aria-hidden className="absolute inset-0 bg-green-200 dark:bg-green-800 opacity-50 rounded-full"></span><span className="relative">{user.role}</span></span></td>
                     <td className="px-5 py-4 text-gray-700 dark:text-gray-300">{user.created_at ? format(parseISO(user.created_at), 'MMMM d, yyyy') : 'N/A'}</td>
                     <td className="px-5 py-4">
                       <div className="flex items-center space-x-4">
                         {canEdit && <button onClick={() => handleEditClick(user)} className="font-medium text-blue-600 transition-colors hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300">Edit</button>}
-                        {canDelete && <button onClick={() => handleDeleteClick(user)} className="font-medium text-red-600 transition-colors hover:text-red-900 dark:text-red-400 dark:hover:text-red-300">Delete</button>}
+                        {canDelete && (
+                          <button 
+                            onClick={() => handleDeleteClick(user)} 
+                            disabled={assignedFocalPersonIds.has(user.id)}
+                            title={assignedFocalPersonIds.has(user.id) ? "Cannot delete: User is assigned to an employee" : "Delete User"}
+                            className={`font-medium transition-colors ${assignedFocalPersonIds.has(user.id) ? 'text-gray-400 cursor-not-allowed' : 'text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300'}`}
+                          >
+                            Delete
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -374,33 +516,32 @@ const Accounts = () => {
           Showing {Math.min((currentPage - 1) * rowsPerPage + 1, sortedUsers.length)} to {Math.min(currentPage * rowsPerPage, sortedUsers.length)} of {sortedUsers.length} Users
         </span>
         <div className="flex items-center space-x-2">
-          <button onClick={handlePreviousPage} disabled={currentPage === 1} className="px-4 py-2 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md disabled:opacity-50 transition-colors hover:bg-gray-50 dark:hover:bg-gray-600">Previous</button>
+          <button onClick={handlePreviousPage} disabled={currentPage === 1} title={currentPage === 1 ? 'Already on first page' : 'Go to previous page'} className="px-4 py-2 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md disabled:opacity-50 transition-colors hover:bg-gray-50 dark:hover:bg-gray-600">Previous</button>
           <span className="text-gray-700 dark:text-gray-300 px-2">{currentPage}</span>
-          <button onClick={handleNextPage} disabled={currentPage >= totalPages} className="px-4 py-2 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md disabled:opacity-50 transition-colors hover:bg-gray-50 dark:hover:bg-gray-600">Next</button>
+          <button onClick={handleNextPage} disabled={currentPage >= totalPages} title={currentPage >= totalPages ? 'Already on last page' : 'Go to next page'} className="px-4 py-2 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md disabled:opacity-50 transition-colors hover:bg-gray-50 dark:hover:bg-gray-600">Next</button>
         </div>
       </div>
 
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
-            <div ref={addEditModalRef} className="flex flex-col w-full max-w-lg max-h-[90vh] bg-white dark:bg-gray-800 rounded-lg shadow-xl">
-                <div className="flex-shrink-0 px-6 py-4 border-b border-gray-200 dark:border-gray-700">
+          <div ref={addEditModalRef} className="flex flex-col w-full max-w-lg max-h-[90vh] bg-white dark:bg-gray-800 rounded-lg shadow-xl overflow-hidden">
+                <div className="flex-shrink-0 px-6 py-4 border-b border-gray-200 dark:border-gray-700 rounded-t-lg">
                     <h2 className="text-xl font-semibold text-gray-900 dark:text-white">{editingUser ? 'Edit User' : 'Add a New User'}</h2>
                 </div>
                 <form id="userForm" onSubmit={handleFormSubmit} className="flex-auto p-6 overflow-y-auto">
-                    {error?.type === 'form' && <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-lg">{error.message}</div>}
                     
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-5">
                         <div>
                             <label htmlFor="first_name" className="block text-sm font-medium text-gray-700 dark:text-gray-300">First Name*</label>
-                            <input type="text" id="first_name" name="first_name" value={formData.first_name} onChange={handleInputChange} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
+                            <input ref={firstNameRef} type="text" id="first_name" name="first_name" value={formData.first_name} onChange={handleInputChange} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
                         </div>
                         <div>
                             <label htmlFor="middle_initial" className="block text-sm font-medium text-gray-700 dark:text-gray-300">M.I.*</label>
-                            <input type="text" id="middle_initial" name="middle_initial" value={formData.middle_initial} onChange={handleInputChange} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
+                            <input ref={middleInitialRef} type="text" id="middle_initial" name="middle_initial" value={formData.middle_initial} onChange={handleInputChange} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
                         </div>
                         <div>
                             <label htmlFor="last_name" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Last Name*</label>
-                            <input type="text" id="last_name" name="last_name" value={formData.last_name} onChange={handleInputChange} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
+                            <input ref={lastNameRef} type="text" id="last_name" name="last_name" value={formData.last_name} onChange={handleInputChange} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
                         </div>
                         <div>
                             <label htmlFor="suffix" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Suffix</label>
@@ -408,7 +549,7 @@ const Accounts = () => {
                         </div>
                         <div className="md:col-span-2">
                             <label htmlFor="email" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Email Address*</label>
-                            <input type="email" id="email" name="email" value={formData.email} onChange={handleInputChange} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
+                            <input ref={emailRef} type="email" id="email" name="email" value={formData.email} onChange={handleInputChange} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
                         </div>
                         <div className="md:col-span-2">
                             <label htmlFor="position" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Position</label>
@@ -424,31 +565,39 @@ const Accounts = () => {
                         </div>
                         <div className="md:col-span-2">
                             <label htmlFor="role" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Role*</label>
-                            <select id="role" name="role" value={formData.role} onChange={handleInputChange} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
-                                {getAssignableRoles().map(role => (<option key={role} value={role}>{role}</option>))}
-                            </select>
+                            <SearchableDropdown id="role" options={roleOptions} value={formData.role} onChange={(value) => handleInputChange({ target: { name: 'role', value } })} placeholder="Select Role" required />
                         </div>
                         <div className="md:col-span-2">
                             <label htmlFor="opshub_role" className="block text-sm font-medium text-gray-700 dark:text-gray-300">OpsHub Role*</label>
-                            <select id="opshub_role" name="opshub_role" value={formData.opshub_role} onChange={handleInputChange} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
-                                <option value="Staff">Staff</option>
-                                <option value="Admin">Admin</option>
-                            </select>
+                            <SearchableDropdown id="opshub_role" options={opshubRoleOptions} value={formData.opshub_role} onChange={(value) => handleInputChange({ target: { name: 'opshub_role', value } })} placeholder="Select OpsHub Role" required />
                         </div>
                         <div className="md:col-span-2">
                             <label htmlFor="status" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Status*</label>
-                            <select id="status" name="status" value={formData.status || 'Active'} onChange={handleInputChange} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
-                                <option value="Active">Active</option>
-                                <option value="Inactive">Inactive</option>
-                            </select>
+                            <SearchableDropdown
+                              id="status"
+                              options={statusOptions}
+                              value={formData.status || 'Active'}
+                              onChange={(value) => handleInputChange({ target: { name: 'status', value } })}
+                              placeholder="Select Status"
+                              required
+                            />
                         </div>
                     </div>
                 </form>
                 <div className="flex-shrink-0 flex justify-between items-center px-6 py-4 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-200 dark:border-gray-700 rounded-b-lg">
                     <div></div>
                     <div className="flex space-x-2">
-                        <button type="button" onClick={handleCloseModal} className="px-4 py-2 font-semibold text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 transition-colors">Cancel</button>
-                        <button type="submit" form="userForm" className="px-4 py-2 font-semibold text-white bg-blue-600 rounded-md shadow-sm hover:bg-blue-700 transition-colors">Save</button>
+                        <button type="button" onClick={handleCloseModal} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"><FiX className="w-4 h-4" />Cancel</button>
+                        <button 
+                          type="submit" 
+                          form="userForm" 
+                          disabled={editingUser ? !hasChanges : !isFormValid}
+                          title={editingUser ? (!hasChanges ? 'No changes to save' : 'Save changes') : (!isFormValid ? 'Please fill all required fields' : 'Save new user')}
+                          className="flex items-center gap-2 px-4 py-2 font-semibold text-white bg-blue-600 rounded-md shadow-sm hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          <FiSave className="w-4 h-4" />
+                          Save
+                        </button>
                     </div>
                 </div>
             </div>
@@ -460,10 +609,9 @@ const Accounts = () => {
           <div className="w-full max-w-md p-6 bg-white dark:bg-gray-800 rounded-lg shadow-xl">
             <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Confirm Deletion</h2>
             <p className="mt-2 text-gray-600 dark:text-gray-300">Are you sure you want to delete user "{userToDelete.email}"? This cannot be undone.</p>
-            {error?.type === 'delete' && <div className="mt-4 p-3 bg-red-100 text-red-700 rounded-lg">{error.message}</div>}
             <div className="flex justify-end mt-6 space-x-2">
-              <button onClick={() => setUserToDelete(null)} className="px-4 py-2 font-semibold text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 transition-colors">Cancel</button>
-              <button onClick={confirmDelete} className="px-4 py-2 font-semibold text-white bg-red-600 rounded-md shadow-sm hover:bg-red-700 transition-colors">Delete</button>
+              <button onClick={() => setUserToDelete(null)} className="flex items-center gap-2 px-4 py-2 font-semibold text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 transition-colors"><FiX className="w-4 h-4" />Cancel</button>
+              <button onClick={confirmDelete} className="flex items-center gap-2 px-4 py-2 font-semibold text-white bg-red-600 rounded-md shadow-sm hover:bg-red-700 transition-colors"><FaTrash className="w-4 h-4" />Delete</button>
             </div>
           </div>
         </div>
@@ -474,7 +622,6 @@ const Accounts = () => {
           <div className="w-full max-w-md p-6 text-center bg-white dark:bg-gray-800 rounded-lg shadow-xl">
             <h2 className="text-xl font-bold text-gray-800 dark:text-white">{tempPasswordModalTitle}</h2> {/* <-- 3. USE DYNAMIC TITLE */}
             <p className="mt-2 text-gray-600 dark:text-gray-300">The user has been notified via email.</p>
-            {error?.type === 'password_reset' && <div className="mt-4 p-3 bg-red-100 text-red-700 rounded-lg">{error.message}</div>}
             
             <div className="mt-4 space-y-4">
               {tempPassword && (
@@ -495,7 +642,7 @@ const Accounts = () => {
               )}
             </div>
 
-            <button onClick={() => setShowTempPasswordModal(false)} className="w-full px-4 py-2 mt-6 font-semibold text-gray-700 bg-gray-200 rounded-md hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500 transition-colors">Close</button>
+            <button onClick={() => setShowTempPasswordModal(false)} className="w-full flex items-center justify-center gap-2 px-4 py-2 mt-6 font-semibold text-gray-700 bg-gray-200 rounded-md hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500 transition-colors"><FiX className="w-4 h-4" />Close</button>
           </div>
         </div>
       )}

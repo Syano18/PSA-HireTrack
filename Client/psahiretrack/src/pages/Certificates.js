@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
-import { FaSort, FaSortUp, FaSortDown, FaExclamationTriangle, FaSearch, FaCertificate } from 'react-icons/fa';
+import { FaSort, FaSortUp, FaSortDown, FaSearch, FaCertificate, FaFilePdf, FaDownload, FaTimes, FaArrowLeft, FaArrowRight } from 'react-icons/fa';
+import { FiX, FiSave } from 'react-icons/fi';
+import ToastContainer from '../components/ToastContainer';
+import useToast from '../hooks/useToast';
 import ProgressModal from '../components/Progress';
 import { apiFetch } from '../components/API';
 import { useSettings } from '../context/SettingsContext';
@@ -11,13 +14,21 @@ const apiEndpoints = {
   BatchTraining: { download: 'generate-batch-training-certificate' },
   ByTrainingTitle: { download: 'generate-certificates-by-training' }
 };
+
+// Helper function to parse comma or semicolon separated data
+const parseEmploymentData = (data) => {
+  if (!data) return [];
+  const items = data.split(/[;,]/).map(item => item.trim()).filter(Boolean);
+  return items.length > 0 ? items : [data];
+};
+
 const Certificates = () => {
   const { serverIp, isLoading: isSettingsLoading } = useSettings();
+  const { toasts, showToast, removeToast } = useToast();
   const [employees, setEmployees] = useState([]);
   const [trainings, setTrainings] = useState([]);
   const [employments, setEmployments] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState(null);
   const [viewMode, setViewMode] = useState('employee');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState(null);
@@ -51,14 +62,13 @@ const Certificates = () => {
       const data = await apiFetch('batch-generated-titles', serverIp);
       setGeneratedTitlesList(Array.isArray(data) ? data : []);
     } catch (err) {
-      console.warn('Could not fetch generated titles:', err.message);
+      showToast('Could not fetch generated titles: ' + err.message, 'error');
     }
-  }, [serverIp]);
+  }, [serverIp, showToast]);
 
   const fetchData = useCallback(async () => {
     if (!serverIp) return;
     setIsLoading(true);
-    setError(null);
     try {
       const [employeesData, trainingsData, employmentsData] = await Promise.all([
         apiFetch('employees', serverIp),
@@ -70,12 +80,11 @@ const Certificates = () => {
       setTrainings(trainingsData);
       setEmployments(employmentsData);
     } catch (err) {
-      setError({ type: 'network', message: err.message || "An unexpected error occurred." });
-      console.error(err);
+      showToast(err.message || "An unexpected error occurred.", 'error');
     } finally {
       setIsLoading(false);
     }
-  }, [serverIp]);
+  }, [serverIp, showToast]);
 
   useEffect(() => {
     const getSession = async () => {
@@ -83,12 +92,12 @@ const Certificates = () => {
         const state = await window.electronAPI.getLoginState();
         setSessionState(state);
       } catch (err) {
-        setError({ type: 'session', message: "Failed to retrieve session data. Please log in." });
+        showToast("Failed to retrieve session data. Please log in.", 'error');
         setIsLoading(false);
       }
     };
     getSession();
-  }, []);
+  }, [showToast]);
 
   useEffect(() => {
     if (sessionState && !isSettingsLoading) {
@@ -119,6 +128,7 @@ const Certificates = () => {
     employments.forEach(employment => {
       const employeeId = employment.emp_id_str;
       if (employeeMap.has(employeeId)) {
+        if (employment.remarks && employment.remarks.startsWith('REPLACED')) return;
         employeeMap.get(employeeId).employments.push({
           position: employment.position_title, project_name: employment.survey_name,
           contract_start_date: employment.contract_start_date, contract_end_date: employment.contract_end_date,
@@ -215,7 +225,6 @@ const Certificates = () => {
     setSelectedEmployments([]);
     setSelectedTrainings([]);
     setModalSearchTerm("");
-    setError(null);
     setGeneratedCerts([]);
     const fullName = `${employee.firstName} ${employee.middleInitial || ''} ${employee.lastName} ${employee.suffix || ''}`.replace(/\s+/g, ' ').trim();
     try {
@@ -234,7 +243,6 @@ const Certificates = () => {
     setSelectedEmployments([]);
     setSelectedTrainings([]);
     setModalSearchTerm("");
-    setError(null);
   };
 
   const filteredTrainings = useMemo(() => {
@@ -300,12 +308,11 @@ const Certificates = () => {
     ) || null;
   }, [generatedCerts]);
 
-  const fetchFile = async (endpointPath, payload, fileName, fileType = 'pdf') => {
+  const fetchFile = async (endpointPath, payload, fileName, fileType = 'pdf', certificationType = 'training') => {
     if (!serverIp) {
-      setError({ type: 'download', message: 'Server IP is not available.' });
+      showToast('Server IP is not available.', 'error');
       return false;
     }
-    setError(null);
     setIsProgressComplete(false);
     setProgress(0);
     setProgressMessage('Preparing your file, please wait...');
@@ -315,7 +322,6 @@ const Certificates = () => {
       const API_PORT = 3001;
       const fullUrl = `http://${serverIp}:${API_PORT}/api/${endpointPath}`;
 
-      const finalFileName = `${fileName}.${fileType}`;
       const prepareResponse = await window.electronAPI.prepareDownload({
         url: fullUrl,
         payload: {
@@ -329,26 +335,33 @@ const Certificates = () => {
         throw new Error(prepareResponse.message || 'Failed to prepare file for download.');
       }
       
-      setProgressMessage('Ready to save. Please choose a location.');
+      setProgressMessage('Saving certificate to local folder...');
 
-      const saveResult = await window.electronAPI.saveFile({
+      // Use auto-save instead of manual file dialog
+      const saveResult = await window.electronAPI.autoSaveCertificate({
         downloadId: prepareResponse.downloadId,
-        fileName: finalFileName,
-        fileType: fileType
+        fileName: fileName,
+        certificateType: certificationType
       });
 
       if (saveResult.status === 'completed') {
         setSavedFilePath(saveResult.path);
-        return saveResult.message;
-      } else if (saveResult.status === 'cancelled') {
+        
+        // Close the progress modal immediately without showing completion buttons
         setIsProgressModalOpen(false);
-        return false;
+        
+        // Auto-open the certificate file
+        setTimeout(() => {
+          window.electronAPI.openFile(saveResult.path);
+        }, 500);
+        
+        return saveResult.message;
       } else {
         throw new Error(saveResult.message);
       }
     } catch (err) {
       console.error(`Error downloading file:`, err.message);
-      setError({ type: 'download', message: err.message });
+      showToast(err.message, 'error');
       setIsProgressModalOpen(false);
       return false;
     }
@@ -366,6 +379,73 @@ const Certificates = () => {
     setSavedFilePath(null);
   };
 
+  // Validation function to check required fields
+  const validateCertificateData = (type, employee, records) => {
+    const errors = [];
+
+    // Validate employee data
+    if (!employee?.firstName || !employee?.lastName) {
+      errors.push('Employee name (first and last) is required');
+    }
+
+    if (type === 'Training') {
+      if (!Array.isArray(records) || records.length === 0) {
+        errors.push('At least one training record is required');
+        return errors;
+      }
+
+      records.forEach((record, index) => {
+        const recordErrors = [];
+        if (!record.trainingTitle || (typeof record.trainingTitle === 'string' && record.trainingTitle.trim() === '')) {
+          recordErrors.push('Training Title');
+        }
+        if (!record.startDate || (typeof record.startDate === 'string' && record.startDate.trim() === '')) {
+          recordErrors.push('Start Date');
+        }
+        if (!record.endDate || (typeof record.endDate === 'string' && record.endDate.trim() === '')) {
+          recordErrors.push('End Date');
+        }
+        if (!record.hours || (typeof record.hours === 'string' && record.hours.trim() === '')) {
+          recordErrors.push('Hours');
+        }
+        if (!record.venue || (typeof record.venue === 'string' && record.venue.trim() === '')) {
+          recordErrors.push('Venue');
+        }
+
+        if (recordErrors.length > 0) {
+          errors.push(`Training ${index + 1}: Missing or empty ${recordErrors.join(', ')}`);
+        }
+      });
+    } else if (type === 'Employment') {
+      if (!Array.isArray(records) || records.length === 0) {
+        errors.push('At least one employment record is required');
+        return errors;
+      }
+
+      records.forEach((record, index) => {
+        const recordErrors = [];
+        if (!record.position || (typeof record.position === 'string' && record.position.trim() === '')) {
+          recordErrors.push('Position');
+        }
+        if (!record.project_name || (typeof record.project_name === 'string' && record.project_name.trim() === '')) {
+          recordErrors.push('Project Name');
+        }
+        if (!record.contract_start_date || (typeof record.contract_start_date === 'string' && record.contract_start_date.trim() === '')) {
+          recordErrors.push('Start Date');
+        }
+        if (!record.contract_end_date || (typeof record.contract_end_date === 'string' && record.contract_end_date.trim() === '')) {
+          recordErrors.push('End Date');
+        }
+
+        if (recordErrors.length > 0) {
+          errors.push(`Employment ${index + 1}: Missing or empty ${recordErrors.join(', ')}`);
+        }
+      });
+    }
+
+    return errors;
+  };
+
   const handleDownloadTraining = (record, transmitterName, encodedBy) => {
     const fullName = `${selectedEmployee.firstName} ${selectedEmployee.middleInitial || ''} ${selectedEmployee.lastName}`.replace(/\s+/g, ' ').trim();
     const certificateData = { 
@@ -380,7 +460,7 @@ const Certificates = () => {
       transmitterName,
       encodedBy
     };
-    return fetchFile(apiEndpoints.Training.download, certificateData, `Certificate-Training-${selectedEmployee.lastName}`);
+    return fetchFile(apiEndpoints.Training.download, certificateData, `Certificate-Training-${selectedEmployee.lastName}`, 'pdf', 'training');
   };
 
   const handleDownloadSingleEmployment = (record, withReference = false, transmitterName = '', encodedBy = '') => {
@@ -407,7 +487,7 @@ const Certificates = () => {
       transmitterName,
       encodedBy
     };
-    return fetchFile(apiEndpoints.SingleEmployment.download, certificateData, `Certificate-Employment-${selectedEmployee.lastName}`);
+    return fetchFile(apiEndpoints.SingleEmployment.download, certificateData, `Certificate-Employment-${selectedEmployee.lastName}`, 'pdf', 'employment');
   };
 
   const handleDownloadMultiEmployment = (withReference = false, transmitterName = '', encodedBy = '') => {
@@ -429,7 +509,7 @@ const Certificates = () => {
       transmitterName,
       encodedBy
     };
-    return fetchFile(apiEndpoints.MultiEmployment.download, certificateData, `Certificate-Multi-Employment-${selectedEmployee.lastName}`);
+    return fetchFile(apiEndpoints.MultiEmployment.download, certificateData, `Certificate-Multi-Employment-${selectedEmployee.lastName}`, 'pdf', 'employment');
   };
 
   const handleDownloadBatchTraining = (transmitterName, encodedBy) => {
@@ -446,7 +526,7 @@ const Certificates = () => {
       transmitterName,
       encodedBy
     };
-    return fetchFile(apiEndpoints.BatchTraining.download, certificateData, `Certificate-Batch-Training-${selectedEmployee.lastName}`);
+    return fetchFile(apiEndpoints.BatchTraining.download, certificateData, `Certificate-Batch-Training-${selectedEmployee.lastName}`, 'pdf', 'training');
   };
 
 
@@ -455,6 +535,13 @@ const Certificates = () => {
   };
 
   const executeEmploymentDownload = async (withReference) => {
+    // Validate employment records before generating certificate
+    const validationErrors = validateCertificateData('Employment', selectedEmployee, selectedEmployments);
+    if (validationErrors.length > 0) {
+      showToast(`Certificate cannot be generated: ${validationErrors.join(' | ')}`, 'error');
+      return;
+    }
+
     closeModal();
     const transmitterName = `${sessionState.user.first_name} ${sessionState.user.middle_initial} ${sessionState.user.last_name}`;
     const encodedBy = sessionState.user.email_address;
@@ -464,10 +551,19 @@ const Certificates = () => {
     } else if (selectedEmployments.length > 1) {
       result = await handleDownloadMultiEmployment(withReference, transmitterName, encodedBy);
     }
-    if (typeof result === 'string') showCompletionModal(result);
+    if (typeof result === 'string') {
+      // Download complete, PDF opens automatically
+    }
   };
 
   const handleTrainingDownloadAction = async () => {
+    // Validate training records before generating certificate
+    const validationErrors = validateCertificateData('Training', selectedEmployee, selectedTrainings);
+    if (validationErrors.length > 0) {
+      showToast(`Certificate cannot be generated: ${validationErrors.join(' | ')}`, 'error');
+      return;
+    }
+
     closeModal();
     const transmitterName = `${sessionState.user.first_name} ${sessionState.user.middle_initial} ${sessionState.user.last_name}`;
     const encodedBy = sessionState.user.email_address;
@@ -478,11 +574,17 @@ const Certificates = () => {
       result = await handleDownloadBatchTraining(transmitterName, encodedBy);
     }
     if (typeof result === 'string') {
-      showCompletionModal(result);
+      // Download complete, PDF opens automatically
     }
   };
 
   const handleGenerateBatchByTitle = async (trainingTitle) => {
+    // Validate that trainingTitle is not empty
+    if (!trainingTitle || (typeof trainingTitle === 'string' && trainingTitle.trim() === '')) {
+      showToast('Training title is required and cannot be empty', 'error');
+      return;
+    }
+
     const transmitterName = `${sessionState.user.first_name} ${sessionState.user.middle_initial} ${sessionState.user.last_name}`;
     const encodedBy = sessionState.user.email_address;
     const payload = { trainingTitle, transmitterName, encodedBy };
@@ -509,7 +611,8 @@ const Certificates = () => {
         endpointPath, 
         payload, 
         `Printable Certificates - ${trainingTitle}`, 
-        'pdf'
+        'pdf',
+        'training'
       );
       
       if (typeof result === 'string') {
@@ -690,7 +793,7 @@ const Certificates = () => {
                 {/* Backdrop — click outside to close */}
                 <div className="fixed inset-0 z-[69]" onClick={() => setIsValidationModalOpen(false)} />
                 {/* Dropdown panel */}
-                <div className="fixed top-16 left-1/2 -translate-x-1/2 z-[70] w-[500px] max-h-[150vh] bg-white rounded-xl shadow-2xl dark:bg-gray-800 flex flex-col border border-gray-200 dark:border-gray-700">
+                <div className="fixed top-16 left-1/2 -translate-x-1/2 z-[70] w-[500px] max-h-[calc(100vh-80px)] bg-white rounded-xl shadow-2xl dark:bg-gray-800 flex flex-col border border-gray-200 dark:border-gray-700">
 
                   {/* Header */}
                   <div className="px-5 py-4 border-b border-gray-100 dark:border-gray-700 flex-shrink-0">
@@ -704,7 +807,7 @@ const Certificates = () => {
                   <div className="px-5 pt-4 pb-2 flex-shrink-0">
                     <form onSubmit={handleValidate} className="relative">
                       <input type="text" value={validationInput} onChange={(e) => setValidationInput(e.target.value)} placeholder="Enter Reference Number (e.g., 26CAR32-001)" className="w-full pl-3 pr-10 py-2.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white" />
-                      <button type="submit" disabled={isValidating || !validationInput.trim()} className="absolute right-2 top-2 p-1 text-white bg-indigo-600 rounded-md hover:bg-indigo-700 disabled:opacity-50">
+                      <button type="submit" disabled={isValidating || !validationInput.trim()} title={isValidating ? 'Validating...' : !validationInput.trim() ? 'Enter employee name to validate' : 'Validate'} className="absolute right-2 top-2 p-1 text-white bg-indigo-600 rounded-md hover:bg-indigo-700 disabled:opacity-50">
                         {isValidating ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : <FaSearch className="w-3.5 h-3.5" />}
                       </button>
                     </form>
@@ -719,7 +822,7 @@ const Certificates = () => {
                           {/* Status + source badges */}
                           <div className="flex flex-wrap gap-1.5 mb-3">
                             <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full font-bold text-xs tracking-wider border-[1.5px] ${validationResult.valid ? 'bg-green-50 text-green-700 border-green-300 dark:bg-green-900/20 dark:text-green-400 dark:border-green-700' : 'bg-red-50 text-red-700 border-red-300 dark:bg-red-900/20 dark:text-red-400 dark:border-red-700'}`}>
-                              {validationResult.valid ? '✓ AUTHENTIC' : '✗ UNVERIFIED'}
+                              {validationResult.valid ? '✓ RECORD FOUND' : '✗ UNVERIFIED'}
                             </span>
                             {validationResult.valid && validationResult.data && (
                               <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold border ${
@@ -757,19 +860,64 @@ const Certificates = () => {
                                     { label: 'Dates', value: validationResult.data.training_dates },
                                     ...(validationResult.data.training_hours ? [{ label: 'Hours', value: `${validationResult.data.training_hours} hour(s)` }] : []),
                                   ] : []),
-                                  ...(validationResult.data.certificate_type === 'employment' ? [
-                                    { label: 'Position', value: validationResult.data.position },
-                                    { label: 'Project', value: validationResult.data.employment_titles },
-                                    { label: 'Duration', value: validationResult.data.contract_duration },
-                                    ...(validationResult.data.performance_rating ? [{ label: 'Performance', value: validationResult.data.performance_rating }] : []),
-                                    ...(validationResult.data.remarks ? [{ label: 'Commendation', value: validationResult.data.remarks }] : []),
-                                  ] : []),
                                 ].map(({ label, value }) => value ? (
                                   <div key={label} className="flex gap-2 py-2 border-b border-slate-100 dark:border-gray-700">
                                     <span className="min-w-[120px] text-slate-500 dark:text-slate-400 text-xs font-bold uppercase tracking-wider flex-shrink-0 pt-px">{label}</span>
                                     <span className="text-slate-800 dark:text-slate-200 text-sm leading-relaxed">{value}</span>
                                   </div>
                                 ) : null)}
+
+                                {/* Multiple Employments - Numbered Cards */}
+                                {validationResult.data.certificate_type === 'employment' && validationResult.data.position && (
+                                  <div className="mt-4 space-y-3">
+                                    {parseEmploymentData(validationResult.data.position).map((position, idx) => (
+                                      <div key={idx} className="bg-slate-50 dark:bg-gray-900/30 border border-slate-200 dark:border-gray-700 rounded-lg p-3">
+                                        <div className="font-bold text-slate-800 dark:text-white text-sm mb-2 pb-2 border-b border-slate-200 dark:border-gray-700">
+                                          📋 Employment Record #{idx + 1}
+                                        </div>
+                                        <div className="space-y-2 text-sm">
+                                          <div className="flex gap-2">
+                                            <span className="text-slate-500 dark:text-slate-400 font-bold text-xs uppercase tracking-wider flex-shrink-0 min-w-[90px]">Position</span>
+                                            <span className="text-slate-800 dark:text-slate-200">{position}</span>
+                                          </div>
+                                          {parseEmploymentData(validationResult.data.employment_titles)[idx] && (
+                                            <div className="flex gap-2">
+                                              <span className="text-slate-500 dark:text-slate-400 font-bold text-xs uppercase tracking-wider flex-shrink-0 min-w-[90px]">Project</span>
+                                              <span className="text-slate-800 dark:text-slate-200">{parseEmploymentData(validationResult.data.employment_titles)[idx]}</span>
+                                            </div>
+                                          )}
+                                          {parseEmploymentData(validationResult.data.contract_duration)[idx] && (
+                                            <div className="flex gap-2">
+                                              <span className="text-slate-500 dark:text-slate-400 font-bold text-xs uppercase tracking-wider flex-shrink-0 min-w-[90px]">Duration</span>
+                                              <span className="text-slate-800 dark:text-slate-200">{parseEmploymentData(validationResult.data.contract_duration)[idx]}</span>
+                                            </div>
+                                          )}
+                                          {validationResult.data.performance_rating && (
+                                            <div className="flex gap-2">
+                                              <span className="text-slate-500 dark:text-slate-400 font-bold text-xs uppercase tracking-wider flex-shrink-0 min-w-[90px]">Performance</span>
+                                              <span className="text-slate-800 dark:text-slate-200">{validationResult.data.performance_rating}</span>
+                                            </div>
+                                          )}
+                                          {validationResult.data.remarks && (
+                                            <div className="flex gap-2">
+                                              <span className="text-slate-500 dark:text-slate-400 font-bold text-xs uppercase tracking-wider flex-shrink-0 min-w-[90px]">Commendation</span>
+                                              <span className="text-slate-800 dark:text-slate-200">{validationResult.data.remarks}</span>
+                                            </div>
+                                          )}
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Verification Note */}
+                              <div className="mt-4 p-3 bg-amber-50 border border-amber-300 rounded-lg flex gap-3 dark:bg-amber-900/20 dark:border-amber-700">
+                                <span className="text-lg flex-shrink-0">⚠️</span>
+                                <div className="text-xs text-amber-900 dark:text-amber-200 leading-relaxed">
+                                  <strong className="block mb-1 text-amber-950 dark:text-amber-100">Important Verification Step</strong>
+                                  Please compare the details displayed above with the information printed on the physical certificate. If any details do not match, the certificate may have been tampered.
+                                </div>
                               </div>
                             </>
                           )}
@@ -785,7 +933,7 @@ const Certificates = () => {
                         ✏️ Edit &amp; Regenerate
                       </button>
                     ) : <span />}
-                    <button onClick={() => setIsValidationModalOpen(false)} className="px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600">Close</button>
+                    <button onClick={() => setIsValidationModalOpen(false)} className="flex items-center gap-2 px-3 py-1.5 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600"><FiX className="w-4 h-4" />Close</button>
                   </div>
 
                 </div>
@@ -832,8 +980,8 @@ const Certificates = () => {
                     <td className="px-5 py-4 text-sm text-center border-b border-gray-200 dark:border-gray-700"><p className="text-gray-900 whitespace-no-wrap dark:text-gray-300">{employee.employments.length}</p></td>
                     <td className="px-5 py-4 text-sm text-center border-b border-gray-200 dark:border-gray-700">
                       <div className="flex justify-center space-x-2">
-                        <button onClick={() => handleOpenModal(employee, 'Training')} className="px-4 py-2 font-semibold text-gray-800 bg-green-400 rounded-lg shadow-md hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed" disabled={employee.trainings.length === 0}>Training</button>
-                        <button onClick={() => handleOpenModal(employee, 'Employment')} className="px-4 py-2 font-semibold text-gray-800 bg-red-400 rounded-lg shadow-md hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed" disabled={employee.employments.length === 0}>Employment</button>
+                        <button onClick={() => handleOpenModal(employee, 'Training')} className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed" disabled={employee.trainings.length === 0} title={employee.trainings.length === 0 ? 'No training records available' : 'Generate training certificate'}><FaFilePdf className="w-4 h-4" />Training</button>
+                        <button onClick={() => handleOpenModal(employee, 'Employment')} className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-white bg-orange-600 rounded-lg hover:bg-orange-700 dark:bg-orange-700 dark:hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed" disabled={employee.employments.length === 0} title={employee.employments.length === 0 ? 'No employment records available' : 'Generate employment certificate'}><FaFilePdf className="w-4 h-4" />Employment</button>
                       </div>
                     </td>
                   </tr>
@@ -867,9 +1015,9 @@ const Certificates = () => {
                     <td className="px-5 py-4 border-b border-gray-200 dark:border-gray-700">{`${training.startDate.toLocaleDateString()} - ${training.endDate.toLocaleDateString()}`}</td>
                     <td className="px-5 py-4 text-center border-b border-gray-200 dark:border-gray-700">
                       {generatedTitlesList.includes(training.title) ? (
-                        <span title="Certificates for this training have already been generated." className="px-4 py-2 font-semibold text-gray-400 bg-gray-200 rounded-lg cursor-not-allowed dark:bg-gray-700 dark:text-gray-500">Generated</span>
+                        <span title="Certificates for this training have already been generated." className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-gray-400 bg-gray-200 rounded-lg cursor-not-allowed dark:bg-gray-700 dark:text-gray-500"><FaFilePdf className="w-4 h-4" />Generated</span>
                       ) : (
-                        <button onClick={() => handleGenerateBatchByTitle(training.title)} className="px-4 py-2 font-semibold text-white bg-blue-600 rounded-lg shadow-md hover:bg-blue-700">Download</button>
+                        <button onClick={() => handleGenerateBatchByTitle(training.title)} className="inline-flex items-center justify-center gap-2 px-3 py-2 text-xs font-semibold text-white bg-green-600 rounded-lg hover:bg-green-700 dark:bg-green-700 dark:hover:bg-green-800 transition-colors"><FaDownload className="w-4 h-4" />Download</button>
                       )}
                     </td>
                   </tr>
@@ -887,12 +1035,12 @@ const Certificates = () => {
           Showing {totalItems > 0 ? (currentPage - 1) * itemsPerPage + 1 : 0} to {Math.min(currentPage * itemsPerPage, totalItems)} of {totalItems} records
         </span>
         <div className="flex items-center space-x-2">
-          <button onClick={handlePreviousPage} disabled={currentPage === 1} className="px-4 py-2 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded disabled:opacity-50">
-            Previous
+          <button onClick={handlePreviousPage} disabled={currentPage === 1} title={currentPage === 1 ? 'Already on first page' : 'Go to previous page'} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed">
+            <FaArrowLeft className="w-4 h-4" />Previous
           </button>
           <span className="text-gray-700 dark:text-gray-300 px-2">{currentPage}</span>
-          <button onClick={handleNextPage} disabled={currentPage >= totalPages} className="px-4 py-2 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded disabled:opacity-50">
-            Next
+          <button onClick={handleNextPage} disabled={currentPage >= totalPages} title={currentPage >= totalPages ? 'Already on last page' : 'Go to next page'} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed">
+            Next<FaArrowRight className="w-4 h-4" />
           </button>
         </div>
       </div>
@@ -907,8 +1055,8 @@ const Certificates = () => {
             </div>
             <div className="flex-auto overflow-y-auto">
               <ul className="p-6 space-y-3">
-                {modalMode === 'Training' && (filteredTrainings.length > 0 ? (filteredTrainings.map((record, index) => { const isSelected = selectedTrainings.some(item => item.trainingTitle === record.trainingTitle); const alreadyGenerated = isTrainingGenerated(record); return ( <li key={index} onMouseEnter={() => alreadyGenerated && setHoveredGeneratedTraining(alreadyGenerated)} onMouseLeave={() => alreadyGenerated && setHoveredGeneratedTraining(null)} className={`rounded-lg shadow-sm transition-colors duration-200 ${alreadyGenerated ? 'opacity-60 bg-gray-100 dark:bg-gray-900/60' : isSelected ? 'bg-blue-50 dark:bg-blue-900/50 ring-2 ring-blue-500' : 'bg-gray-50 dark:bg-gray-900'}`}> <label className={`flex items-center justify-between w-full p-4 ${alreadyGenerated ? 'cursor-not-allowed' : 'cursor-pointer'}`}> <div className="flex flex-col gap-0.5"><span className="font-medium text-gray-900 dark:text-white">{record.trainingTitle}</span></div> <input type="checkbox" className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 disabled:opacity-50" checked={isSelected} onChange={() => handleTrainingSelectionChange(record)} disabled={alreadyGenerated} /> </label> </li> ); })) : <p className="py-8 text-center text-gray-500 dark:text-gray-400">No matching training records found.</p>)}
-                {modalMode === 'Employment' && (filteredEmployments.length > 0 ? (filteredEmployments.map((record, index) => { const isSelected = selectedEmployments.some(item => item.project_name === record.project_name && item.position === record.position); return ( <li key={index} className={`rounded-lg shadow-sm transition-colors duration-200 ${isSelected ? 'bg-blue-50 dark:bg-blue-900/50 ring-2 ring-blue-500' : 'bg-gray-50 dark:bg-gray-900'}`}> <label className="flex items-center justify-between w-full p-4 cursor-pointer"> <div className="flex flex-col gap-0.5"><span className="font-medium text-gray-900 dark:text-white">{`${record.position} (${record.project_name})`}</span></div> <input type="checkbox" className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600" checked={isSelected} onChange={() => handleEmploymentSelectionChange(record)} /> </label> </li> ); })) : <p className="py-8 text-center text-gray-500 dark:text-gray-400">No matching employment records found.</p>)}
+                {modalMode === 'Training' && (filteredTrainings.length > 0 ? (filteredTrainings.map((record, index) => { const isSelected = selectedTrainings.some(item => item.trainingTitle === record.trainingTitle); const alreadyGenerated = isTrainingGenerated(record); return ( <li key={index} onMouseEnter={() => alreadyGenerated && setHoveredGeneratedTraining(alreadyGenerated)} onMouseLeave={() => alreadyGenerated && setHoveredGeneratedTraining(null)} className={`rounded-lg shadow-sm transition-colors duration-200 ${alreadyGenerated ? 'opacity-60 bg-gray-100 dark:bg-gray-900/60' : isSelected ? 'bg-blue-50 dark:bg-blue-900/50 ring-2 ring-blue-500' : 'bg-gray-50 dark:bg-gray-900'}`}> <label className={`flex items-center justify-between w-full p-4 ${alreadyGenerated ? 'cursor-not-allowed' : 'cursor-pointer'}`}> <div className="flex flex-col gap-0.5"><span className="font-medium text-gray-900 dark:text-white whitespace-normal break-words">{record.trainingTitle}</span></div> <input type="checkbox" className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 disabled:opacity-50" checked={isSelected} onChange={() => handleTrainingSelectionChange(record)} disabled={alreadyGenerated} /> </label> </li> ); })) : <p className="py-8 text-center text-gray-500 dark:text-gray-400">No matching training records found.</p>)}
+                {modalMode === 'Employment' && (filteredEmployments.length > 0 ? (filteredEmployments.map((record, index) => { const isSelected = selectedEmployments.some(item => item.project_name === record.project_name && item.position === record.position); return ( <li key={index} className={`rounded-lg shadow-sm transition-colors duration-200 ${isSelected ? 'bg-blue-50 dark:bg-blue-900/50 ring-2 ring-blue-500' : 'bg-gray-50 dark:bg-gray-900'}`}> <label className="flex items-center justify-between w-full p-4 cursor-pointer"> <div className="flex flex-col gap-0.5"><span className="font-medium text-gray-900 dark:text-white whitespace-normal break-words">{`${record.position} (${record.project_name})`}</span></div> <input type="checkbox" className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600" checked={isSelected} onChange={() => handleEmploymentSelectionChange(record)} /> </label> </li> ); })) : <p className="py-8 text-center text-gray-500 dark:text-gray-400">No matching employment records found.</p>)}
               </ul>
             </div>
             {(() => {
@@ -927,13 +1075,13 @@ const Certificates = () => {
                   </div>
                   {/* Right: Cancel + action button */}
                   <div className="flex items-center gap-3 flex-shrink-0">
-                    <button onClick={closeModal} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600">Cancel</button>
+                    <button onClick={closeModal} className="flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"><FaTimes className="w-4 h-4" />Cancel</button>
                     {modalMode === 'Training' && (
-                      <button onClick={handleTrainingDownloadAction} className="px-5 py-2 text-sm font-medium text-white bg-blue-600 rounded-md shadow-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed" disabled={selectedTrainings.length === 0}>Download Selected ({selectedTrainings.length})</button>
+                      <button onClick={handleTrainingDownloadAction} className="flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-green-600 rounded-lg hover:bg-green-700 dark:bg-green-700 dark:hover:bg-green-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors" disabled={selectedTrainings.length === 0} title={selectedTrainings.length === 0 ? 'Select training records to download' : `Download ${selectedTrainings.length} certificate(s)`}><FaDownload className="w-4 h-4" />Download ({selectedTrainings.length})</button>
                     )}
                     {modalMode === 'Employment' && (
-                      <button onClick={handleEmploymentDownloadAction} className="px-5 py-2 text-sm font-medium text-white bg-blue-600 rounded-md shadow-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed" disabled={selectedEmployments.length === 0 || (selectedEmployments.length === 1 && !!isEmploymentGenerated(selectedEmployments[0])) || !!multiIssuedCert}>
-                        Download Selected ({selectedEmployments.length})
+                      <button onClick={handleEmploymentDownloadAction} className="flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-green-600 rounded-lg hover:bg-green-700 dark:bg-green-700 dark:hover:bg-green-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors" disabled={selectedEmployments.length === 0 || (selectedEmployments.length === 1 && !!isEmploymentGenerated(selectedEmployments[0])) || !!multiIssuedCert} title={selectedEmployments.length === 0 ? 'Select employment records to download' : (selectedEmployments.length === 1 && isEmploymentGenerated(selectedEmployments[0])) ? 'This certificate has already been generated' : multiIssuedCert ? 'Cannot download multiple issued certificates' : `Download ${selectedEmployments.length} certificate(s)`}>
+                        <FaDownload className="w-4 h-4" />Download ({selectedEmployments.length})
                       </button>
                     )}
                   </div>
@@ -1053,11 +1201,11 @@ const Certificates = () => {
 
               {/* Footer */}
               <div className="px-5 py-4 bg-gray-50 dark:bg-gray-700/50 border-t border-gray-100 dark:border-gray-700 flex justify-end gap-3 flex-shrink-0">
-                <button type="button" onClick={() => setIsEditModalOpen(false)} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600">
-                  Cancel
+                <button type="button" onClick={() => setIsEditModalOpen(false)} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600">
+                  <FiX className="w-4 h-4" />Cancel
                 </button>
-                <button type="submit" className="flex items-center gap-2 px-5 py-2 text-sm font-medium text-white bg-amber-500 rounded-lg hover:bg-amber-600 shadow-sm">
-                  📄 Save &amp; Regenerate PDF
+                <button type="submit" className="flex items-center gap-2 px-5 py-2 text-sm font-semibold text-white bg-amber-500 rounded-lg hover:bg-amber-600 dark:bg-amber-600 dark:hover:bg-amber-700">
+                  <FiSave className="w-4 h-4" />Save &amp; Regenerate PDF
                 </button>
               </div>
             </form>
@@ -1074,35 +1222,7 @@ const Certificates = () => {
         filePath={savedFilePath}
       />
 
-      {error && error.type !== 'download' && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black bg-opacity-70">
-          <div className="w-full max-w-md p-6 bg-white rounded-lg shadow-xl dark:bg-gray-800 transform transition-all">
-            <div className="text-center">
-              <div className="flex items-center justify-center w-12 h-12 mx-auto bg-red-100 rounded-full dark:bg-red-900/50"><FaExclamationTriangle className="w-6 h-6 text-red-600 dark:text-red-400" aria-hidden="true" /></div>
-              <h3 className="mt-4 text-lg font-medium text-gray-900 dark:text-white">Error</h3>
-              <div className="mt-2 text-sm text-gray-600 dark:text-gray-300"><p>{error.message}</p></div>
-            </div>
-            <div className="mt-5 sm:mt-6">
-              <button type="button" className="inline-flex justify-center w-full px-4 py-2 text-base font-medium text-white bg-red-600 border border-transparent rounded-md shadow-sm hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500" onClick={() => setError(null)}>OK</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {error?.type === 'download' && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black bg-opacity-70">
-          <div className="w-full max-w-md p-6 bg-white rounded-lg shadow-xl dark:bg-gray-800 transform transition-all">
-            <div className="text-center">
-              <div className="flex items-center justify-center w-12 h-12 mx-auto bg-red-100 rounded-full dark:bg-red-900/50"><FaExclamationTriangle className="w-6 h-6 text-red-600 dark:text-red-400" aria-hidden="true" /></div>
-              <h3 className="mt-4 text-lg font-medium text-gray-900 dark:text-white">Generation Failed</h3>
-              <div className="mt-2 text-sm text-gray-600 dark:text-gray-300"><p>{error.message}</p></div>
-            </div>
-            <div className="mt-5 sm:mt-6">
-              <button type="button" className="inline-flex justify-center w-full px-4 py-2 text-base font-medium text-white bg-red-600 border border-transparent rounded-md shadow-sm hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500" onClick={() => setError(null)}>OK</button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ToastContainer toasts={toasts} onClose={removeToast} />
     </div>
   );
 };

@@ -1,22 +1,107 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { FaSort, FaSortUp, FaSortDown, FaSync, FaPaperPlane } from 'react-icons/fa';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { FaSort, FaSortUp, FaSortDown, FaSync, FaPaperPlane, FaComments, FaUserCheck, FaClipboard, FaTrash, FaRedo, FaCheckCircle, FaArrowLeft, FaCheck } from 'react-icons/fa';
+import ToastContainer from '../components/ToastContainer';
+import { FiX, FiSave } from 'react-icons/fi';
+import useToast from '../hooks/useToast';
 import { apiFetch } from '../components/API';
 import { useSettings } from '../context/SettingsContext';
 
+// Static constants defined outside the component to avoid re-creation on every render.
+const PA_CRITERIA = [
+  { key: 'educational_attainment', label: 'Educational Attainment', max: 100 },
+  { key: 'relevant_training', label: 'Relevant Training', max: 100 },
+  { key: 'relevant_work_experience', label: 'Relevant Work Experience', max: 100 },
+];
+const PA_EXAM_MAX = 100;
+
+const INTERVIEW_CRITERIA = [
+  { key: 'professionalism', label: 'Professionalism' },
+  { key: 'interpersonal', label: 'Interpersonal Skills' },
+  { key: 'organization', label: 'Organization Skills' },
+  { key: 'written_communication', label: 'Written Communication', notApplicable: true },
+  { key: 'oral_communication', label: 'Oral Communication' },
+  { key: 'digital_literacy', label: 'Digital Literacy' },
+];
+
+const useClickOutside = (ref, handler) => {
+  useEffect(() => {
+    const listener = (event) => {
+      if (!ref.current || ref.current.contains(event.target)) {
+        return;
+      }
+      handler(event);
+    };
+    document.addEventListener('mousedown', listener);
+    return () => {
+      document.removeEventListener('mousedown', listener);
+    };
+  }, [ref, handler]);
+};
+
+const SearchableDropdown = ({ options, value, onChange, placeholder, id, required, disabled = false }) => {
+    const [isOpen, setIsOpen] = useState(false);
+    const [searchTerm, setSearchTerm] = useState('');
+    const dropdownRef = useRef(null);
+  
+    useClickOutside(dropdownRef, () => setIsOpen(false));
+  
+    const selectedOption = useMemo(() => {
+      return options.find((option) => String(option.value) === String(value)) || null;
+    }, [options, value]);
+  
+    const filteredOptions = useMemo(
+      () =>
+        options.filter((option) =>
+          option.label.toLowerCase().includes(searchTerm.toLowerCase())
+        ),
+      [options, searchTerm]
+    );
+  
+    const displayValue = isOpen ? searchTerm : selectedOption?.label || '';
+  
+    const handleSelectOption = (option) => {
+      onChange(option.value);
+      setSearchTerm(option.label);
+      setIsOpen(false);
+    };
+  
+    return (
+      <div className="relative" ref={dropdownRef}>
+        <input id={id} type="text" className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100 dark:disabled:bg-gray-700/50" value={displayValue} onChange={(e) => { if (disabled) return; setSearchTerm(e.target.value); if (!isOpen) setIsOpen(true); }} onFocus={() => { if (disabled) return; setIsOpen(true); setSearchTerm(''); }} placeholder={placeholder} required={required && !value} disabled={disabled} />
+        {isOpen && !disabled && (
+          <div className="absolute z-10 mt-1 w-full rounded-md border border-gray-300 bg-white shadow-lg dark:bg-gray-700">
+            {filteredOptions.length > 0 ? (
+              <ul className="max-h-60 overflow-y-auto">
+                {filteredOptions.map((option) => (
+                  <li key={option.value} className={`cursor-pointer px-4 py-2 text-gray-800 dark:text-gray-200 hover:bg-blue-500 hover:text-white whitespace-normal break-words ${ String(option.value) === String(value) ? 'bg-blue-100 dark:bg-blue-600' : '' }`} onClick={() => handleSelectOption(option)}>
+                    {option.label}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <div className="px-4 py-2 text-gray-500 dark:text-gray-400">No options found.</div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+};
+
 const Applicants = () => {
   const { serverIp, isLoading: isSettingsLoading } = useSettings();
+  const { toasts, showToast, removeToast } = useToast();
   const [applicants, setApplicants] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState(null);
   const [sortConfig, setSortConfig] = useState({ key: 'last_name', direction: 'ascending' });
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const rowsPerPage = 10;
   const [isSyncing, setIsSyncing] = useState(false);
+
   const [userRole, setUserRole] = useState('');
-  const [successMessage, setSuccessMessage] = useState(null);
 
   // surveys currently missing evaluation criteria
+  const [transmittableCount, setTransmittableCount] = useState(0);
   const [noCriteriaSurveys, setNoCriteriaSurveys] = useState([]);
 
   // State for the assignment modal
@@ -28,7 +113,6 @@ const Applicants = () => {
   const [preAssessApplicant, setPreAssessApplicant] = useState(null);
   const [preAssessScores, setPreAssessScores] = useState({ educational_attainment: '', relevant_training: '', relevant_work_experience: '', written_examination: '' });
   // removed N/A option for written exam – score required when allowed
-  const [preAssessError, setPreAssessError] = useState(null);
   const [preAssessSaving, setPreAssessSaving] = useState(false);
   const [preAssessConfirm, setPreAssessConfirm] = useState(false);
   const [preAssessAllowed, setPreAssessAllowed] = useState({});
@@ -41,22 +125,18 @@ const Applicants = () => {
   const [employmentRecords, setEmploymentRecords] = useState(null);
   const [employmentRecordsLoading, setEmploymentRecordsLoading] = useState(false);
 
-  const PA_CRITERIA = [
-    { key: 'educational_attainment', label: 'Educational Attainment', max: 100 },
-    { key: 'relevant_training', label: 'Relevant Training', max: 100 },
-    { key: 'relevant_work_experience', label: 'Relevant Work Experience', max: 100 },
-  ];
-  const PA_EXAM_MAX = 100;
-
   // State for Transmit Modal
   const [isTransmitModalOpen, setIsTransmitModalOpen] = useState(false);
-  const [transmitOptions, setTransmitOptions] = useState([]);
+  const [isTransmitSurveyDropdownOpen, setIsTransmitSurveyDropdownOpen] = useState(false);
   const [selectedTransmitSurvey, setSelectedTransmitSurvey] = useState('');
+  const [selectedTransmitPosition, setSelectedTransmitPosition] = useState('');
+  const [isTransmitPositionDropdownOpen, setIsTransmitPositionDropdownOpen] = useState(false);
+  const [applicantToDelete, setApplicantToDelete] = useState(null);
+  const [transmitOptions, setTransmitOptions] = useState([]);
 
   // State for Evaluation Criteria modal (survey-level)
   const [evalSurvey, setEvalSurvey] = useState('');
   const [evalCriteria, setEvalCriteria] = useState({ pre_assessment: [], interview: [] });
-  const [evalSaveError, setEvalSaveError] = useState(null);
   const [evalSaving, setEvalSaving] = useState(false);
   const [isEvalModalOpen, setIsEvalModalOpen] = useState(false);
   const [isSurveyDropdownOpen, setIsSurveyDropdownOpen] = useState(false);
@@ -65,16 +145,7 @@ const Applicants = () => {
   const [evalConfirm, setEvalConfirm] = useState(false);
 
   // list of surveys eligible for evaluation criteria (no criteria set yet)
-  const [evalSurveyOptions, setEvalSurveyOptions] = useState([]);
-
-  const INTERVIEW_CRITERIA = [
-    { key: 'professionalism', label: 'Professionalism' },
-    { key: 'interpersonal', label: 'Interpersonal Skills' },
-    { key: 'organization', label: 'Organization Skills' },
-    { key: 'written_communication', label: 'Written Communication', notApplicable: true },
-    { key: 'oral_communication', label: 'Oral Communication' },
-    { key: 'digital_literacy', label: 'Digital Literacy' },
-  ];
+  // also reused as noCriteriaSurveys for disabling assign/pre-assess buttons
 
   useEffect(() => {
     const getSession = async () => {
@@ -97,9 +168,19 @@ const Applicants = () => {
       const data = await apiFetch('applicants', serverIp);
       setApplicants(data);
     } catch (err) {
-      setError(err.message);
+      showToast(err.message, 'error');
     } finally {
       setIsLoading(false);
+    }
+  }, [serverIp, showToast]);
+
+  const fetchTransmittableCount = useCallback(async () => {
+    if (!serverIp) return;
+    try {
+        const data = await apiFetch('applicants/transmit-options', serverIp);
+        setTransmittableCount(data.length);
+    } catch (err) {
+        setTransmittableCount(0); // fail silently
     }
   }, [serverIp]);
 
@@ -109,9 +190,9 @@ const Applicants = () => {
       const data = await apiFetch('employees/users-for-interview', serverIp);
       setInterviewers(data);
     } catch (err) {
-      console.error("Failed to fetch interviewers:", err);
+      showToast('Failed to fetch interviewers: ' + err.message, 'error');
     }
-  }, [serverIp]);
+  }, [serverIp, showToast]);
 
 
   const loadSurveysWithoutCriteria = useCallback(async () => {
@@ -119,30 +200,55 @@ const Applicants = () => {
     try {
       const data = await apiFetch('applicants/surveys/without-criteria', serverIp);
       const arr = Array.isArray(data) ? data.filter(Boolean) : [];
-      setEvalSurveyOptions(arr);
       setNoCriteriaSurveys(arr);
     } catch (err) {
-      console.error('Failed to load evaluation survey options:', err);
-      setEvalSurveyOptions([]);
+      showToast('Failed to load evaluation survey options: ' + err.message, 'error');
       setNoCriteriaSurveys([]);
-      setError('Failed to load survey options.');
     }
-  }, [serverIp]);
+  }, [serverIp, showToast]);
+
+  const isPreAssessFormValid = useMemo(() => {
+    if (!preAssessAllowed || !preAssessScores) return false;
+    for (const c of PA_CRITERIA) {
+        if (preAssessAllowed[c.key]) {
+            const val = parseFloat(preAssessScores[c.key]);
+            if (preAssessScores[c.key] === '' || isNaN(val) || val <= 0 || val > c.max) return false;
+        }
+    }
+    if (preAssessAllowed.written_examination) {
+        const val = parseFloat(preAssessScores.written_examination);
+        if (preAssessScores.written_examination === '' || isNaN(val) || val < 1 || val > PA_EXAM_MAX) return false;
+    }
+    return true;
+  }, [preAssessScores, preAssessAllowed]);
+
+  const interviewerOptions = useMemo(() => 
+    interviewers.map(user => ({
+      value: user.id,
+      label: user.full_name
+    })).sort((a, b) => a.label.localeCompare(b.label)),
+  [interviewers]);
 
   useEffect(() => {
     if (!isSettingsLoading) {
       fetchApplicants();
       fetchInterviewers();
       loadSurveysWithoutCriteria();
+      fetchTransmittableCount();
     }
-  }, [isSettingsLoading, fetchApplicants, fetchInterviewers, loadSurveysWithoutCriteria]);
+  }, [isSettingsLoading, fetchApplicants, fetchInterviewers, loadSurveysWithoutCriteria, fetchTransmittableCount]);
 
   const filteredApplicants = useMemo(() => {
+    // Filter by interview_status first
+    const allowedStatuses = ['Pending', 'For Interview', 'Ongoing Interview', 'Done Interview'];
+    let filtered = applicants.filter(app => allowedStatuses.includes(app.interview_status));
+    
+    // Then filter by search query
     const searchLower = searchQuery.toLowerCase();
     if (!searchLower) {
-      return applicants;
+      return filtered;
     }
-    return applicants.filter(app => {
+    return filtered.filter(app => {
       const searchableString = `
         ${app.first_name || ''}
         ${app.middle_initial || ''}
@@ -152,6 +258,7 @@ const Applicants = () => {
         ${app.barangay || ''}
         ${app.interviewer || ''}
         ${app.interview_status || ''}
+        ${app.position || ''}
       `.toLowerCase();
       return searchableString.includes(searchLower);
     });
@@ -201,28 +308,11 @@ const Applicants = () => {
   const handleAssignClick = (applicant) => {
     setAssigningApplicant(applicant);
     setSelectedInterviewer('');
-    setError(null);
-  };
-
-  const handleSync = async () => {
-    if (!serverIp) return;
-    setIsSyncing(true);
-    setError(null);
-    try {
-      await apiFetch('applicants/sync', serverIp, { method: 'POST' });
-      await Promise.all([fetchApplicants(), fetchInterviewers()]);
-      setSuccessMessage('Applicants synced successfully.');
-      setTimeout(() => setSuccessMessage(null), 3000);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setIsSyncing(false);
-    }
   };
 
   const handleConfirmAssignment = async () => {
     if (!assigningApplicant || !selectedInterviewer) {
-        setError("Please select an interviewer.");
+        showToast("Please select an interviewer.", 'error');
         return;
     }
     
@@ -230,23 +320,27 @@ const Applicants = () => {
       await apiFetch(`applicants/${assigningApplicant.id}/assign`, serverIp, { method: 'PUT', body: JSON.stringify({ interviewer_id: selectedInterviewer }) });
       setAssigningApplicant(null);
       fetchApplicants();
-      setSuccessMessage('Interviewer assigned successfully.');
-      setTimeout(() => setSuccessMessage(null), 3000);
+      fetchTransmittableCount();
+      showToast('Interviewer assigned successfully.', 'success');
     } catch (err) {
-      setError(err.message);
+      showToast(err.message, 'error');
     }
   };
 
-  const handleDelete = async (id) => {
-    if (!window.confirm("Are you sure you want to delete this applicant?")) return;
+  const handleDeleteClick = (applicant) => {
+    setApplicantToDelete(applicant);
+  };
 
+  const confirmDelete = async () => {
+    if (!applicantToDelete) return;
     try {
-      await apiFetch(`applicants/${id}`, serverIp, { method: 'DELETE' });
-      setApplicants(prev => prev.filter(app => app.id !== id));
-      setSuccessMessage('Applicant deleted successfully.');
-      setTimeout(() => setSuccessMessage(null), 3000);
+      await apiFetch(`applicants/${applicantToDelete.id}`, serverIp, { method: 'DELETE' });
+      setApplicants(prev => prev.filter(app => app.id !== applicantToDelete.id));
+      showToast('Applicant deleted successfully.', 'success');
+      setApplicantToDelete(null);
     } catch (err) {
-      setError(err.message);
+      showToast(err.message, 'error');
+      setApplicantToDelete(null);
     }
   };
 
@@ -260,7 +354,6 @@ const Applicants = () => {
       relevant_work_experience: saved.relevant_work_experience ?? '',
       written_examination: saved.written_examination ?? '',
     });
-    setPreAssessError(null);
     setPreAssessApplicant(app);
 
     // determine which fields are allowed per survey's evaluation criteria
@@ -284,24 +377,24 @@ const Applicants = () => {
 
   const handlePreAssessSubmit = (e) => {
     e.preventDefault();
+    // only validate criteria that are allowed for this survey
     for (const c of PA_CRITERIA) {
+      if (!preAssessAllowed[c.key]) continue; // skip if not allowed for this survey
       const val = parseFloat(preAssessScores[c.key]);
-      if (preAssessScores[c.key] === '' || isNaN(val)) { setPreAssessError(`Please enter a score for ${c.label}.`); return; }
-      if (val <= 0 || val > c.max) { setPreAssessError(`${c.label} score must be greater than 0 and at most ${c.max}.`); return; }
+      if (preAssessScores[c.key] === '' || isNaN(val)) { showToast(`Please enter a score for ${c.label}.`, 'error'); return; }
+      if (val <= 0 || val > c.max) { showToast(`${c.label} score must be greater than 0 and at most ${c.max}.`, 'error'); return; }
     }
     // written examination score is required only if the criterion is allowed
     if (preAssessAllowed.written_examination) {
       const val = parseFloat(preAssessScores.written_examination);
-      if (preAssessScores.written_examination === '' || isNaN(val)) { setPreAssessError('Please enter a score for Written Examination.'); return; }
-      if (val < 1 || val > PA_EXAM_MAX) { setPreAssessError(`Written Examination score must be between 1 and ${PA_EXAM_MAX}.`); return; }
+      if (preAssessScores.written_examination === '' || isNaN(val)) { showToast('Please enter a score for Written Examination.', 'error'); return; }
+      if (val < 1 || val > PA_EXAM_MAX) { showToast(`Written Examination score must be between 1 and ${PA_EXAM_MAX}.`, 'error'); return; }
     }
-    setPreAssessError(null);
     setPreAssessConfirm(true);
   };
 
 
   const handleOpenEvalModal = async () => {
-    setEvalSaveError(null);
     setEvalCriteria({ pre_assessment: [], interview: [] });
     setEvalSurvey('');
     setEvalConfirm(false);
@@ -345,17 +438,15 @@ const Applicants = () => {
     }
 
     setEvalSaving(true);
-    setEvalSaveError(null);
     try {
       const payload = { rating_criteria: evalCriteria };
       await apiFetch(`applicants/surveys/${encodeURIComponent(evalSurvey)}/rating-criteria`, serverIp, { method: 'PUT', body: JSON.stringify(payload) });
       setIsEvalModalOpen(false);
-      setSuccessMessage('Evaluation criteria saved.');
+      showToast('Evaluation criteria saved.', 'success');
       // reload surveys without criteria so pre-assessment buttons update
       loadSurveysWithoutCriteria();
-      setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err) {
-      setEvalSaveError(err.message);
+      showToast(err.message, 'error');
     } finally {
       setEvalSaving(false);
     }
@@ -366,17 +457,22 @@ const Applicants = () => {
     setEvalConfirm(false);
   };
 
+  // Helper function to format numbers to 2 decimal places
+  const formatTo2Decimals = (num) => {
+    if (num === null || num === undefined) return null;
+    return parseFloat(parseFloat(num).toFixed(2));
+  };
+
   const handlePreAssessConfirm = async () => {
     setPreAssessSaving(true);
-    setPreAssessError(null);
     try {
       await apiFetch(`applicants/${preAssessApplicant.id}/pre-assessment`, serverIp, {
         method: 'PUT',
         body: JSON.stringify({
-          educational_attainment: parseFloat(preAssessScores.educational_attainment),
-          relevant_training: parseFloat(preAssessScores.relevant_training),
-          relevant_work_experience: parseFloat(preAssessScores.relevant_work_experience),
-          written_examination: preAssessAllowed.written_examination ? parseFloat(preAssessScores.written_examination) : null,
+          educational_attainment: preAssessAllowed.educational_attainment ? formatTo2Decimals(preAssessScores.educational_attainment) : null,
+          relevant_training: preAssessAllowed.relevant_training ? formatTo2Decimals(preAssessScores.relevant_training) : null,
+          relevant_work_experience: preAssessAllowed.relevant_work_experience ? formatTo2Decimals(preAssessScores.relevant_work_experience) : null,
+          written_examination: preAssessAllowed.written_examination ? formatTo2Decimals(preAssessScores.written_examination) : null,
         }),
       });
       setPreAssessConfirm(false);
@@ -384,11 +480,11 @@ const Applicants = () => {
       setTrainingRecords(null);
       setEmploymentRecords(null);
       fetchApplicants();
-      setSuccessMessage('Pre-assessment saved successfully.');
-      setTimeout(() => setSuccessMessage(null), 3000);
+      fetchTransmittableCount();
+      showToast('Pre-assessment saved successfully.', 'success');
     } catch (err) {
       setPreAssessConfirm(false);
-      setPreAssessError(err.message);
+      showToast(err.message, 'error');
     } finally {
       setPreAssessSaving(false);
     }
@@ -430,40 +526,68 @@ const Applicants = () => {
     }
   };
 
+  const transmitSurveyOptions = useMemo(() => {
+    const surveyNames = new Set(transmitOptions.map(opt => opt.survey_name));
+    return Array.from(surveyNames).sort();
+  }, [transmitOptions]);
+
+  const transmitPositionOptions = useMemo(() => {
+      if (!selectedTransmitSurvey) return [];
+      const positionNames = new Set(
+          transmitOptions.filter(opt => opt.survey_name === selectedTransmitSurvey).map(opt => opt.position)
+      );
+      return Array.from(positionNames).sort();
+  }, [transmitOptions, selectedTransmitSurvey]);
+
   const handleOpenTransmitModal = async () => {
     setIsTransmitModalOpen(true);
     setTransmitOptions([]);
     setSelectedTransmitSurvey('');
-    setError(null);
     try {
         const data = await apiFetch('applicants/transmit-options', serverIp);
         setTransmitOptions(data);
     } catch (err) {
-        setError("Failed to load survey options for transmission.");
+        showToast("Failed to load survey options for transmission.", 'error');
     }
   };
 
   const handleTransmitSubmit = async () => {
-    const selectedOption = transmitOptions.find(opt => opt.survey_name === selectedTransmitSurvey);
+    const selectedOption = transmitOptions.find(opt => 
+        opt.survey_name === selectedTransmitSurvey && opt.position === selectedTransmitPosition
+    );
     if (!selectedOption || !selectedOption.focal_person_id) {
-        setError("Invalid survey selection or no focal person assigned to this survey.");
+        showToast("Invalid survey/position selection or no focal person assigned to this survey.", 'error');
         return;
     }
 
     try {
         await apiFetch('applicants/transmit', serverIp, {
             method: 'POST',
-            body: JSON.stringify({ 
+            body: JSON.stringify({
                 survey_name: selectedOption.survey_name, 
-                focal_id: selectedOption.focal_person_id 
+                position: selectedOption.position,
+                focal_id: selectedOption.focal_person_id
             })
         });
         setIsTransmitModalOpen(false);
         fetchApplicants(); // Refresh list to remove transmitted applicants
-        setSuccessMessage('Applicants transmitted to Focal Person successfully.');
-        setTimeout(() => setSuccessMessage(null), 3000);
+        showToast('Applicants transmitted to Focal Person successfully.', 'success');
     } catch (err) {
-        setError(err.message);
+        showToast(err.message, 'error');
+    }
+  };
+
+  const handleSync = async () => {
+    setIsSyncing(true);
+    try {
+      const result = await apiFetch('applicants/sync', serverIp, { method: 'POST' });
+      showToast(result.message, 'success');
+      fetchApplicants(); // Refresh the list
+      fetchTransmittableCount();
+    } catch (err) {
+      showToast(err.message || 'Sync failed.', 'error');
+    } finally {
+      setIsSyncing(false);
     }
   };
 
@@ -473,35 +597,40 @@ const Applicants = () => {
 
   return (
     <div>
-      {successMessage && (
-        <div className="fixed top-5 right-5 z-[200] flex items-center gap-3 px-5 py-3 bg-green-600 text-white text-sm font-semibold rounded-lg shadow-lg">
-          <span>✓</span> {successMessage}
-        </div>
-      )}
+      <ToastContainer toasts={toasts} onClose={removeToast} />
       <div className="flex items-center justify-between mb-4">
-        <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">Applicant's Registry</h1>
+        <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">Applicants' Registry</h1>
         <div className="flex items-center gap-2">
           {['Super_Admin', 'Admin', 'PACD'].includes(userRole) && (
             <button
-              onClick={handleOpenTransmitModal}
-              className="flex items-center gap-2 px-4 py-2 font-semibold text-white bg-green-600 rounded-lg shadow-md hover:bg-green-700 transition-all"
+              onClick={handleOpenTransmitModal} 
+              disabled={transmittableCount === 0}
+              title={transmittableCount === 0 ? "No applicants are ready for transmission" : "Transmit applicant data to the focal person"}
+              className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-white bg-green-600 rounded-lg hover:bg-green-700 dark:bg-green-700 dark:hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <FaPaperPlane /> Transmit to Focal Person
+              <FaPaperPlane className="w-4 h-4" /> Transmit to Focal
             </button>
-          )}          {['Super_Admin', 'Admin', 'PACD'].includes(userRole) && (
+          )}
+          {['Super_Admin', 'Admin', 'PACD'].includes(userRole) && (
             <button
-              onClick={handleOpenEvalModal}
-              className="flex items-center gap-2 px-4 py-2 font-semibold text-white bg-teal-600 rounded-lg shadow-md hover:bg-teal-700 transition-all"
+              onClick={handleOpenEvalModal} 
+              disabled={noCriteriaSurveys.length === 0 || applicants.length === 0}
+              title={
+                applicants.length === 0 ? "No applicants available to set criteria for" :
+                noCriteriaSurveys.length === 0 ? "All surveys have evaluation criteria set" : 
+                "Configure evaluation criteria for applicant assessment"
+              }
+              className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Set Evaluation Criteria
+              <FaComments className="w-4 h-4" /> Set Evaluation Criteria
             </button>
           )}          <button
             onClick={handleSync}
-            disabled={isSyncing || isLoading}
-            className="p-2 text-gray-500 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-600 dark:hover:bg-gray-700 disabled:opacity-50"
-            title="Sync Records"
+            disabled={isSyncing}
+            title={isSyncing ? "Syncing..." : "Sync Records"}
+            className={`p-2 text-gray-500 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-600 dark:hover:bg-gray-700 ${isSyncing ? 'cursor-not-allowed opacity-50' : ''}`}
           >
-            <FaSync className={isSyncing || isLoading ? "animate-spin" : ""} />
+            <FaSync className={isSyncing ? 'animate-spin' : ''} />
           </button>
           <input
             type="text"
@@ -513,14 +642,13 @@ const Applicants = () => {
         </div>
       </div>
 
-      {error && <div className="p-3 mb-4 text-center text-red-700 bg-red-100 rounded-lg">{error}</div>}
-
       <div className="overflow-x-auto bg-white rounded-lg shadow dark:bg-gray-800">
         <table className="min-w-full text-sm leading-normal">
           <thead>
             <tr className="sticky top-0 border-b-2 border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-900/50">
               <th className="px-5 py-3.5 text-left"><button onClick={() => requestSort('last_name')} className="font-semibold flex items-center uppercase">Name {getSortIcon('last_name')}</button></th>
-              <th className="px-5 py-3.5 text-left"><button onClick={() => requestSort('email_address')} className="font-semibold flex items-center uppercase">Survey/Census {getSortIcon('email_address')}</button></th>
+              <th className="px-5 py-3.5 text-left"><button onClick={() => requestSort('survey_name')} className="font-semibold flex items-center uppercase">Survey/Census {getSortIcon('survey_name')}</button></th>
+              <th className="px-5 py-3.5 text-left"><button onClick={() => requestSort('position')} className="font-semibold flex items-center uppercase">Position {getSortIcon('position')}</button></th>
               <th className="px-5 py-3.5 text-left"><button onClick={() => requestSort('interviewer')} className="font-semibold flex items-center uppercase">Interviewer {getSortIcon('interviewer')}</button></th>
               <th className="px-5 py-3.5 text-left"><button onClick={() => requestSort('interview_status')} className="font-semibold flex items-center uppercase">Status {getSortIcon('interview_status')}</button></th>
               <th className="px-5 py-3.5 text-center font-semibold tracking-wider uppercase">Actions</th>
@@ -531,9 +659,10 @@ const Applicants = () => {
               currentItems.map((app) => (
                 <tr key={app.id} className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50">
                   <td className="px-5 py-4">
-                    <p className="font-medium text-gray-900 whitespace-no-wrap dark:text-white">{[app.first_name, app.middle_initial, app.last_name, app.suffix].filter(Boolean).join(' ')}</p>
+                    <p className="font-medium text-gray-900 whitespace-no-wrap dark:text-white">{[app.first_name, app.middle_initial, app.last_name, app.suffix].filter(Boolean).join(' ').toUpperCase()}</p>
                   </td>
                   <td className="px-5 py-4 text-gray-700 dark:text-gray-300 whitespace-normal break-words max-w-xs">{app.survey_name}</td>
+                  <td className="px-5 py-4 text-gray-700 dark:text-gray-300">{app.position || 'N/A'}</td>
                   <td className="px-5 py-4 text-gray-700 dark:text-gray-300">{app.interviewer || 'Unassigned'}</td>
                   <td className="px-5 py-4">
                     <span className={`px-2 py-1 text-xs font-semibold rounded-full ${
@@ -548,9 +677,7 @@ const Applicants = () => {
                   <td className="px-5 py-4 text-center">
                     <div className="flex items-center justify-center space-x-3">
                       {app.interview_status === 'Done Interview' ? (
-                        <span className="font-medium text-teal-600 dark:text-teal-400 cursor-default" title="Interview completed">
-                          Interviewed ✓
-                        </span>
+                        <FaCheckCircle className="w-4 h-4 text-teal-600 dark:text-teal-400 cursor-default" title="Interview completed" />
                       ) : (
                         <button 
                           onClick={() => handleAssignClick(app)} 
@@ -560,16 +687,16 @@ const Applicants = () => {
                             // disable if no evaluation criteria exists for the survey
                             || (app.survey_name && noCriteriaSurveys.includes(app.survey_name))
                           }
-                          className={`font-medium ${
+                          title={app.survey_name && noCriteriaSurveys.includes(app.survey_name) ? 'Survey has no evaluation criteria set' : app.interviewer ? 'Reassign Interviewer' : 'Assign Interviewer'}
+                          className={`p-1 rounded-lg transition-colors ${
                             (app.interviewer && (app.interview_status === 'Ongoing Interview' || app.interview_status === 'Transmitted to Focal Person'))
                               ? 'text-gray-400 cursor-not-allowed dark:text-gray-600'
                               : app.interviewer
-                              ? 'text-indigo-600 hover:text-indigo-900 dark:text-indigo-400 dark:hover:text-indigo-300'
-                              : 'text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300'}
+                              ? 'text-indigo-600 hover:text-indigo-900 hover:bg-indigo-50 dark:text-indigo-400 dark:hover:text-indigo-300 dark:hover:bg-indigo-900/20'
+                              : 'text-blue-600 hover:text-blue-900 hover:bg-blue-50 dark:text-blue-400 dark:hover:text-blue-300 dark:hover:bg-blue-900/20'}
                             ${app.survey_name && noCriteriaSurveys.includes(app.survey_name) ? 'opacity-50 cursor-not-allowed' : ''}`}
-                          title={app.survey_name && noCriteriaSurveys.includes(app.survey_name) ? 'Survey has no evaluation criteria set' : undefined}
                         >
-                          {app.interviewer ? 'Reassign' : 'Assign'}
+                          {app.interviewer ? <FaRedo className="w-4 h-4" /> : <FaUserCheck className="w-4 h-4" />}
                         </button>
                       )}
                       {(() => {
@@ -585,28 +712,27 @@ const Applicants = () => {
                           }
                           return pa[f] !== null && pa[f] !== undefined && pa[f] !== '';
                         });
+                        const hasExistingPreAssessment = app.pre_assessment !== null && app.pre_assessment !== undefined;
                         if (complete) {
                           return (
-                            <span className="font-medium text-green-600 dark:text-green-400 cursor-default" title="Pre-assessment already submitted">
-                              Assessed ✓
-                            </span>
+                            <FaCheckCircle className="w-4 h-4 text-green-600 dark:text-green-400 cursor-default" title="Pre-assessment already submitted" />
                           );
                         }
                         return (
                           <>
-                            {/* Pre-assessment disabled if survey has no evaluation criteria set */}
+                            {/* Pre-assessment disabled if survey has no evaluation criteria set or if pre-assessment already exists */}
                             {(() => {
-                              const disabled = app.survey_name && noCriteriaSurveys.includes(app.survey_name);
+                              const disabled = (app.survey_name && noCriteriaSurveys.includes(app.survey_name)) || hasExistingPreAssessment;
                               return (
                                 <button
                                   onClick={() => handleOpenPreAssess(app)}
                                   disabled={disabled}
-                                  className={`font-medium ${disabled
+                                  title={hasExistingPreAssessment ? 'Pre-assessment already provided' : (app.survey_name && noCriteriaSurveys.includes(app.survey_name) ? 'Survey has no evaluation criteria set' : 'Pre-Assessment')}
+                                  className={`p-1 rounded-lg transition-colors ${disabled
                                     ? 'text-gray-400 cursor-not-allowed dark:text-gray-600'
-                                    : 'text-purple-600 hover:text-purple-900 dark:text-purple-400 dark:hover:text-purple-300'}`}
-                                  title={disabled ? 'Survey has no evaluation criteria set' : undefined}
+                                    : 'text-purple-600 hover:text-purple-900 hover:bg-purple-50 dark:text-purple-400 dark:hover:text-purple-300 dark:hover:bg-purple-900/20'}`}
                                 >
-                                  Pre-Assessment
+                                  <FaClipboard className="w-4 h-4" />
                                 </button>
                               );
                             })()}
@@ -614,11 +740,12 @@ const Applicants = () => {
                         );
                       })()}
                       <button
-                        onClick={() => handleDelete(app.id)}
+                        onClick={() => handleDeleteClick(app)}
                         disabled={app.interview_status === 'Ongoing Interview' || app.interview_status === 'Done Interview' || app.interview_status === 'Transmitted to Focal Person'}
-                        className={`font-medium ${app.interview_status === 'Ongoing Interview' || app.interview_status === 'Done Interview' || app.interview_status === 'Transmitted to Focal Person'? 'text-gray-400 cursor-not-allowed dark:text-gray-600' : 'text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300'}`}
+                        title={app.interview_status === 'Ongoing Interview' || app.interview_status === 'Done Interview' || app.interview_status === 'Transmitted to Focal Person' ? 'Cannot delete applicant with this status' : 'Delete Applicant'}
+                        className={`p-1 rounded-lg transition-colors ${app.interview_status === 'Ongoing Interview' || app.interview_status === 'Done Interview' || app.interview_status === 'Transmitted to Focal Person'? 'text-gray-400 cursor-not-allowed dark:text-gray-600' : 'text-red-600 hover:text-red-900 hover:bg-red-50 dark:text-red-400 dark:hover:text-red-300 dark:hover:bg-red-900/20'}`}
                       >
-                        Delete
+                        <FaTrash className="w-4 h-4" />
                       </button>
                     </div>
                   </td>
@@ -640,9 +767,9 @@ const Applicants = () => {
           Showing {Math.min((currentPage - 1) * rowsPerPage + 1, sortedApplicants.length)} to {Math.min(currentPage * rowsPerPage, sortedApplicants.length)} of {sortedApplicants.length} records
         </span>
         <div className="flex items-center space-x-2">
-          <button onClick={() => setCurrentPage(p => Math.max(p - 1, 1))} disabled={currentPage === 1} className="px-4 py-2 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded disabled:opacity-50">Previous</button>
+          <button onClick={() => setCurrentPage(p => Math.max(p - 1, 1))} disabled={currentPage === 1} title={currentPage === 1 ? 'Already on first page' : 'Go to previous page'} className="px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed">Previous</button>
           <span className="text-gray-700 dark:text-gray-300 px-2">{currentPage}</span>
-          <button onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))} disabled={currentPage === totalPages} className="px-4 py-2 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded disabled:opacity-50">Next</button>
+          <button onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))} disabled={currentPage === totalPages} title={currentPage === totalPages ? 'Already on last page' : 'Go to next page'} className="px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed">Next</button>
         </div>
       </div>
 
@@ -673,10 +800,6 @@ const Applicants = () => {
 
                 <div className="px-6 py-5 space-y-4">
 
-                  {preAssessError && (
-                    <div className="p-3 text-sm text-red-700 bg-red-100 rounded-lg dark:bg-red-900/30 dark:text-red-400">{preAssessError}</div>
-                  )}
-
                   {/* Fixed criteria */}
                   {PA_CRITERIA.map(c => {
                     const allowed = preAssessAllowed[c.key] ?? true;
@@ -695,15 +818,15 @@ const Applicants = () => {
                           type={allowed ? 'number' : 'text'}
                           min={allowed ? 1 : undefined}
                           max={allowed ? 100 : undefined}
-                          step={allowed ? '0.01' : undefined}
+                          step={allowed ? '1' : undefined}
                           value={allowed ? preAssessScores[c.key] : 'N/A'}
                           onChange={e => {
                             if (!allowed) return;
                             let v = e.target.value;
                             if (v === '') return setPreAssessScores(prev => ({ ...prev, [c.key]: '' }));
-                            let num = parseFloat(v);
+                            let num = parseInt(v, 10);
                             if (!isNaN(num) && num >= 1 && num <= 100) {
-                              setPreAssessScores(prev => ({ ...prev, [c.key]: v }));
+                              setPreAssessScores(prev => ({ ...prev, [c.key]: num.toString() }));
                             }
                           }}
                           placeholder={allowed ? '1–100' : 'N/A'}
@@ -745,15 +868,18 @@ const Applicants = () => {
                         <p className="font-semibold text-sm text-gray-800 dark:text-white">Written Examination</p>
                       </div>
                       <input
-                        type="text"
+                        type="number"
+                        min="1"
+                        max="100"
+                        step="1"
                         value={preAssessScores.written_examination}
                         onChange={e => {
                           let v = e.target.value;
                           if (preAssessAllowed.written_examination === false) return;
                           if (v === '') return setPreAssessScores(prev => ({ ...prev, written_examination: '' }));
-                          let num = parseFloat(v);
+                          let num = parseInt(v, 10);
                           if (!isNaN(num) && num >= 1 && num <= 100) {
-                            setPreAssessScores(prev => ({ ...prev, written_examination: v }));
+                            setPreAssessScores(prev => ({ ...prev, written_examination: num.toString() }));
                           }
                         }}
                         placeholder={preAssessAllowed.written_examination === false ? 'N/A' : '1–100'}
@@ -772,17 +898,17 @@ const Applicants = () => {
                     <p className="text-sm font-semibold text-amber-800 dark:text-amber-300 mb-1">⚠ Once saved, this pre-assessment cannot be edited.</p>
                     <p className="text-xs text-amber-700 dark:text-amber-400 mb-3">Are you sure you want to save these scores?</p>
                     <div className="flex justify-end gap-3">
-                      <button type="button" onClick={() => setPreAssessConfirm(false)} disabled={preAssessSaving} className="px-4 py-2 text-sm font-semibold text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 disabled:opacity-50">Go Back</button>
-                      <button type="button" onClick={handlePreAssessConfirm} disabled={preAssessSaving} className="px-5 py-2 text-sm font-semibold text-white bg-purple-600 rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed">
-                        {preAssessSaving ? 'Saving...' : 'Confirm & Save'}
+                      <button type="button" onClick={() => setPreAssessConfirm(false)} disabled={preAssessSaving} title={preAssessSaving ? 'Saving - please wait' : 'Go back and edit'} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50"><FaArrowLeft className="w-4 h-4" />Go Back</button>
+                      <button type="button" onClick={handlePreAssessConfirm} disabled={preAssessSaving} title={preAssessSaving ? 'Saving pre-assessment...' : 'Confirm and save scores'} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed">
+                        {preAssessSaving ? 'Saving...' : <><FaCheck className="w-4 h-4" />Confirm & Save</>}
                       </button>
                     </div>
                   </div>
                 ) : (
                   <div className="flex-shrink-0 flex justify-end gap-3 px-6 py-4 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-200 dark:border-gray-700">
-                    <button type="button" onClick={() => { setPreAssessApplicant(null); setTrainingRecords(null); setEmploymentRecords(null); }} className="px-4 py-2 text-sm font-semibold text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600">Cancel</button>
-                    <button type="submit" disabled={preAssessSaving} className="px-5 py-2 text-sm font-semibold text-white bg-purple-600 rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed">
-                      {preAssessSaving ? 'Saving...' : 'Save Assessment'}
+                    <button type="button" onClick={() => { setPreAssessApplicant(null); setTrainingRecords(null); setEmploymentRecords(null); }} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600"><FiX className="w-4 h-4" />Cancel</button>
+                    <button type="submit" disabled={preAssessSaving || !isPreAssessFormValid} title={preAssessSaving ? 'Saving - please wait' : !isPreAssessFormValid ? 'Please fill all required fields with valid scores' : 'Review and save pre-assessment'} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed">
+                      {preAssessSaving ? 'Saving...' : <><FiSave className="w-4 h-4" />Save Assessment</>}
                     </button>
                   </div>
                 )}
@@ -808,12 +934,9 @@ const Applicants = () => {
               </div>
               <form onSubmit={handleSaveEvalCriteria} className="flex-1 overflow-y-auto">
                 <div className="px-6 py-5 space-y-4">
-                  {evalSaveError && (
-                    <div className="p-3 text-sm text-red-700 bg-red-100 rounded-lg dark:bg-red-900/30 dark:text-red-400">{evalSaveError}</div>
-                  )}
                   <div>
                     <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Survey Name</label>
-                    {evalSurveyOptions.length === 0 ? (
+                    {noCriteriaSurveys.length === 0 ? (
                       <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">All surveys already have evaluation criteria.</p>
                     ) : (
                       <div className="relative mt-1">
@@ -837,7 +960,7 @@ const Applicants = () => {
                             >
                                 -- Select Survey --
                             </div>
-                            {evalSurveyOptions.map((s) => (
+                            {noCriteriaSurveys.map((s) => (
                               <div
                                 key={s}
                                 onClick={() => { setEvalSurvey(s); setIsSurveyDropdownOpen(false); }}
@@ -907,17 +1030,17 @@ const Applicants = () => {
                   <div className="flex-shrink-0 px-6 py-4 bg-amber-50 dark:bg-amber-900/20 border-t border-amber-200 dark:border-amber-700">
                     <p className="text-sm font-semibold text-amber-800 dark:text-amber-300 mb-1">⚠ Once saved, this evaluation criteria cannot be edited.</p>
                     <p className="text-xs text-amber-700 dark:text-amber-400 mb-3">Are you sure you want to save these criteria?</p>
-                    <div className="flex justify-end gap-3">
-                      <button type="button" onClick={() => setEvalConfirm(false)} disabled={evalSaving} className="px-4 py-2 text-sm font-semibold text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 disabled:opacity-50">Go Back</button>
-                      <button type="submit" disabled={evalSaving} className="px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed">
-                        {evalSaving ? 'Saving...' : 'Confirm & Save'}
+                      <div className="flex justify-end gap-3">
+                      <button type="button" onClick={() => setEvalConfirm(false)} disabled={evalSaving} title={evalSaving ? 'Saving - please wait' : 'Go back and edit'} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50"><FaArrowLeft className="w-4 h-4" />Go Back</button>
+                      <button type="submit" disabled={evalSaving} title={evalSaving ? 'Saving criteria...' : 'Confirm and save evaluation criteria'} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed">
+                        {evalSaving ? 'Saving...' : <><FaCheck className="w-4 h-4" />Confirm & Save</>}
                       </button>
                     </div>
                   </div>
                 ) : (
                   <div className="flex-shrink-0 px-6 py-4 bg-gray-50 dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 flex justify-end space-x-2">
-                    <button type="button" onClick={handleCancelEval} className="px-4 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-600">Cancel</button>
-                    <button type="submit" disabled={evalSaving || !canSaveEval} className="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50">{evalSaving ? 'Saving...' : 'Save'}</button>
+                    <button type="button" onClick={handleCancelEval} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600"><FiX className="w-4 h-4" />Cancel</button>
+                    <button type="submit" disabled={evalSaving || !canSaveEval} title={evalSaving ? 'Saving - please wait' : !canSaveEval ? 'Select a survey and at least one criterion for each phase' : 'Save criteria'} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed">{evalSaving ? 'Saving...' : <><FiSave className="w-4 h-4" />Save</>}</button>
                   </div>
                 )}
               </form>
@@ -972,7 +1095,7 @@ const Applicants = () => {
               )}
             </div>
             <div className="flex-shrink-0 flex justify-end px-6 py-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
-              <button type="button" onClick={() => setTrainingRecords(null)} className="px-4 py-2 text-sm font-semibold text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600">Close</button>
+              <button type="button" onClick={() => setTrainingRecords(null)} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600"><FiX className="w-4 h-4" />Close</button>
             </div>
           </div>
         </div>
@@ -1026,7 +1149,7 @@ const Applicants = () => {
               )}
             </div>
             <div className="flex-shrink-0 flex justify-end px-6 py-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
-              <button type="button" onClick={() => setEmploymentRecords(null)} className="px-4 py-2 text-sm font-semibold text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600">Close</button>
+              <button type="button" onClick={() => setEmploymentRecords(null)} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600"><FiX className="w-4 h-4" />Close</button>
             </div>
           </div>
         </div>
@@ -1041,36 +1164,31 @@ const Applicants = () => {
               Select an interviewer for <strong className="dark:text-white">{`${assigningApplicant.first_name} ${assigningApplicant.last_name}`}</strong>.
             </p>
             
-            {error && <div className="mt-4 rounded-lg bg-red-100 p-3 text-sm text-red-700">{error}</div>}
-
             <div className="mt-4">
                 <label htmlFor="interviewer-select" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Interviewer</label>
-                <select
-                    id="interviewer-select"
-                    value={selectedInterviewer}
-                    onChange={(e) => setSelectedInterviewer(e.target.value)}
-                    className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
-                >
-                    <option value="" disabled>-- Select an interviewer --</option>
-                    {interviewers.map(user => (
-                        <option key={user.id} value={user.id}>{user.full_name}</option>
-                    ))}
-                </select>
+                <SearchableDropdown
+                  id="interviewer-select"
+                  options={interviewerOptions}
+                  value={selectedInterviewer}
+                  onChange={setSelectedInterviewer}
+                  placeholder="Search or Select an Interviewer"
+                  required
+                />
             </div>
 
             <div className="flex justify-end mt-6 space-x-2">
               <button 
                 onClick={() => setAssigningApplicant(null)} 
-                className="px-4 py-2 font-semibold text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"
+                className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600"
               >
-                Cancel
+                <FiX className="w-4 h-4" />Cancel
               </button>
               <button 
                 onClick={handleConfirmAssignment} 
-                className="px-4 py-2 font-semibold text-white bg-blue-600 rounded-md shadow-sm hover:bg-blue-700 disabled:opacity-50"
+                className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
                 disabled={!selectedInterviewer}
               >
-                Confirm Assignment
+                <FaCheck className="w-4 h-4" />Confirm Assignment
               </button>
             </div>
           </div>
@@ -1083,24 +1201,83 @@ const Applicants = () => {
           <div className="w-full max-w-md p-6 bg-white dark:bg-gray-800 rounded-lg shadow-xl">
             <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">Transmit to Focal Person</h2>
             
-            {error && <div className="mb-4 rounded-lg bg-red-100 p-3 text-sm text-red-700">{error}</div>}
-
             <div className="space-y-4">
                 <div>
                     <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Select Survey to Submit</label>
-                    <select
-                        value={selectedTransmitSurvey}
-                        onChange={(e) => setSelectedTransmitSurvey(e.target.value)}
-                        className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
-                    >
-                        <option value="" disabled>-- Select Survey --</option>
-                        {transmitOptions.map((opt, idx) => (
-                            <option key={idx} value={opt.survey_name}>{opt.survey_name}</option>
-                        ))}
-                    </select>
+                    <div className="relative mt-1">
+                      <button
+                        type="button"
+                        onClick={() => setIsTransmitSurveyDropdownOpen(!isTransmitSurveyDropdownOpen)}
+                        className="w-full bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm pl-3 pr-10 py-2 text-left cursor-default focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm min-h-[42px]"
+                      >
+                        <span className="block whitespace-normal break-words text-gray-900 dark:text-white">
+                          {selectedTransmitSurvey || "-- Select Survey --"}
+                        </span>
+                        <span className="absolute inset-y-0 right-0 flex items-center pr-2 pointer-events-none">
+                          <FaSort className="h-4 w-4 text-gray-400" aria-hidden="true" />
+                        </span>
+                      </button>
+                      {isTransmitSurveyDropdownOpen && (
+                        <div className="w-full bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-lg absolute top-full mt-1 max-h-60 overflow-y-auto z-10">
+                          <div
+                              onClick={() => { setSelectedTransmitSurvey(""); setSelectedTransmitPosition(""); setIsTransmitSurveyDropdownOpen(false); }}
+                              className="cursor-pointer select-none relative py-2 pl-3 pr-4 text-gray-500 dark:text-gray-400 hover:bg-blue-50 dark:hover:bg-gray-600 border-b border-gray-100 dark:border-gray-600"
+                          >
+                              -- Select Survey --
+                          </div>
+                          {transmitSurveyOptions.map((surveyName) => (
+                            <div
+                              key={surveyName}
+                              onClick={() => { setSelectedTransmitSurvey(surveyName); setSelectedTransmitPosition(""); setIsTransmitSurveyDropdownOpen(false); }}
+                              className="cursor-pointer select-none relative py-2 pl-3 pr-4 text-gray-900 dark:text-white hover:bg-blue-50 dark:hover:bg-gray-600 border-b border-gray-100 dark:border-gray-600 last:border-0"
+                            >
+                              <span className="block font-normal whitespace-normal break-words">{surveyName}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                 </div>
 
-                {selectedTransmitSurvey && (
+                <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Select Position to Submit</label>
+                    <div className="relative mt-1">
+                      <button
+                        type="button"
+                        onClick={() => setIsTransmitPositionDropdownOpen(!isTransmitPositionDropdownOpen)}
+                        disabled={!selectedTransmitSurvey}
+                        className="w-full bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm pl-3 pr-10 py-2 text-left cursor-default focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm min-h-[42px] disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <span className="block whitespace-normal break-words text-gray-900 dark:text-white">
+                          {selectedTransmitPosition || "-- Select Position --"}
+                        </span>
+                        <span className="absolute inset-y-0 right-0 flex items-center pr-2 pointer-events-none">
+                          <FaSort className="h-4 w-4 text-gray-400" aria-hidden="true" />
+                        </span>
+                      </button>
+                      {isTransmitPositionDropdownOpen && (
+                        <div className="w-full bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-lg absolute top-full mt-1 max-h-60 overflow-y-auto z-10">
+                          <div
+                              onClick={() => { setSelectedTransmitPosition(""); setIsTransmitPositionDropdownOpen(false); }}
+                              className="cursor-pointer select-none relative py-2 pl-3 pr-4 text-gray-500 dark:text-gray-400 hover:bg-blue-50 dark:hover:bg-gray-600 border-b border-gray-100 dark:border-gray-600"
+                          >
+                              -- Select Position --
+                          </div>
+                          {transmitPositionOptions.map((position) => (
+                            <div
+                              key={position}
+                              onClick={() => { setSelectedTransmitPosition(position); setIsTransmitPositionDropdownOpen(false); }}
+                              className="cursor-pointer select-none relative py-2 pl-3 pr-4 text-gray-900 dark:text-white hover:bg-blue-50 dark:hover:bg-gray-600 border-b border-gray-100 dark:border-gray-600 last:border-0"
+                            >
+                              <span className="block font-normal whitespace-normal break-words">{position}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                </div>
+
+                {selectedTransmitSurvey && selectedTransmitPosition && (
                     <div className="p-3 bg-gray-50 dark:bg-gray-700/50 rounded-md border border-gray-200 dark:border-gray-600">
                         <span className="block text-xs text-gray-500 dark:text-gray-400 uppercase font-semibold">Focal Person</span>
                         <span className="block text-lg font-medium text-gray-900 dark:text-white">
@@ -1111,8 +1288,27 @@ const Applicants = () => {
             </div>
 
             <div className="flex justify-end mt-6 space-x-2">
-              <button onClick={() => setIsTransmitModalOpen(false)} className="px-4 py-2 font-semibold text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600">Cancel</button>
-              <button onClick={handleTransmitSubmit} disabled={!selectedTransmitSurvey} className="px-4 py-2 font-semibold text-white bg-green-600 rounded-md shadow-sm hover:bg-green-700 disabled:opacity-50">Submit</button>
+              <button onClick={() => setIsTransmitModalOpen(false)} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600"><FiX className="w-4 h-4" />Cancel</button>
+              <button onClick={handleTransmitSubmit} disabled={!selectedTransmitSurvey || !selectedTransmitPosition} title={!selectedTransmitSurvey || !selectedTransmitPosition ? 'Select a survey and position to transmit' : 'Submit selected survey and position'} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-green-600 rounded-lg hover:bg-green-700 dark:bg-green-700 dark:hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed"><FaPaperPlane className="w-4 h-4" />Submit</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {applicantToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
+          <div className="w-full max-w-md p-6 bg-white dark:bg-gray-800 rounded-lg shadow-xl">
+            <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Confirm Deletion</h2>
+            <p className="mt-2 text-gray-600 dark:text-gray-300">
+              Are you sure you want to delete applicant <strong className="dark:text-white">{`${applicantToDelete.first_name} ${applicantToDelete.last_name}`}</strong>? This action cannot be undone.
+            </p>
+            <div className="flex justify-end mt-6 space-x-2">
+              <button onClick={() => setApplicantToDelete(null)} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600">
+                <FiX className="w-4 h-4" />Cancel
+              </button>
+              <button onClick={confirmDelete} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-red-600 rounded-lg hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600">
+                <FaTrash className="w-4 h-4" />Delete
+              </button>
             </div>
           </div>
         </div>

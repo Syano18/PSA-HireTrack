@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useTheme } from '../context/ThemeContext';
-import SysIcon from '../assets/iconat.png';
 import { motion } from 'framer-motion';
 import { 
     FiLogOut, FiChevronLeft, FiChevronRight, FiUser, FiLayout, FiMessageSquare,
@@ -32,14 +31,14 @@ const Sidebar = ({ onLogout, user }) => {
     ];
 
     const visibleLinks = navLinks.filter(link => {
-        if (['Account', 'Utilities', 'Applicants'].includes(link.name)) {
+        if (['Account', 'Utilities', 'Applicants', 'Certificate', 'External Partners'].includes(link.name)) {
             return ['Super_Admin', 'Admin', 'PACD'].includes(user.role);
         }
         if (['Assessment'].includes(link.name)) {
             return ['Super_Admin', 'Focal Person'].includes(user.role);
         }
-        if (['Certificate', 'Interview'].includes(link.name)) {
-            return ['Super_Admin', 'Admin', 'PACD', 'User'].includes(user.role);
+        if (['Interview'].includes(link.name)) {
+            return ['Super_Admin', 'Admin', 'PACD', 'Focal Person', 'User'].includes(user.role);
         }
         return true;
     });
@@ -96,9 +95,6 @@ const Sidebar = ({ onLogout, user }) => {
 
             {/* --- Bottom Section: Logo and Logout Button --- */}
             <div className="p-4">
-                <div className="mb-4 flex justify-center">
-                    {!isCollapsed && <img src={SysIcon} alt="System Icon" className="w-48" />}
-                </div>
                 <motion.button 
                     onClick={onLogout} 
                     className="group w-full h-12 flex justify-center items-center py-3 px-4 text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700"

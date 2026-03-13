@@ -16,6 +16,16 @@ app.use(express.json({ limit: '10mb' }));
 const ipWhitelistMiddleware = require('./middleware/ipWhitelist');
 app.use(ipWhitelistMiddleware);
 
+// --- HEALTH CHECK ENDPOINT (for network diagnostics) ---
+// This endpoint allows clients to verify server is reachable and responsive
+app.get('/api/health', (req, res) => {
+  res.status(200).json({ 
+    status: 'healthy',
+    message: 'Server is running and responsive',
+    timestamp: new Date().toISOString()
+  });
+});
+
 // --- IMPORT ROUTE FILES ---
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
@@ -52,5 +62,5 @@ app.use((err, req, res, next) => {
 
 // --- START SERVER ---
 app.listen(port, () => {
-    console.log(`Server is running on http://localhost:${port}`);
+    // Server started
 });

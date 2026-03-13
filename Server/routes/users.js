@@ -295,7 +295,6 @@ router.delete('/:id', verifyToken, checkRole(['Super_Admin', 'Admin', 'PACD']), 
       const fbUser = await admin.auth().getUserByEmail(targetUser.email_address);
       await admin.auth().deleteUser(fbUser.uid);
     } catch (fbErr) {
-      console.warn('Firebase Delete Warning (User might not exist in FB):', fbErr.message);
       // Proceed to delete from local DB even if FB fails (to clean up zombies)
     }
 

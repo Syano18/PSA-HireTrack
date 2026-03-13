@@ -1,6 +1,16 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 
 const ProgressModal = ({ isOpen, onClose, progress, statusMessage, isComplete, filePath }) => {
+  // Auto-close the modal after 2 seconds when complete
+  useEffect(() => {
+    if (isComplete && isOpen) {
+      const timer = setTimeout(() => {
+        onClose();
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [isComplete, isOpen, onClose]);
+
   if (!isOpen) return null;
 
   // Function to handle opening the file

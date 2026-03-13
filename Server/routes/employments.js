@@ -10,6 +10,25 @@ const getUserWithRole = async (userId) => {
     return rows[0];
 };
 
+// --- Helper: Levenshtein Distance for Fuzzy Matching ---
+const levenshtein = (a, b) => {
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  const matrix = [];
+  for (let i = 0; i <= b.length; i++) { matrix[i] = [i]; }
+  for (let j = 0; j <= a.length; j++) { matrix[0][j] = j; }
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      if (b.charAt(i - 1) === a.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(matrix[i - 1][j - 1] + 1, Math.min(matrix[i][j - 1] + 1, matrix[i - 1][j] + 1));
+      }
+    }
+  }
+  return matrix[b.length][a.length];
+};
+
 const parseDate = (dateInput) => {
     if (!dateInput || String(dateInput).trim() === '') return null;
     const dateStr = String(dateInput).trim();
@@ -53,66 +72,12 @@ const parseDate = (dateInput) => {
 
 // At the top of routes/employments.js, after the other helper functions
 
-const getSurveyDetailsForLog = async (surveyData) => {
-    if (!surveyData) return {};
-    
-    // Create a copy to avoid modifying the original object
-    const details = { ...surveyData };
-    
-    if (details.focal_person_id) {
-        try {
-            const [rows] = await dbPool.query(
-                "SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?",
-                [details.focal_person_id]
-            );
-            // Add the name and remove the ID for a cleaner log
-            details.focal_person = rows.length > 0 ? rows[0].name : `ID: ${details.focal_person_id}`;
-            delete details.focal_person_id;
-        } catch (e) {
-            console.error("Failed to look up focal person name for audit log:", e.message);
-            details.focal_person = `ID: ${details.focal_person_id}`;
-        }
-    }
-    return details;
-};
-
-const getEmploymentDetails = async (data) => {
-    if (!data) return null;
-
-    const { employee_id, position_id, survey_id, focal_person_id, ...rest } = data;
-
-    // Concurrently run all necessary lookup queries.
-    const queries = [
-        employee_id ? dbPool.query("SELECT CONCAT(first_name, ' ', middle_initial, ' ', last_name, ' ', suffix) as name FROM employees WHERE id = ?", [employee_id]) : Promise.resolve([[]]),
-        position_id ? dbPool.query("SELECT title FROM positions WHERE id = ?", [position_id]) : Promise.resolve([[]]),
-        survey_id ? dbPool.query("SELECT name FROM surveys WHERE id = ?", [survey_id]) : Promise.resolve([[]]),
-        focal_person_id ? dbPool.query("SELECT CONCAT(last_name, ', ', first_name) as name FROM users WHERE id = ?", [focal_person_id]) : Promise.resolve([[]]),
-    ];
-
-    try {
-        const [employeeRes, positionRes, surveyRes, focalPersonRes] = await Promise.all(queries);
-
-        // Build the detailed object for the audit log. Fallback to showing the ID if a name isn't found.
-        return {
-            ...rest, // Keep other fields like rating, remarks, dates
-            employee: employeeRes[0][0]?.name || (employee_id ? `ID: ${employee_id}` : 'N/A'),
-            position: positionRes[0][0]?.title || (position_id ? `ID: ${position_id}` : 'N/A'),
-            survey: surveyRes[0][0]?.name || (survey_id ? `ID: ${survey_id}` : 'N/A'),
-            focal_person: focalPersonRes[0][0]?.name || (focal_person_id ? `ID: ${focal_person_id}` : 'N/A'),
-        };
-    } catch (error) {
-        console.error("Error fetching employment details for audit log:", error);
-        return data; // Fallback to original data with IDs on error to ensure logging still occurs.
-    }
-};
-
 // --- Helper: Execute Turso Sync via HTTP ---
 const executeTurso = async (sql, args = []) => {
     const dbUrl = process.env.TURSO_DB_URL?.replace(/^libsql:/, 'https:');
     const authToken = process.env.TURSO_AUTH_TOKEN;
     
     if (!dbUrl || !authToken) {
-      console.warn("Turso DB URL or Token is not configured. Skipping Turso sync.");
       return null;
     }
    
@@ -130,7 +95,6 @@ const executeTurso = async (sql, args = []) => {
     };
    
     try {
-      console.log(`[Turso] Attempting Sync: ${sql}`, args);
       const response = await fetch(`${dbUrl}/v2/pipeline`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${authToken}`, 'Content-Type': 'application/json' },
@@ -261,6 +225,165 @@ router.post('/check-duplicate', async (req, res) => {
     }
 });
 
+// --- SYNC FUNCTIONALITY ENDPOINTS ---
+
+// GET /api/employments/sync-filter-options
+router.get('/sync-filter-options', async (req, res) => {
+    try {
+        const survey = req.query.survey;
+        // Filter: Hired AND Synced Trainings
+        const baseWhere = `
+            WHERE (
+                (pe.assessment_remarks = 'Hired' AND pe.interview_status = 'Synced Trainings')
+                OR
+                (pe.assessment_remarks LIKE 'REPLACED%' AND pe.interview_status = 'Synced Employees')
+            )
+        `;
+
+        if (!survey) {
+            const [surveys] = await dbPool.query(`
+                SELECT DISTINCT s.name
+                FROM profile_entries pe
+                JOIN surveys s ON pe.survey_id = s.id
+                ${baseWhere}
+                ORDER BY s.name
+            `);
+            const [pendingCount] = await dbPool.query(`
+                SELECT COUNT(*) as count FROM profile_entries pe
+                ${baseWhere}
+            `);
+            res.json({ surveys: surveys.map(s => s.name), positions: [], pendingCount: pendingCount[0].count });
+        } else {
+            const [positions] = await dbPool.query(`
+                SELECT DISTINCT p.title
+                FROM profile_entries pe
+                JOIN surveys s ON pe.survey_id = s.id
+                JOIN positions p ON pe.position_id = p.id
+                ${baseWhere} AND s.name = ?
+                ORDER BY p.title
+            `, [survey]);
+            res.json({ surveys: [], positions: positions.map(p => p.title) });
+        }
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Failed to fetch filter options' });
+    }
+});
+
+// POST /api/employments/sync-preview
+router.post('/sync-preview', async (req, res) => {
+    const { surveyName, position } = req.body;
+    try {
+        const [applicants] = await dbPool.query(`
+            SELECT 
+                pe.id, pe.first_name, pe.middle_initial, pe.last_name, pe.suffix,
+                pe.employee_id, pe.survey_id, pe.position_id, pe.assessment_remarks,
+                s.name as survey_name, p.title as position_title,
+                s.contract_start_date, s.contract_end_date, s.focal_person_id
+            FROM profile_entries pe
+            JOIN surveys s ON pe.survey_id = s.id
+            JOIN positions p ON pe.position_id = p.id
+            WHERE (
+                (pe.assessment_remarks = 'Hired' AND pe.interview_status = 'Synced Trainings')
+                OR
+                (pe.assessment_remarks LIKE 'REPLACED%' AND pe.interview_status = 'Synced Employees')
+            )
+            AND s.name = ? AND p.title = ?
+        `, [surveyName, position]);
+
+        const results = [];
+        for (const app of applicants) {
+            // Check if employment record already exists
+            const [existing] = await dbPool.query(`
+                SELECT id FROM employments 
+                WHERE employee_id = ? AND survey_id = ? AND position_id = ?
+            `, [app.employee_id, app.survey_id, app.position_id]);
+            
+            results.push({
+                ...app,
+                isDuplicate: existing.length > 0
+            });
+        }
+        res.json(results);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Preview failed' });
+    }
+});
+
+// POST /api/employments/sync-finalize
+router.post('/sync-finalize', async (req, res) => {
+    const { applicantIds, actingUserId } = req.body;
+    if (!actingUserId) return res.status(403).json({ error: 'Permission denied.' });
+    if (!applicantIds || !Array.isArray(applicantIds) || applicantIds.length === 0) {
+        return res.status(400).json({ error: 'No applicants selected.' });
+    }
+
+    const connection = await dbPool.getConnection();
+    try {
+        await connection.beginTransaction();
+
+        const actingUser = await getUserWithRole(actingUserId);
+        if (!['Super_Admin', 'Admin', 'PACD'].includes(actingUser.role)) {
+            throw new Error('Permission denied.');
+        }
+
+        let createdCount = 0;
+        const skipped = [];
+
+        // Fetch details for selected applicants
+        const [applicants] = await connection.query(`
+            SELECT 
+                pe.id, pe.employee_id, pe.survey_id, pe.position_id, pe.assessment_remarks,
+                s.contract_start_date, s.contract_end_date, s.focal_person_id
+            FROM profile_entries pe
+            JOIN surveys s ON pe.survey_id = s.id
+            WHERE pe.id IN (?)
+        `, [applicantIds]);
+
+        for (const app of applicants) {
+            if (!app.employee_id) {
+                skipped.push(`Applicant ID ${app.id}: Missing Employee ID`);
+                continue;
+            }
+
+            // Double check duplicate inside transaction
+            const [existing] = await connection.query(`
+                SELECT id FROM employments 
+                WHERE employee_id = ? AND survey_id = ? AND position_id = ?
+            `, [app.employee_id, app.survey_id, app.position_id]);
+
+            if (existing.length === 0) {
+                const remarks = (app.assessment_remarks && app.assessment_remarks.startsWith('REPLACED')) ? app.assessment_remarks : null;
+                await connection.query(`
+                    INSERT INTO employments (employee_id, position_id, survey_id, focal_person_id, contract_start_date, contract_end_date, remarks)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                `, [app.employee_id, app.position_id, app.survey_id, app.focal_person_id, app.contract_start_date, app.contract_end_date, remarks]);
+                createdCount++;
+            }
+        }
+
+        if (createdCount > 0) {
+            // Update status
+            await connection.query(`
+                UPDATE profile_entries 
+                SET interview_status = 'Synced Employments' 
+                WHERE id IN (?)
+            `, [applicantIds]);
+        }
+
+        await connection.commit();
+        res.json({ message: `Successfully created ${createdCount} employment records.`, createdCount });
+
+    } catch (err) {
+        await connection.rollback();
+        console.error(err);
+        res.status(500).json({ error: 'Sync failed: ' + err.message });
+    } finally {
+        connection.release();
+    }
+});
+
 // POST a new employment record
 router.post('/', async (req, res) => {
     const { actingUserId, ...employmentData } = req.body;
@@ -363,18 +486,6 @@ router.put('/batch-update', async (req, res) => {
         const sqlQuery = `UPDATE employments SET ${fieldsToUpdate.join(', ')} WHERE id IN (?)`;
         const [result] = await connection.query(sqlQuery, values);
 
-
-        // 5. --- LOG THE BATCH ACTION ---
-        const oldDataForLog = oldRecords.map(rec => ({
-            id: rec.id,
-            start_date: rec.contract_start_date,
-            end_date: rec.contract_end_date
-        }));
-        
-        const newDataForLog = {
-            changes: updates, // Log the changes that were sent
-            affected_ids: ids
-        };
 
         await connection.commit();
 
@@ -480,10 +591,6 @@ router.put('/:id', async (req, res) => {
         const [result] = await dbPool.query(sqlQuery, values);
         if (result.affectedRows === 0) return res.status(404).json({ error: 'Record not found during update.' });
 
-        const [detailedOldData, detailedNewData] = await Promise.all([
-            getEmploymentDetails(oldRecord),
-            getEmploymentDetails(newData)
-        ]);
         return res.json({ message: 'Employment record updated successfully' });
 
     } catch (err) {
@@ -506,9 +613,6 @@ router.delete('/:id', async (req, res) => {
         const [oldRecordRows] = await dbPool.query('SELECT * FROM employments WHERE id = ?', [id]);
         if (oldRecordRows.length === 0) return res.status(404).json({ error: 'Record not found.' });
         
-        // --- ✅ GET DETAILED NAMES FOR AUDIT LOG BEFORE DELETING ---
-        const detailedOldData = await getEmploymentDetails(oldRecordRows[0]);
-
         const [result] = await dbPool.query('DELETE FROM employments WHERE id = ?', [id]);
         if (result.affectedRows === 0) return res.status(404).json({ error: 'Record not found during deletion.' });
 
@@ -520,161 +624,6 @@ router.delete('/:id', async (req, res) => {
 });
 
 // in routes/employment.js
-
-router.post('/import', async (req, res) => {
-    const { actingUserId, employments } = req.body;
-    if (!actingUserId) return res.status(403).json({ error: 'Permission denied.' });
-    if (!Array.isArray(employments) || employments.length === 0) {
-        return res.status(400).json({ error: 'No employment data provided.' });
-    }
-
-    const connection = await dbPool.getConnection();
-    try {
-        await connection.beginTransaction();
-
-        const actingUser = await getUserWithRole(actingUserId);
-        if (!['Super_Admin', 'Admin', 'PACD'].includes(actingUser.role)) {
-            connection.release();
-            return res.status(403).json({ error: 'You do not have permission to import records.' });
-        }
-        
-        // --- 1. Fetch lookup data (including existing employments) ---
-        const [existingEmployees] = await connection.query("SELECT id, employee_id FROM employees");
-        const employeeIdMap = new Map(existingEmployees.map(emp => [emp.employee_id, emp.id]));
-        
-        const [existingPositions] = await connection.query("SELECT id, title FROM positions");
-        const positionTitleMap = new Map(existingPositions.map(pos => [pos.title.toLowerCase(), pos.id]));
-
-        const [existingSurveys] = await connection.query("SELECT id, name, contract_start_date, contract_end_date, focal_person_id FROM surveys");
-        const surveyMap = new Map(existingSurveys.map(s => [s.name.toLowerCase(), s]));
-
-        // Fetch valid users to validate focal_person_id
-        const [existingUsers] = await connection.query("SELECT id, first_name, middle_initial, last_name, suffix FROM users");
-        const validUserIds = new Set(existingUsers.map(u => u.id));
-        const userMap = new Map();
-        existingUsers.forEach(u => {
-            const fullName = [u.first_name, u.middle_initial, u.last_name, u.suffix]
-                .filter(Boolean).join(' ').replace(/\s+/g, ' ').trim().toLowerCase();
-            userMap.set(fullName, u.id);
-        });
-
-        // ✅ PRE-FETCH existing employments for duplicate check
-        const [dbEmployments] = await connection.query("SELECT employee_id, position_id, DATE_FORMAT(contract_start_date, '%Y-%m-%d') as start_date FROM employments");
-        const existingDbKeys = new Set(dbEmployments.map(e => `${e.employee_id}-${e.position_id}-${e.start_date}`));
-
-        const errors = [];
-        const validRecords = [];
-        const seenInCsv = new Set(); // ✅ Set to track duplicates within the CSV
-
-        // --- 2. Validate each row ---
-        for (let i = 0; i < employments.length; i++) {
-            const record = employments[i];
-            const rowNum = i + 2;
-            const { employee_id, position_title, survey_name, focal_person_name } = record;
-            let hasError = false;
-
-            if (!employee_id || !position_title || !survey_name) {
-                errors.push(`Row ${rowNum}: Missing required fields: employee_id, position_title, and survey_name.`);
-                hasError = true;
-            }
-
-            const db_employee_id = employeeIdMap.get(employee_id);
-            if (employee_id && !db_employee_id) {
-                errors.push(`Row ${rowNum}: Employee ID "${employee_id}" not found.`);
-                hasError = true;
-            }
-            
-            const db_position_id = positionTitleMap.get(position_title?.toLowerCase());
-            if (position_title && !db_position_id) {
-                errors.push(`Row ${rowNum}: Position Title "${position_title}" not found.`);
-                hasError = true;
-            }
-
-            const surveyData = surveyMap.get(survey_name?.toLowerCase());
-            if (survey_name && !surveyData) {
-                errors.push(`Row ${rowNum}: Survey Name "${survey_name}" not found.`);
-                hasError = true;
-            } else if (surveyData && (!surveyData.contract_start_date || !surveyData.contract_end_date)) {
-                errors.push(`Row ${rowNum}: The survey "${survey_name}" is missing default contract dates.`);
-                hasError = true;
-            }
-
-            if (hasError) continue;
-            
-            // --- ✅ STEP 2: CHECK FOR DUPLICATES ---
-            const startDate = new Date(surveyData.contract_start_date).toISOString().split('T')[0];
-            const uniqueKey = `${db_employee_id}-${db_position_id}-${startDate}`;
-
-            if (existingDbKeys.has(uniqueKey)) {
-                errors.push(`Row ${rowNum}: This employment record already exists in the database.`);
-                continue;
-            }
-            if (seenInCsv.has(uniqueKey)) {
-                errors.push(`Row ${rowNum}: This is a duplicate record from earlier in the same file.`);
-                continue;
-            }
-            seenInCsv.add(uniqueKey);
-            // --- END OF DUPLICATE CHECK ---
-            
-            record.db_employee_id = db_employee_id;
-            record.db_position_id = db_position_id;
-            record.surveyData = surveyData;
-
-            // Determine Focal Person ID (Prioritize CSV input, fallback to Survey default)
-            let targetFocalPersonId = null;
-            if (focal_person_name) {
-                const normalizedName = String(focal_person_name).replace(/\s+/g, ' ').trim().toLowerCase();
-                if (userMap.has(normalizedName)) {
-                    targetFocalPersonId = userMap.get(normalizedName);
-                }
-            }
-            if (!targetFocalPersonId && surveyData) {
-                targetFocalPersonId = surveyData.focal_person_id;
-            }
-
-            // Validate focal_person_id against existing users to prevent FK errors
-            if (targetFocalPersonId && validUserIds.has(targetFocalPersonId)) {
-                record.safe_focal_person_id = targetFocalPersonId;
-            } else {
-                record.safe_focal_person_id = null;
-            }
-
-            validRecords.push(record);
-        }
-
-        // --- 3. Handle errors or insert ---
-        if (errors.length > 0) {
-            await connection.rollback();
-            const message = `Import failed. ${errors.length} error(s) found. First error: ${errors[0]}`;
-            return res.status(400).json({ message, errors });
-        }
-        
-        if (validRecords.length > 0) {
-            const insertQuery = `INSERT INTO employments (employee_id, position_id, survey_id, focal_person_id, contract_start_date, contract_end_date, rating, remarks) VALUES ?`;
-            const valuesToInsert = validRecords.map(rec => [
-                rec.db_employee_id,
-                rec.db_position_id,
-                rec.surveyData.id,
-                rec.safe_focal_person_id,
-                rec.surveyData.contract_start_date,
-                rec.surveyData.contract_end_date,
-                null,
-                null
-            ]);
-            await connection.query(insertQuery, [valuesToInsert]);
-        }
-        
-        await connection.commit();
-        res.status(201).json({ message: `Successfully imported ${validRecords.length} employment records.` });
-
-    } catch (dbErr) {
-        await connection.rollback();
-        console.error(`Database error during employment import: ${dbErr.message}`);
-        return res.status(500).json({ error: dbErr.message });
-    } finally {
-        if (connection) connection.release();
-    }
-});
 
 // =================================================================
 // --- Utilities: Positions & Surveys Endpoints ---
@@ -706,6 +655,20 @@ router.post('/positions', async (req, res) => {
         const [existing] = await dbPool.query('SELECT id FROM positions WHERE title = ?', [position_title.trim()]);
         if (existing.length > 0) return res.status(409).json({ error: 'This position title already exists.' });
 
+        // ✅ Check for fuzzy matches (similar position titles)
+        const [allPositions] = await dbPool.query('SELECT id, title FROM positions');
+        const lowercaseInput = position_title.trim().toLowerCase();
+        for (const item of allPositions) {
+          const distance = levenshtein(lowercaseInput, item.title.toLowerCase());
+          if (distance <= 2 && distance > 0) {
+            return res.status(409).json({ 
+              error: `Did you mean "${item.title}"? If not, you can proceed with caution.`,
+              suggestion: item.title,
+              code: 'FUZZY_MATCH'
+            });
+          }
+        }
+
         const [result] = await dbPool.query('INSERT INTO positions (title) VALUES (?)', [position_title.trim()]);
         
         res.status(201).json({ message: 'Position created successfully', positionId: result.insertId });
@@ -731,6 +694,20 @@ router.put('/positions/:id', async (req, res) => {
         const [existing] = await dbPool.query('SELECT id FROM positions WHERE title = ? AND id != ?', [position_title.trim(), id]);
         if (existing.length > 0) return res.status(409).json({ error: 'This position title already exists.' });
 
+        // ✅ Check for fuzzy matches (similar position titles, excluding current record)
+        const [allPositions] = await dbPool.query('SELECT id, title FROM positions WHERE id != ?', [id]);
+        const lowercaseInput = position_title.trim().toLowerCase();
+        for (const item of allPositions) {
+          const distance = levenshtein(lowercaseInput, item.title.toLowerCase());
+          if (distance <= 2 && distance > 0) {
+            return res.status(409).json({ 
+              error: `Did you mean "${item.title}"? If not, you can proceed with caution.`,
+              suggestion: item.title,
+              code: 'FUZZY_MATCH'
+            });
+          }
+        }
+
         const [oldRecordRows] = await dbPool.query('SELECT * FROM positions WHERE id = ?', [id]);
         if (oldRecordRows.length === 0) return res.status(404).json({ error: 'Position not found.' });
 
@@ -741,6 +718,18 @@ router.put('/positions/:id', async (req, res) => {
     } catch (dbErr) {
         console.error(`Database error updating position: ${dbErr.message}`);
         return res.status(500).json({ error: 'Database error.' });
+    }
+});
+
+// GET a position's usage count
+router.get('/positions/:id/usage', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const [usage] = await dbPool.query('SELECT COUNT(*) as count FROM employments WHERE position_id = ?', [id]);
+        res.json({ count: usage[0].count });
+    } catch (err) {
+        console.error(`Database error checking position usage: ${err.message}`);
+        res.status(500).json({ error: 'Failed to check usage.' });
     }
 });
 
@@ -779,9 +768,14 @@ router.delete('/positions/:id', async (req, res) => {
 router.get('/surveys', async (req, res) => {
     try {
         const [results] = await dbPool.query(
-          "SELECT id, name, contract_start_date, contract_end_date, focal_person_id FROM surveys ORDER BY name ASC"
+          "SELECT id, name, contract_start_date, contract_end_date, focal_person_id, hiring_date, positions FROM surveys ORDER BY name ASC"
         );
-        res.json(results);
+        // Parse positions JSON if it exists
+        const parsedResults = results.map(survey => ({
+            ...survey,
+            positions: survey.positions ? JSON.parse(survey.positions) : null
+        }));
+        res.json(parsedResults);
     } catch (err) {
         console.error(`Database error fetching surveys: ${err.message}`);
         res.status(500).json({ error: 'Failed to retrieve surveys.' });
@@ -790,7 +784,7 @@ router.get('/surveys', async (req, res) => {
 
 // POST (Create) a new survey with new fields
 router.post('/surveys', async (req, res) => {
-    const { name, contract_start_date, contract_end_date, focal_person_id, hiring_positions, actingUserId, hiring_end_date } = req.body;
+    const { name, contract_start_date, contract_end_date, focal_person_id, actingUserId, rating_criteria, hiring_date, positions } = req.body;
     if (!actingUserId) return res.status(403).json({ error: 'Permission denied.' });
     if (!name || !name.trim()) return res.status(400).json({ error: 'Survey name is required.' });
 
@@ -806,37 +800,40 @@ router.post('/surveys', async (req, res) => {
             return res.status(409).json({ error: 'This survey name already exists.' });
         }
         
+        // ✅ Check for fuzzy matches (similar survey names)
+        const [allSurveys] = await dbPool.query('SELECT id, name FROM surveys');
+        const lowercaseInput = name.trim().toLowerCase();
+        for (const item of allSurveys) {
+          const distance = levenshtein(lowercaseInput, item.name.toLowerCase());
+          if (distance <= 2 && distance > 0) {
+            return res.status(409).json({ 
+              error: `Did you mean "${item.name}"? If not, you can proceed with caution.`,
+              suggestion: item.name,
+              code: 'FUZZY_MATCH'
+            });
+          }
+        }
+        
         const [result] = await dbPool.query(
-            'INSERT INTO surveys (name, contract_start_date, contract_end_date, focal_person_id) VALUES (?, ?, ?, ?)',
-            [name.trim(), contract_start_date || null, contract_end_date || null, focal_person_id || null]
+            'INSERT INTO surveys (name, contract_start_date, contract_end_date, focal_person_id, rating_criteria, hiring_date, positions) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [name.trim(), contract_start_date || null, contract_end_date || null, focal_person_id || null, rating_criteria || null, hiring_date || null, positions ? JSON.stringify(positions) : null]
         );
         
-        // Check if survey is ongoing or upcoming
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const endDate = contract_end_date ? new Date(contract_end_date) : null;
-        const isOngoingOrUpcoming = endDate && endDate >= today;
-
-        if (isOngoingOrUpcoming) {
-            // Sync Hiring Positions to Turso if provided
-            if (hiring_positions && Array.isArray(hiring_positions) && hiring_positions.length > 0) {
-                // 1. Get titles from local DB
-                const [posRows] = await dbPool.query('SELECT title FROM positions WHERE id IN (?)', [hiring_positions]);
-                
-                // 2. Sync each title to Turso (Create a row for each position with the survey name)
-                for (const row of posRows) {
-                    // We use a try-catch per insert to avoid stopping if one fails (e.g. duplicate)
-                    try {
-                        await executeTurso("INSERT INTO name_of_surveys (survey_name, hiring_end_date, position) VALUES (?, ?, ?)", [name.trim(), hiring_end_date || null, row.title]);
-                    } catch (e) { console.warn(`Turso sync skipped for position ${row.title}:`, e.message); }
-                }
-            } else {
-                // Sync to Turso (No positions, just survey info)
-                await executeTurso("INSERT INTO name_of_surveys (survey_name, hiring_end_date) VALUES (?, ?)", [name.trim(), hiring_end_date || null]);
+        // Sync to Turso only if we have hiring_date and positions (ongoing/upcoming surveys)
+        if (hiring_date && positions && Array.isArray(positions) && positions.length > 0) {
+            try {
+                const tursoSurveyName = JSON.stringify({ id: result.insertId, name: name.trim() });
+                const positionsJson = JSON.stringify(positions);
+                await executeTurso(
+                    "INSERT INTO name_of_surveys (survey_name, hiring_end_date, position) VALUES (?, ?, ?)",
+                    [tursoSurveyName, hiring_date, positionsJson]
+                );
+            } catch (e) {
+                // Turso sync skipped
+                console.error('Turso sync failed:', e);
             }
         }
 
-        const newDataForLog = { name: name.trim(), contract_start_date, contract_end_date, focal_person_id };
         res.status(201).json({ message: 'Survey created successfully', surveyId: result.insertId });
 
     } catch (dbErr) {
@@ -852,7 +849,7 @@ router.post('/surveys', async (req, res) => {
 // PUT (Update) an existing survey with new fields
 router.put('/surveys/:id', async (req, res) => {
     const { id } = req.params;
-    const { name, contract_start_date, contract_end_date, focal_person_id, actingUserId } = req.body;
+    const { name, contract_start_date, contract_end_date, focal_person_id, actingUserId, hiring_date, positions } = req.body;
     if (!actingUserId) return res.status(403).json({ error: 'Permission denied.' });
     
     const trimmedName = (typeof name === 'string') ? name.trim() : '';
@@ -872,16 +869,91 @@ router.put('/surveys/:id', async (req, res) => {
             return res.status(409).json({ error: 'This survey name is already in use by another record.' });
         }
         
+        // ✅ Check for fuzzy matches (similar survey names, excluding current record)
+        const [allSurveys] = await dbPool.query('SELECT id, name FROM surveys WHERE id != ?', [id]);
+        const lowercaseInput = trimmedName.toLowerCase();
+        for (const item of allSurveys) {
+          const distance = levenshtein(lowercaseInput, item.name.toLowerCase());
+          if (distance <= 2 && distance > 0) {
+            return res.status(409).json({ 
+              error: `Did you mean "${item.name}"? If not, you can proceed with caution.`,
+              suggestion: item.name,
+              code: 'FUZZY_MATCH'
+            });
+          }
+        }
+        
         const [oldRecordRows] = await dbPool.query('SELECT * FROM surveys WHERE id = ?', [id]);
         if (oldRecordRows.length === 0) return res.status(404).json({ error: 'Survey not found.' });
 
         const [result] = await dbPool.query(
-            'UPDATE surveys SET name = ?, contract_start_date = ?, contract_end_date = ?, focal_person_id = ? WHERE id = ?',
-            [trimmedName, contract_start_date || null, contract_end_date || null, focal_person_id || null, id]
+            'UPDATE surveys SET name = ?, contract_start_date = ?, contract_end_date = ?, focal_person_id = ?, hiring_date = ?, positions = ? WHERE id = ?',
+            [trimmedName, contract_start_date || null, contract_end_date || null, focal_person_id || null, hiring_date || null, positions ? JSON.stringify(positions) : null, id]
         );
         if (result.affectedRows === 0) return res.status(404).json({ error: 'Survey not found during update.' });
         
-        const newDataForLog = { name: trimmedName, contract_start_date, contract_end_date, focal_person_id };
+        // ✅ CASCADE contract date changes to all employment records (Option 1)
+        if (contract_start_date || contract_end_date) {
+            try {
+                const updateParams = [];
+                let updateQuery = 'UPDATE employments SET ';
+                
+                if (contract_start_date && contract_end_date) {
+                    updateQuery += 'contract_start_date = ?, contract_end_date = ? WHERE survey_id = ?';
+                    updateParams.push(contract_start_date, contract_end_date, id);
+                } else if (contract_start_date) {
+                    updateQuery += 'contract_start_date = ? WHERE survey_id = ?';
+                    updateParams.push(contract_start_date, id);
+                } else if (contract_end_date) {
+                    updateQuery += 'contract_end_date = ? WHERE survey_id = ?';
+                    updateParams.push(contract_end_date, id);
+                }
+                
+                const [cascadeResult] = await dbPool.query(updateQuery, updateParams);
+            } catch (e) {
+                // Cascade failed silently
+            }
+        }
+        
+        // Sync to Turso
+        if (hiring_date && positions && Array.isArray(positions) && positions.length > 0) {
+            try {
+                const tursoSurveyName = JSON.stringify({ id: Number(id), name: trimmedName });
+                const positionsJson = JSON.stringify(positions);
+                
+                // Use survey id to update exactly the matching record (json_extract works in Turso/SQLite)
+                // We'll try to update first. If rows affected = 0, we can insert.
+                const tursoResult = await executeTurso(
+                    "UPDATE name_of_surveys SET survey_name = ?, hiring_end_date = ?, position = ? WHERE json_extract(survey_name, '$.id') = ?",
+                    [tursoSurveyName, hiring_date, positionsJson, Number(id)]
+                );
+                
+                if (tursoResult && tursoResult.rowsAffected === 0) {
+                    // Fallback: If it wasn't found using json_extract, maybe it was stored as a raw string name before the update
+                    const oldSurveyName = oldRecordRows[0].name;
+                    const fallbackResult = await executeTurso(
+                        "UPDATE name_of_surveys SET survey_name = ?, hiring_end_date = ?, position = ? WHERE survey_name = ?",
+                        [tursoSurveyName, hiring_date, positionsJson, oldSurveyName]
+                    );
+
+                    if (fallbackResult && fallbackResult.rowsAffected === 0) {
+                         // If not exists, insert it
+                         await executeTurso(
+                             "INSERT INTO name_of_surveys (survey_name, hiring_end_date, position) VALUES (?, ?, ?)",
+                             [tursoSurveyName, hiring_date, positionsJson]
+                         );
+                    }
+                }
+            } catch (e) {
+                // Turso sync skipped
+                console.error('Turso sync failed on edit:', e);
+            }
+        }
+
+        // ✅ No need to update profile_entries - it uses survey_id (foreign key), not survey_name
+        // The survey name change in the surveys table doesn't affect profile_entries entries
+        // which are linked by survey_id, not by name
+        
         res.json({ message: 'Survey updated successfully' });
     } catch (dbErr) {
         // ✅ CATCH the specific duplicate error code from the database
@@ -890,6 +962,28 @@ router.put('/surveys/:id', async (req, res) => {
         }
         console.error(`Database error updating survey: ${dbErr.message}`);
         return res.status(500).json({ error: 'Database error.' });
+    }
+});
+
+// GET a survey's usage count (checks both employments and applicants)
+router.get('/surveys/:id/usage', async (req, res) => {
+    const { id } = req.params;
+    try {
+        // Check usage in employments table
+        const [employmentUsage] = await dbPool.query('SELECT COUNT(*) as count FROM employments WHERE survey_id = ?', [id]);
+        const employmentCount = employmentUsage[0].count;
+        
+        // Check usage in profile_entries table (applicants assigned to this survey)
+        const [applicantUsage] = await dbPool.query('SELECT COUNT(*) as count FROM profile_entries WHERE survey_id = ?', [id]);
+        const applicantCount = applicantUsage[0].count;
+        
+        // Total count includes both employees and applicants
+        const totalCount = employmentCount + applicantCount;
+        
+        res.json({ count: totalCount });
+    } catch (err) {
+        console.error(`Database error checking survey usage: ${err.message}`);
+        res.status(500).json({ error: 'Failed to check usage.' });
     }
 });
 
@@ -911,8 +1005,24 @@ router.delete('/surveys/:id', async (req, res) => {
         const [oldRecordRows] = await dbPool.query('SELECT * FROM surveys WHERE id = ?', [id]);
         if (oldRecordRows.length === 0) return res.status(404).json({ error: 'Survey not found.' });
         
+        const surveyName = oldRecordRows[0].name;
+        
         const [result] = await dbPool.query('DELETE FROM surveys WHERE id = ?', [id]);
         if (result.affectedRows === 0) return res.status(404).json({ error: 'Survey not found during deletion.' });
+        
+        // Delete corresponding Turso record if it exists
+        try {
+            await executeTurso("DELETE FROM name_of_surveys WHERE survey_name = ?", [surveyName]);
+        } catch (e) {
+            // Turso cleanup skipped
+        }
+
+        // ✅ CLEANUP profile_entries records associated with this survey (by survey_id)
+        try {
+            await dbPool.query("DELETE FROM profile_entries WHERE survey_id = ?", [id]);
+        } catch (e) {
+            // Cleanup failed silently
+        }
         
         res.json({ message: 'Survey deleted successfully' });
     } catch (dbErr) {

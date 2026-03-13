@@ -1,21 +1,24 @@
 import React, { useState, useEffect } from 'react';
 import { useTheme } from '../context/ThemeContext';
 import { useSettings } from '../context/SettingsContext';
+import ToastContainer from '../components/ToastContainer';
+import useToast from '../hooks/useToast';
 import PSALogo from '../assets/logo.png';
-import { FaSun, FaMoon, FaEye, FaEyeSlash, FaCog, FaInfoCircle, FaGoogle } from 'react-icons/fa';
+import { FaSun, FaMoon, FaEye, FaEyeSlash, FaCog, FaInfoCircle, FaGoogle, FaPaperPlane, FaUnlink, FaRedo, FaSync } from 'react-icons/fa';
 import { signInWithEmailAndPassword, GoogleAuthProvider, signInWithCredential, sendPasswordResetEmail } from "firebase/auth";
 import { auth } from "../firebase";
+import { FiX, FiSave, FiDownload } from 'react-icons/fi';
 
 // const appVersion = "v1.0.0"; // This will now be fetched from the main process
 
 const LoginPage = () => {
     const { isDarkMode, setIsDarkMode } = useTheme();
     const { serverIp, updateServerIp } = useSettings();
+    const { toasts, showToast, removeToast } = useToast();
 
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [showPassword, setShowPassword] = useState(false);
-    const [error, setError] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [showRestartModal, setShowRestartModal] = useState(false);
@@ -33,6 +36,8 @@ const LoginPage = () => {
     const [resetMessage, setResetMessage] = useState({ type: '', text: '' });
     const [tempServerIp, setTempServerIp] = useState(serverIp); 
     const [localIp, setLocalIp] = useState('Fetching...');
+    const [showGoogleResetConfirm, setShowGoogleResetConfirm] = useState(false);
+    const [googleResetMessage, setGoogleResetMessage] = useState('');
 
     const ThemeIcon = isDarkMode ? FaSun : FaMoon;
     const PasswordIcon = showPassword ? FaEyeSlash : FaEye;
@@ -130,11 +135,10 @@ const LoginPage = () => {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
-        setError('');
         setIsLoading(true);
 
         if (!navigator.onLine) {
-            setError('No internet connection. Please check your network and try again.');
+            showToast('No internet connection. Please check your network and try again.', 'error');
             setIsLoading(false);
             return;
         }
@@ -145,12 +149,17 @@ const LoginPage = () => {
             const idToken = await userCredential.user.getIdToken();
 
             // 2. Send token to backend to get app session
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 5000);
+            
             const response = await fetch(`http://${serverIp}:3001/api/login`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ idToken })
+                body: JSON.stringify({ idToken }),
+                signal: controller.signal
             });
 
+            clearTimeout(timeoutId);
             const data = await response.json();
 
             if (!response.ok) {
@@ -165,34 +174,33 @@ const LoginPage = () => {
             // Map Firebase error codes to user-friendly messages
             let userFriendlyError = 'An unexpected error occurred. Please try again.';
             
-            if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') {
-                userFriendlyError = 'Incorrect Password or Email Address';
+            if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
+                userFriendlyError = 'Incorrect email or password. Please try again.';
             } else if (err.code === 'auth/invalid-email') {
                 userFriendlyError = 'Invalid email address';
             } else if (err.code === 'auth/user-disabled') {
                 userFriendlyError = 'This account has been disabled';
             } else if (err.code === 'auth/too-many-requests') {
                 userFriendlyError = 'Too many login attempts. Please try again later.';
+            } else if (err.name === 'AbortError') {
+                userFriendlyError = `Connection timeout to server at ${serverIp}:3001. Server may be offline or unreachable.`;
+            } else if (err.message?.includes('Failed to fetch')) {
+                userFriendlyError = `Cannot reach server at ${serverIp}:3001. Check IP address, server status, and network connection.`;
             } else if (err.message) {
                 userFriendlyError = err.message;
             }
             
-            if (userFriendlyError.includes('Failed to fetch')) {
-                userFriendlyError = 'Check the Server IP Address';
-            }
-            
-            setError(userFriendlyError);
+            showToast(userFriendlyError, 'error');
         } finally {
             setIsLoading(false);
         }
     };
 
     const handleGoogleSignIn = async () => {
-        setError('');
         setIsLoading(true);
 
         if (!navigator.onLine) {
-            setError('No internet connection. Please check your network and try again.');
+            showToast('No internet connection. Please check your network and try again.', 'error');
             setIsLoading(false);
             return;
         }
@@ -214,12 +222,17 @@ const LoginPage = () => {
             const idToken = await userCredential.user.getIdToken();
 
             // Send token to backend to get app session
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 5000);
+            
             const response = await fetch(`http://${serverIp}:3001/api/login`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ idToken })
+                body: JSON.stringify({ idToken }),
+                signal: controller.signal
             });
 
+            clearTimeout(timeoutId);
             const data = await response.json();
 
             if (!response.ok) {
@@ -230,11 +243,17 @@ const LoginPage = () => {
             await window.electronAPI.setLoginState(data);
         } catch (err) {
             console.error("Google Login Error:", err);
-            let errorMessage = err.message || 'An unexpected error occurred during Google Sign-In.';
-            if (errorMessage.includes('Failed to fetch')) {
-                errorMessage = 'Check the Server IP Address';
+            let errorMessage = 'An unexpected error occurred during Google Sign-In.';
+            
+            if (err.name === 'AbortError') {
+                errorMessage = `Connection timeout to server at ${serverIp}:3001. Server may be offline or unreachable.`;
+            } else if (err.message?.includes('Failed to fetch')) {
+                errorMessage = `Cannot reach server at ${serverIp}:3001. Check IP address, server status, and network connection.`;
+            } else if (err.message) {
+                errorMessage = err.message;
             }
-            setError(errorMessage);
+            
+            showToast(errorMessage, 'error');
         } finally {
             setIsLoading(false);
         }
@@ -297,6 +316,25 @@ const LoginPage = () => {
         window.electronAPI.quitAndInstall();
     };
 
+    const handleResetGoogleAccount = async () => {
+        try {
+            const result = await window.electronAPI.clearGoogleRefreshToken();
+            if (result.success) {
+                setGoogleResetMessage(result.message);
+                setTimeout(() => {
+                    setShowGoogleResetConfirm(false);
+                    setGoogleResetMessage('');
+                }, 3000);
+            } else {
+                setGoogleResetMessage(result.message);
+                setTimeout(() => setGoogleResetMessage(''), 3000);
+            }
+        } catch (err) {
+            setGoogleResetMessage('Error: ' + err.message);
+            setTimeout(() => setGoogleResetMessage(''), 3000);
+        }
+    };
+
     return (
         <div className="flex items-center justify-center min-h-screen bg-gray-100 dark:bg-gray-900 transition-colors duration-300">
             <div className="w-full max-w-md p-8 space-y-8 bg-white dark:bg-gray-800 rounded-2xl shadow-lg">
@@ -338,7 +376,7 @@ const LoginPage = () => {
                 </div>
 
                 <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
-                    {error && <div className="text-center p-3 bg-red-100 text-red-700 rounded-lg dark:bg-red-900/50 dark:text-red-300">{error}</div>}
+                    <ToastContainer toasts={toasts} onClose={removeToast} />
                     <div className="space-y-4">
                         <div className="relative">
                             <input
@@ -349,7 +387,7 @@ const LoginPage = () => {
                                 className="block px-3 pt-6 pb-2 w-full text-gray-900 bg-transparent rounded-lg border-2 border-gray-300 appearance-none dark:text-white dark:border-gray-600 focus:outline-none focus:ring-0 focus:border-blue-600 peer"
                                 placeholder=" "
                                 value={email}
-                                onChange={(e) => { setEmail(e.target.value); setError(''); }}
+                                onChange={(e) => { setEmail(e.target.value); }}
                             />
                             <label
                                 htmlFor="email"
@@ -368,7 +406,7 @@ const LoginPage = () => {
                                 className="block px-3 pt-6 pb-2 w-full text-gray-900 bg-transparent rounded-lg border-2 border-gray-300 appearance-none dark:text-white dark:border-gray-600 focus:outline-none focus:ring-0 focus:border-blue-600 peer"
                                 placeholder=" "
                                 value={password}
-                                onChange={(e) => { setPassword(e.target.value); setError(''); }}
+                                onChange={(e) => { setPassword(e.target.value); }}
                             />
                             <label
                                 htmlFor="password"
@@ -387,7 +425,7 @@ const LoginPage = () => {
                         </button>
                     </div>
                     <div>
-                        <button type="submit" disabled={isLoading} className="group relative w-full flex justify-center py-3 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50">
+                        <button type="submit" disabled={isLoading} title={isLoading ? 'Signing in...' : 'Sign in to account'} className="group relative w-full flex justify-center py-3 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50">
                             {isLoading ? 'Signing In...' : 'Sign in'}
                         </button>
                     </div>
@@ -407,6 +445,7 @@ const LoginPage = () => {
                             onClick={handleGoogleSignIn}
                             disabled={isLoading}
                             className="w-full flex justify-center items-center gap-2 py-3 px-4 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm bg-white dark:bg-gray-700 text-sm font-medium text-gray-700 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 transition-colors"
+                            title={isLoading ? 'Signing in...' : 'Sign in with Google'}
                         >
                             <FaGoogle className="w-5 h-5 text-red-500" />
                             <span>Sign in with Google</span>
@@ -446,16 +485,16 @@ const LoginPage = () => {
                                     </label>
                                 </div>
                                 <div className="flex gap-4 mt-6">
-                                    <button type="button" onClick={closeResetModal} className="w-full px-4 py-2 bg-gray-500 text-white font-semibold rounded-lg hover:bg-gray-600">Cancel</button>
-                                    <button type="submit" disabled={resetLoading} className="w-full px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 disabled:opacity-50">
-                                        {resetLoading ? 'Sending...' : 'Send Reset Link'}
+                                    <button type="button" onClick={closeResetModal} className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-gray-500 text-white font-semibold rounded-lg hover:bg-gray-600"><FiX className="w-4 h-4" />Cancel</button>
+                                    <button type="submit" disabled={resetLoading} title={resetLoading ? 'Sending reset link...' : 'Send password reset email'} className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 disabled:opacity-50">
+                                        {resetLoading ? 'Sending...' : <><FaPaperPlane className="w-4 h-4" />Send Reset Link</>}
                                     </button>
                                 </div>
                             </form>
                         )}
                         {resetMessage.type === 'success' && (
                             <div className="mt-6">
-                                <button onClick={closeResetModal} className="w-full px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700">Close</button>
+                                <button onClick={closeResetModal} className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700"><FiX className="w-4 h-4" />Close</button>
                             </div>
                         )}
                     </div>
@@ -491,8 +530,26 @@ const LoginPage = () => {
                         </div>
                         
                         <div className="flex gap-4">
-                            <button onClick={() => setIsSettingsOpen(false)} className="w-full px-4 py-2 bg-gray-500 text-white font-semibold rounded-lg hover:bg-gray-600">Cancel</button>
-                            <button onClick={handleSaveSettings} className="w-full px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700">Save</button>
+                            <button onClick={() => setIsSettingsOpen(false)} className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-gray-500 text-white font-semibold rounded-lg hover:bg-gray-600"><FiX className="w-4 h-4" />Cancel</button>
+                            <button onClick={handleSaveSettings} className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700"><FiSave className="w-4 h-4" />Save</button>
+                        </div>
+
+                        <div className="border-t border-gray-300 dark:border-gray-600 my-6"></div>
+
+                        <div>
+                            <h3 className="text-lg font-medium text-center text-gray-800 dark:text-white mb-3">Google Account</h3>
+                            <p className="text-center text-sm text-gray-600 dark:text-gray-400 mb-4">Disconnect the currently linked Google account to sign in with a different one.</p>
+                            <button 
+                                onClick={() => setShowGoogleResetConfirm(true)}
+                                className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-orange-600 text-white font-semibold rounded-lg hover:bg-orange-700"
+                            >
+                                <FaUnlink className="w-4 h-4" />Disconnect Google Account
+                            </button>
+                            {googleResetMessage && (
+                                <p className={`text-center text-sm mt-2 ${googleResetMessage.includes('Error') ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'}`}>
+                                    {googleResetMessage}
+                                </p>
+                            )}
                         </div>
 
                         <div className="border-t border-gray-300 dark:border-gray-600 my-6"></div>
@@ -520,15 +577,40 @@ const LoginPage = () => {
                                 <button 
                                     onClick={handleCheckForUpdate} 
                                     disabled={isUpdateChecking || isDownloading}
-                                    className="w-full px-4 py-2 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+                                    className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+                                    title={isUpdateChecking ? 'Checking for updates...' : isDownloading ? 'Downloading update...' : 'Check for Updates'}
                                 >
-                                    {isUpdateChecking ? 'Checking...' : (isDownloading ? 'Downloading...' : 'Check for Updates')}
+                                    {isUpdateChecking ? 'Checking...' : (isDownloading ? 'Downloading...' : <><FaSync className="w-4 h-4" />Check for Updates</>)}
                                 </button>
                             ) : (
-                                <button onClick={handleRestartAndInstall} className="w-full px-4 py-2 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700">
-                                    Restart & Install Now
+                                <button onClick={handleRestartAndInstall} className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700">
+                                    <FiDownload className="w-4 h-4" />Restart & Install Now
                                 </button>
                             )}
+                        </div>
+                    </div>
+                </div>
+            )}
+            {showGoogleResetConfirm && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex justify-center items-center p-4">
+                    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-2xl p-6 w-full max-w-sm z-50 space-y-4">
+                        <h2 className="text-xl font-bold text-gray-800 dark:text-white text-center">Disconnect Google Account?</h2>
+                        <p className="text-center text-gray-600 dark:text-gray-300">
+                            This will remove the linked Google account. You'll be able to sign in with a different Google account next time.
+                        </p>
+                        <div className="flex gap-4">
+                            <button 
+                                onClick={() => setShowGoogleResetConfirm(false)} 
+                                className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-gray-500 text-white font-semibold rounded-lg hover:bg-gray-600"
+                            >
+                                <FiX className="w-4 h-4" />Cancel
+                            </button>
+                            <button 
+                                onClick={handleResetGoogleAccount}
+                                className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-orange-600 text-white font-semibold rounded-lg hover:bg-orange-700"
+                            >
+                                <FaUnlink className="w-4 h-4" />Disconnect
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -546,9 +628,9 @@ const LoginPage = () => {
                         <div className="mt-6">
                             <button 
                                 onClick={handleRestartApp} 
-                                className="w-full px-4 py-2 font-semibold text-white bg-blue-600 rounded-md shadow-sm hover:bg-blue-700"
+                                className="w-full flex items-center justify-center gap-2 px-4 py-2 font-semibold text-white bg-blue-600 rounded-md shadow-sm hover:bg-blue-700"
                             >
-                                Restart Now
+                                <FaRedo className="w-4 h-4" />Restart Now
                             </button>
                         </div>
                     </div>

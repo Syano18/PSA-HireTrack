@@ -1,12 +1,79 @@
-
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import Papa from 'papaparse';
-import { FaExclamationTriangle } from 'react-icons/fa';
+import { FaFilePdf, FaArrowLeft, FaArrowRight } from 'react-icons/fa';
+import { FiDownload, FiUpload, FiX } from 'react-icons/fi';
 import { useSettings } from '../context/SettingsContext';
 import ProgressModal from '../components/Progress';
+import ToastContainer from '../components/ToastContainer';
+import useToast from '../hooks/useToast';
+
+const useClickOutside = (ref, handler) => {
+  useEffect(() => {
+    const listener = (event) => {
+      if (!ref.current || ref.current.contains(event.target)) {
+        return;
+      }
+      handler(event);
+    };
+    document.addEventListener('mousedown', listener);
+    return () => {
+      document.removeEventListener('mousedown', listener);
+    };
+  }, [ref, handler]);
+};
+
+const SearchableDropdown = ({ options, value, onChange, placeholder, id, required, disabled = false, className = '' }) => {
+    const [isOpen, setIsOpen] = useState(false);
+    const [searchTerm, setSearchTerm] = useState('');
+    const dropdownRef = useRef(null);
+  
+    useClickOutside(dropdownRef, () => setIsOpen(false));
+  
+    const selectedOption = useMemo(() => {
+      return options.find((option) => String(option.value) === String(value)) || null;
+    }, [options, value]);
+  
+    const filteredOptions = useMemo(
+      () =>
+        options.filter((option) =>
+          option.label.toLowerCase().includes(searchTerm.toLowerCase())
+        ),
+      [options, searchTerm]
+    );
+  
+    const displayValue = isOpen ? searchTerm : selectedOption?.label || '';
+  
+    const handleSelectOption = (option) => {
+      onChange(option.value);
+      setSearchTerm(option.label);
+      setIsOpen(false);
+    };
+  
+    return (
+      <div className="relative" ref={dropdownRef}>
+        <input id={id} type="text" className={`w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100 dark:disabled:bg-gray-700/50 ${className}`} value={displayValue} onChange={(e) => { if (disabled) return; setSearchTerm(e.target.value); if (!isOpen) setIsOpen(true); }} onFocus={() => { if (disabled) return; setIsOpen(true); setSearchTerm(''); }} placeholder={placeholder} required={required && !value} disabled={disabled} />
+        {isOpen && !disabled && (
+          <div className="absolute z-10 mt-1 w-full rounded-md border border-gray-300 bg-white shadow-lg dark:bg-gray-700">
+            {filteredOptions.length > 0 ? (
+              <ul className="max-h-60 overflow-y-auto">
+                {filteredOptions.map((option) => (
+                  <li key={option.value} className={`cursor-pointer px-4 py-2 text-gray-800 dark:text-gray-200 hover:bg-blue-500 hover:text-white whitespace-normal break-words ${ String(option.value) === String(value) ? 'bg-blue-100 dark:bg-blue-600' : '' }`} onClick={() => handleSelectOption(option)}>
+                    {option.label}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <div className="px-4 py-2 text-gray-500 dark:text-gray-400">No options found.</div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+};
 
 const TempTrainingCertificates = () => {
   const { serverIp } = useSettings();
+  const { toasts, showToast, removeToast } = useToast();
   const [data, setData] = useState([]);
   const [recipientType, setRecipientType] = useState('');
   const [certType, setCertType] = useState('');
@@ -14,7 +81,6 @@ const TempTrainingCertificates = () => {
   const [encodedBy, setEncodedBy] = useState('');
   const [loading, setLoading] = useState(false);
   const [sessionState, setSessionState] = useState(null);
-  const [error, setError] = useState(null);
   const fileInputRef = useRef(null);
   const [currentPage, setCurrentPage] = useState(1);
   const rowsPerPage = 12;
@@ -42,14 +108,23 @@ const TempTrainingCertificates = () => {
     getSession();
   }, []);
 
+  const recipientTypeOptions = useMemo(() => [
+    { value: 'Participant/s', label: 'Participant/s' },
+    { value: 'Resource Person/s', label: 'Resource Person/s' }
+  ], []);
+
+  const certTypeOptions = useMemo(() => [
+      { value: 'Participation', label: 'Participation' },
+      { value: 'Completion', label: 'Completion' }
+  ], []);
+
   const handleImportClick = () => {
-    setError(null);
     if (!recipientType) {
-      setError('Please select who the certificate is for (Participant/s or Resource Person/s) before importing.');
+      showToast('Please select who the certificate is for (Participant/s or Resource Person/s) before importing.', 'error');
       return;
     }
     if (recipientType === 'Participant/s' && !certType) {
-      setError('Please select a certificate type (Participation or Completion) before importing.');
+      showToast('Please select a certificate type (Participation or Completion) before importing.', 'error');
       return;
     }
     fileInputRef.current.click();
@@ -58,7 +133,6 @@ const TempTrainingCertificates = () => {
   // Handle CSV File Upload and Parsing
   const handleFileChange = (e) => {
     const selectedFile = e.target.files[0];
-    setError(null);
 
     if (selectedFile) {
       Papa.parse(selectedFile, {
@@ -80,7 +154,7 @@ const TempTrainingCertificates = () => {
           });
 
           if (validationErrors.length > 0) {
-            setError(`Validation failed:\n${validationErrors.slice(0, 5).join('\n')}${validationErrors.length > 5 ? '\n...' : ''}`);
+            showToast(`Validation failed:\n${validationErrors.slice(0, 5).join('\n')}${validationErrors.length > 5 ? '\n...' : ''}`, 'error');
             setData([]);
             return;
           }
@@ -114,7 +188,7 @@ const TempTrainingCertificates = () => {
         },
         error: (error) => {
           console.error('Error parsing CSV:', error);
-          setError('Error parsing CSV file. Please check the format.');
+          showToast('Error parsing CSV file. Please check the format.', 'error');
         }
       });
     }
@@ -123,20 +197,19 @@ const TempTrainingCertificates = () => {
 
   // Handle Generate Button Click
   const handleGenerate = async () => {
-    setError(null);
     if (data.length === 0) {
-      setError('No data available. Please import a CSV file first.');
+      showToast('No data available. Please import a CSV file first.', 'error');
       return;
     }
     if (!recipientType) {
-      setError('Please select who the certificate is for.');
+      showToast('Please select who the certificate is for.', 'error');
       return;
     }
 
     let finalCertType = '';
     if (recipientType === 'Participant/s') {
       if (!certType) {
-        setError('Please select a certificate type (Participation/Completion).');
+        showToast('Please select a certificate type (Participation/Completion).', 'error');
         return;
       }
       finalCertType = certType;
@@ -144,8 +217,33 @@ const TempTrainingCertificates = () => {
       finalCertType = 'Appreciation';
     }
 
+    // Validate that all records have required fields with actual values
+    const requiredFields = recipientType === 'Resource Person/s' 
+      ? ['first_name', 'last_name', 'trainingTitle', 'startDate', 'endDate', 'venue']
+      : ['first_name', 'last_name', 'trainingTitle', 'startDate', 'endDate', 'hours', 'venue'];
+    
+    const invalidRecords = [];
+    data.forEach((record, index) => {
+      const missingFields = [];
+      requiredFields.forEach(field => {
+        const value = record[field];
+        // Check if field is empty, undefined, null, or contains only whitespace
+        if (!value || (typeof value === 'string' && value.trim() === '')) {
+          missingFields.push(field);
+        }
+      });
+      if (missingFields.length > 0) {
+        invalidRecords.push(`Row ${index + 1} (${record.name || 'N/A'}): Missing or empty ${missingFields.join(', ')}`);
+      }
+    });
+
+    if (invalidRecords.length > 0) {
+      showToast(`Validation failed:\n${invalidRecords.slice(0, 5).join('\n')}${invalidRecords.length > 5 ? '\n...' : ''}`, 'error');
+      return;
+    }
+
     if (!serverIp || !sessionState) {
-        setError('Server connection or session not available.');
+        showToast('Server connection or session not available.', 'error');
         return;
     }
 
@@ -235,10 +333,9 @@ const TempTrainingCertificates = () => {
   // Helper to download a CSV template
   const downloadTemplate = () => {
     if (!recipientType) {
-      setError('Please select who the certificate is for before downloading the template.');
+      showToast('Please select who the certificate is for before downloading the template.', 'error');
       return;
     }
-    setError(null);
 
     let headers, example, fileName;
 
@@ -264,72 +361,69 @@ const TempTrainingCertificates = () => {
   const handlePreviousPage = () => setCurrentPage(prev => Math.max(prev - 1, 1));
 
   return (
-    <div>
-        <div className="flex flex-col md:flex-row items-center justify-between mb-4 gap-4">
-          <h1 className="text-3xl font-bold text-gray-800 dark:text-white">External Partners Certificate Generation</h1>
-        </div>
-
-        {/* Button Bar */}
-        <div className="flex flex-wrap items-center gap-2 mb-4">
-          {data.length > 0 && (
-            <button
-              onClick={handleGenerate}
-              disabled={loading}
-              className={`px-4 py-2 font-semibold text-white rounded-lg shadow-md transition-colors ${
-                loading ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'
-              }`}
-            >
-              {loading ? 'Generating...' : 'Generate Batch Certificates'}
-            </button>
-          )}
-
-          <div className="flex-grow" />
-
-          <select
-            value={recipientType}
-            onChange={(e) => {
-              setRecipientType(e.target.value);
-              setCertType(''); // Reset second dropdown
-            }}
-            className="px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-          >
-            <option value="" disabled>Certificate for...</option>
-            <option value="Participant/s">Participant/s</option>
-            <option value="Resource Person/s">Resource Person/s</option>
-          </select>
-
-          {recipientType === 'Participant/s' && (
-            <select
-              value={certType}
-              onChange={(e) => setCertType(e.target.value)}
-              className="px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-            >
-              <option value="" disabled>Select Type...</option>
-              <option value="Participation">Participation</option>
-              <option value="Completion">Completion</option>
-            </select>
-          )}
-
-          <button 
-            onClick={downloadTemplate}
-            className="px-4 py-2 font-semibold text-gray-800 bg-gray-300 rounded-lg shadow-md hover:bg-gray-400 dark:text-white dark:bg-gray-600 dark:hover:bg-gray-500"
-          >
-            Download Template
-          </button>
+    <div>        <ToastContainer toasts={toasts} onClose={removeToast} />        <div className="flex flex-col md:flex-row items-center justify-between mb-4 gap-4">
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">External Partners Certificate Generation</h1>
           
-          <button 
-            onClick={handleImportClick}
-            className="px-4 py-2 font-semibold text-white bg-green-600 rounded-lg shadow-md hover:bg-green-700"
-          >
-            Import CSV
-          </button>
-          <input 
-            type="file" 
-            ref={fileInputRef}
-            accept=".csv"
-            onChange={handleFileChange}
-            className="hidden"
-          />
+          {/* Button Bar */}
+          <div className="flex flex-wrap items-center gap-2 justify-end">
+            {data.length > 0 && (
+              <button
+                onClick={handleGenerate}
+                disabled={loading}
+                title={loading ? 'Generating certificates...' : 'Generate certificates for selected trainings'}
+                className={`flex items-center gap-2 px-3 py-2 text-xs font-semibold text-white rounded-lg ${
+                  loading ? 'bg-gray-400 cursor-not-allowed dark:bg-gray-500' : 'bg-blue-600 hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600'
+                }`}
+              >
+                <FaFilePdf className="w-4 h-4" />{loading ? 'Generating...' : 'Generate Certificates'}
+              </button>
+            )}
+            
+            <div className="w-48">
+              <SearchableDropdown
+                id="recipientType"
+                options={recipientTypeOptions}
+                value={recipientType}
+                onChange={(value) => { setRecipientType(value); setCertType(''); }}
+                placeholder="Certificate for..."
+                className="text-xs font-semibold"
+              />
+            </div>
+
+            {recipientType === 'Participant/s' && (
+              <div className="w-48">
+                <SearchableDropdown
+                  id="certType"
+                  options={certTypeOptions}
+                  value={certType}
+                  onChange={setCertType}
+                  placeholder="Select Type..."
+                  className="text-xs font-semibold"
+                />
+              </div>
+            )}
+
+                <button 
+              onClick={downloadTemplate}
+              className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-gray-900 dark:text-gray-100 bg-gray-400 rounded-lg hover:bg-gray-500 dark:bg-gray-600 dark:hover:bg-gray-700"
+            >
+              <FiDownload className="w-4 h-4" />Download Template
+            </button>
+            
+            <button 
+              onClick={handleImportClick}
+              className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-white bg-green-600 rounded-lg hover:bg-green-700 dark:bg-green-700 dark:hover:bg-green-600"
+            >
+              <FiUpload className="w-4 h-4" />Import CSV
+            </button>
+            <input 
+              type="file" 
+              ref={fileInputRef}
+              accept=".csv"
+              onChange={handleFileChange}
+              className="hidden"
+            />
+          </div>
         </div>
 
         {/* Preview Table */}
@@ -373,9 +467,9 @@ const TempTrainingCertificates = () => {
           Showing {totalItems > 0 ? (currentPage - 1) * rowsPerPage + 1 : 0} to {Math.min(currentPage * rowsPerPage, totalItems)} of {totalItems} records
         </span>
         <div className="flex items-center space-x-2">
-          <button onClick={handlePreviousPage} disabled={currentPage === 1} className="px-4 py-2 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded disabled:opacity-50">Previous</button>
+          <button onClick={handlePreviousPage} disabled={currentPage === 1} title={currentPage === 1 ? 'Already on first page' : 'Go to previous page'} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"><FaArrowLeft className="w-4 h-4" />Previous</button>
           <span className="text-gray-700 dark:text-gray-300 px-2">{currentPage}</span>
-          <button onClick={handleNextPage} disabled={currentPage >= totalPages} className="px-4 py-2 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded disabled:opacity-50">Next</button>
+          <button onClick={handleNextPage} disabled={currentPage >= totalPages} title={currentPage >= totalPages ? 'Already on last page' : 'Go to next page'} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed">Next<FaArrowRight className="w-4 h-4" /></button>
         </div>
       </div>
 
@@ -387,22 +481,7 @@ const TempTrainingCertificates = () => {
         filePath={savedFilePath}
       />
 
-      {error && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black bg-opacity-70">
-          <div className="w-full max-w-md p-6 bg-white rounded-lg shadow-xl dark:bg-gray-800 transform transition-all">
-            <div className="text-center">
-              <div className="flex items-center justify-center w-12 h-12 mx-auto bg-red-100 rounded-full dark:bg-red-900/50">
-                <FaExclamationTriangle className="w-6 h-6 text-red-600 dark:text-red-400" />
-              </div>
-              <h3 className="mt-4 text-lg font-medium text-gray-900 dark:text-white">Error</h3>
-              <div className="mt-2 text-sm text-gray-600 dark:text-gray-300 whitespace-pre-wrap">{error}</div>
-            </div>
-            <div className="mt-5">
-              <button type="button" onClick={() => setError(null)} className="inline-flex justify-center w-full px-4 py-2 text-base font-medium text-white bg-red-600 border border-transparent rounded-md shadow-sm hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500">OK</button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ToastContainer toasts={toasts} onClose={removeToast} />
     </div>
   );
 };

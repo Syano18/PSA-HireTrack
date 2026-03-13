@@ -75,4 +75,16 @@ router.get('/dashboard-summary', verifyToken, async (req, res) => {
     }
 });
 
+// --- Certificate Statistics Endpoint ---
+// Returns certificate statistics for the dashboard
+// This endpoint provides a simple metric display
+router.get('/certificate-stats', verifyToken, async (req, res) => {
+    // For now, return default values
+    // In the future, this can be connected to a real certificate count from Turso
+    res.json({
+        training_certs: 0,
+        employment_certs: 0
+    });
+});
+
 module.exports = router;

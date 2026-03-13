@@ -42,7 +42,7 @@ const isIPInSubnet = (clientIP, subnet) => {
 const WHITELIST = [
   '127.0.0.1',           // Localhost
   '192.168.169.0/16',    // Local network (192.168.169.x)
-  '30.0.39.61',          // VPN user - Your VPN IP
+  // '30.0.39.61',          // VPN user - Your VPN IP
 ];
 
 const ipWhitelistMiddleware = (req, res, next) => {

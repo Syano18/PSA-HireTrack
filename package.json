@@ -2,5 +2,8 @@
   "dependencies": {
     "next": "^16.1.6",
     "papaparse": "^5.5.3"
+  },
+  "devDependencies": {
+    "cross-env": "^10.1.0"
   }
 }
