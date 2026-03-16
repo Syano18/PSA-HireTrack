@@ -13,10 +13,6 @@ const ProtectedRoute = ({ allowedRoles }) => {
     if (!session?.user) {
         return <Navigate to="/login" replace />;
     }
-    
-    if (session.user.force_password_change) {
-        return <Navigate to="/force-change-password" replace />;
-    }
 
     if (allowedRoles && !allowedRoles.includes(session.user.role)) {
         return <Navigate to="/dashboard" replace />;

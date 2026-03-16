@@ -101,7 +101,6 @@ const Applicants = () => {
   const [userRole, setUserRole] = useState('');
 
   // surveys currently missing evaluation criteria
-  const [transmittableCount, setTransmittableCount] = useState(0);
   const [noCriteriaSurveys, setNoCriteriaSurveys] = useState([]);
 
   // State for the assignment modal
@@ -174,16 +173,6 @@ const Applicants = () => {
     }
   }, [serverIp, showToast]);
 
-  const fetchTransmittableCount = useCallback(async () => {
-    if (!serverIp) return;
-    try {
-        const data = await apiFetch('applicants/transmit-options', serverIp);
-        setTransmittableCount(data.length);
-    } catch (err) {
-        setTransmittableCount(0); // fail silently
-    }
-  }, [serverIp]);
-
   const fetchInterviewers = useCallback(async () => {
     if (!serverIp) return;
     try {
@@ -234,10 +223,9 @@ const Applicants = () => {
       fetchApplicants();
       fetchInterviewers();
       loadSurveysWithoutCriteria();
-      fetchTransmittableCount();
     }
-  }, [isSettingsLoading, fetchApplicants, fetchInterviewers, loadSurveysWithoutCriteria, fetchTransmittableCount]);
-
+  }, [isSettingsLoading, fetchApplicants, fetchInterviewers, loadSurveysWithoutCriteria]);
+  
   const filteredApplicants = useMemo(() => {
     // Filter by interview_status first
     const allowedStatuses = ['Pending', 'For Interview', 'Ongoing Interview', 'Done Interview'];
@@ -288,6 +276,10 @@ const Applicants = () => {
     return sortableApplicants;
   }, [filteredApplicants, sortConfig]);
 
+  const hasTransmittableApplicants = useMemo(() => {
+    return applicants.some(app => app.interview_status === 'Done Interview');
+  }, [applicants]);
+
   const totalPages = Math.ceil(sortedApplicants.length / rowsPerPage);
   const currentItems = sortedApplicants.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage);
 
@@ -319,8 +311,7 @@ const Applicants = () => {
     try {
       await apiFetch(`applicants/${assigningApplicant.id}/assign`, serverIp, { method: 'PUT', body: JSON.stringify({ interviewer_id: selectedInterviewer }) });
       setAssigningApplicant(null);
-      fetchApplicants();
-      fetchTransmittableCount();
+      fetchApplicants(); // Re-fetch to update the list
       showToast('Interviewer assigned successfully.', 'success');
     } catch (err) {
       showToast(err.message, 'error');
@@ -478,9 +469,7 @@ const Applicants = () => {
       setPreAssessConfirm(false);
       setPreAssessApplicant(null);
       setTrainingRecords(null);
-      setEmploymentRecords(null);
-      fetchApplicants();
-      fetchTransmittableCount();
+      setEmploymentRecords(null);      fetchApplicants();
       showToast('Pre-assessment saved successfully.', 'success');
     } catch (err) {
       setPreAssessConfirm(false);
@@ -583,7 +572,6 @@ const Applicants = () => {
       const result = await apiFetch('applicants/sync', serverIp, { method: 'POST' });
       showToast(result.message, 'success');
       fetchApplicants(); // Refresh the list
-      fetchTransmittableCount();
     } catch (err) {
       showToast(err.message || 'Sync failed.', 'error');
     } finally {
@@ -603,9 +591,9 @@ const Applicants = () => {
         <div className="flex items-center gap-2">
           {['Super_Admin', 'Admin', 'PACD'].includes(userRole) && (
             <button
-              onClick={handleOpenTransmitModal} 
-              disabled={transmittableCount === 0}
-              title={transmittableCount === 0 ? "No applicants are ready for transmission" : "Transmit applicant data to the focal person"}
+              onClick={handleOpenTransmitModal}
+              disabled={!hasTransmittableApplicants}
+              title={!hasTransmittableApplicants ? "No applicants are ready for transmission" : "Transmit applicant data to the focal person"}
               className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-white bg-green-600 rounded-lg hover:bg-green-700 dark:bg-green-700 dark:hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <FaPaperPlane className="w-4 h-4" /> Transmit to Focal
@@ -641,6 +629,7 @@ const Applicants = () => {
           />
         </div>
       </div>
+
 
       <div className="overflow-x-auto bg-white rounded-lg shadow dark:bg-gray-800">
         <table className="min-w-full text-sm leading-normal">

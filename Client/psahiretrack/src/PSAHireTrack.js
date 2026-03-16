@@ -76,7 +76,7 @@ const App = () => {
                 <Route path="applicants" element={<Applicants />} />
             </Route>
 
-            <Route element={<ProtectedRoute allowedRoles={['Super_Admin', 'Focal Person']} />}>
+            <Route element={<ProtectedRoute allowedRoles={['Super_Admin', 'Focal Person', 'Admin', 'PACD']} />}>
                 <Route path="assessment" element={<Assessment />} />
             </Route>
 

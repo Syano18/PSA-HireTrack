@@ -196,6 +196,7 @@ const Employments = () => {
   const [sessionState, setSessionState] = useState(null);
   const [userPermissions, setUserPermissions] = useState({
     canManage: false,
+    isSuperAdmin: false,
     isFocalPerson: false,
     isHrDesignate: false,
     canDelete: false,
@@ -559,9 +560,23 @@ const Employments = () => {
   const handleRatingConfirm = async () => {
     try {
       const fullRating = `${computedAverage.toFixed(2)} — ${computedRating}`;
+      // Include core employment fields so Super_Admin can perform a rating update
+      // without the server requiring a full-record edit payload.
+      const payload = {
+        rating: fullRating,
+        remarks: ratingRemarks,
+        actingUserId: sessionState?.user?.id,
+        // required fields for full edit validation on the server
+        employee_id: ratingRecord.employee_id,
+        position_id: ratingRecord.position_id,
+        survey_id: ratingRecord.survey_id,
+        contract_start_date: ratingRecord.contract_start_date,
+        contract_end_date: ratingRecord.contract_end_date,
+      };
+
       await apiFetch(`employments/${ratingRecord.id}`, serverIp, {
         method: 'PUT',
-        body: JSON.stringify({ rating: fullRating, remarks: ratingRemarks, actingUserId: sessionState?.user?.id }),
+        body: JSON.stringify(payload),
       });
       setIsRatingConfirmOpen(false);
       setIsRatingModalOpen(false);
@@ -911,8 +926,8 @@ const Employments = () => {
                   <td className="px-5 py-4">
                     <div className="flex items-center justify-center space-x-1">
                       <button onClick={() => handleViewClick(rec)} title="View Employment Record" className="p-1 rounded-lg transition-colors text-gray-500 hover:text-gray-800 hover:bg-gray-100 dark:text-gray-400 dark:hover:text-white dark:hover:bg-gray-700"><FaEye className="w-4 h-4" /></button>
-                      {(userPermissions.canManage || userPermissions.isHrDesignate) && <button onClick={() => handleEditClick(rec)} title="Edit Employment Record" className="p-1 rounded-lg transition-colors text-indigo-600 hover:text-indigo-900 hover:bg-indigo-50 dark:hover:text-indigo-300 dark:hover:bg-indigo-900/20"><FaPencilAlt className="w-4 h-4" /></button>}
-                      {userPermissions.isFocalPerson && rec.focal_person_id === sessionState?.user?.id && !rec.rating && (!rec.remarks || !rec.remarks.startsWith('REPLACED')) && <button onClick={() => handleProvideRatingClick(rec)} title="Provide Rating" className="p-1 rounded-lg transition-colors text-green-600 hover:text-green-800 hover:bg-green-50 dark:text-green-400 dark:hover:text-green-200 dark:hover:bg-green-900/20"><FaStar className="w-4 h-4" /></button>}
+                      {(userPermissions.canManage || userPermissions.isHrDesignate) && <button onClick={() => handleEditClick(rec)} title="Edit Employment Record" className="p-1 rounded-lg transition-colors text-indigo-600 hover:text-indigo-900 hover:bg-indigo-50 dark:hover:text-indigo-300 dark:hover:bg-indigo-900/20"><FaPencilAlt className="w-4 h-4" /></button>}                      
+                      {(userPermissions.isSuperAdmin || (userPermissions.isFocalPerson && rec.focal_person_id === sessionState?.user?.id)) && !rec.rating && (!rec.remarks || !rec.remarks.startsWith('REPLACED')) && <button onClick={() => handleProvideRatingClick(rec)} title="Provide Rating" className="p-1 rounded-lg transition-colors text-green-600 hover:text-green-800 hover:bg-green-50 dark:text-green-400 dark:hover:text-green-200 dark:hover:bg-green-900/20"><FaStar className="w-4 h-4" /></button>}
                       {userPermissions.canDelete && <button onClick={() => handleDeleteClick(rec)} title="Delete Employment Record" className="p-1 rounded-lg transition-colors text-red-600 hover:text-red-900 hover:bg-red-50 dark:text-red-500 dark:hover:text-red-300 dark:hover:bg-red-900/20"><FaTrash className="w-4 h-4" /></button>}
                     </div>
                   </td>
@@ -1057,7 +1072,7 @@ const Employments = () => {
 
       {isSyncModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
-            <div className="flex flex-col w-full max-w-4xl max-h-[90vh] bg-white dark:bg-gray-800 rounded-lg shadow-xl overflow-hidden">
+            <div className="flex flex-col w-full max-w-4xl max-h-[90vh] bg-white dark:bg-gray-800 rounded-lg shadow-xl overflow-visible">
                 <div className="flex-shrink-0 px-6 py-4 border-b border-gray-200 dark:border-gray-700">
                     <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Sync Applicants to Employment</h2>
                     <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Select Survey and Position to create employment records for hired applicants.</p>
@@ -1065,7 +1080,7 @@ const Employments = () => {
 
                 {syncModalStep === 'filter' ? (
                     <form onSubmit={handleConfirmSyncFilter} className="flex flex-col flex-1 min-h-0">
-                        <div className="flex-auto p-6 overflow-y-auto space-y-4">
+                      <div className="flex-auto h-[200px] p-6 overflow-visible space-y-4">
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Survey Name <span className="text-red-500">*</span></label>
@@ -1279,8 +1294,8 @@ const Employments = () => {
     )}
       {/* ─── Provide Rating Modal ─── */}
       {isRatingModalOpen && ratingRecord && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
-          <div className="flex flex-col w-full max-w-3xl bg-white dark:bg-gray-800 rounded-xl shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 bg-black/60">
+          <div className="flex flex-col w-full max-w-5xl bg-white dark:bg-gray-800 rounded-xl shadow-2xl">
             {/* Header */}
             <div className="flex-shrink-0 px-6 py-4 border-b border-gray-200 dark:border-gray-700 rounded-t-xl">
               <h2 className="text-xl font-bold text-gray-900 dark:text-white">Performance Rating</h2>
@@ -1292,16 +1307,17 @@ const Employments = () => {
             <form onSubmit={handleRatingSubmit} className="flex-1">
               <div className="flex gap-0 divide-x divide-gray-200 dark:divide-gray-700">
                 {/* ── Left column: criteria + result + remarks ── */}
-                <div className="flex-1 px-6 py-5 space-y-5">
+                <div className="flex-1 px-6 py-5 space-y-2">
 
                 {/* Criteria */}
                 {RATING_CRITERIA.map(criterion => (
-                  <div key={criterion.key} className="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
-                    <div className="flex items-start justify-between gap-4 mb-3">
+                  <div key={criterion.key} className="border border-gray-200 dark:border-gray-700 rounded-lg p-2">
+                    <div className="flex items-start justify-between mb-2">
                       <div>
                         <p className="font-semibold text-gray-800 dark:text-white">{criterion.label}</p>
                         <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{criterion.description}</p>
                       </div>
+                      <div className="text-sm w-[300px]">
                       <SearchableDropdown
                         id={`rating-${criterion.key}`}
                         options={ratingScoreOptions}
@@ -1310,6 +1326,7 @@ const Employments = () => {
                         placeholder="Select score..."
                         required
                       />
+                      </div>
                     </div>
                     {/* Score description hint */}
                     {ratingCriteria[criterion.key] && (
@@ -1344,7 +1361,7 @@ const Employments = () => {
                 </div>{/* end left column */}
 
                 {/* ── Right column: score card ── */}
-                <div className="w-72 flex-shrink-0 px-6 py-5">
+                <div className="flex-shrink-0 px-6 py-5 w-[400px]">
                   <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">Score Card</p>
                   <div className="space-y-3">
                     {[5,4,3,2,1].map(score => (

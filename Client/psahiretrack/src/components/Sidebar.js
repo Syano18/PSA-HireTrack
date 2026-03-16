@@ -35,7 +35,7 @@ const Sidebar = ({ onLogout, user }) => {
             return ['Super_Admin', 'Admin', 'PACD'].includes(user.role);
         }
         if (['Assessment'].includes(link.name)) {
-            return ['Super_Admin', 'Focal Person'].includes(user.role);
+            return ['Super_Admin', 'Focal Person', 'Admin', 'PACD'].includes(user.role);
         }
         if (['Interview'].includes(link.name)) {
             return ['Super_Admin', 'Admin', 'PACD', 'Focal Person', 'User'].includes(user.role);

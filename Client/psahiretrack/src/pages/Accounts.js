@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { FiPlus, FiX, FiSave } from 'react-icons/fi';
 import { parseISO, format } from 'date-fns';
-import { FaSort, FaSortUp, FaSortDown, FaTrash } from 'react-icons/fa';
+import { FaSort, FaSortUp, FaSortDown, FaTrash, FaPencilAlt } from 'react-icons/fa';
 import ToastContainer from '../components/ToastContainer';
 import useToast from '../hooks/useToast';
 import { apiFetch } from '../components/API';
@@ -474,33 +474,48 @@ const Accounts = () => {
           <tbody>
             {paginatedUsers.length > 0 ? (
               paginatedUsers.map((user) => {
-                const canEdit = (sessionState.user.role === 'Super_Admin') || (sessionState.user.role === 'Admin' && user.role !== 'Super_Admin') || (sessionState.user.role === 'PACD' && (user.role === 'User'));
+                const isCurrentUser = sessionState.user.id === user.id;
+                const canEdit = sessionState.user.id !== user.id && ((sessionState.user.role === 'Super_Admin') || (sessionState.user.role === 'Admin' && user.role !== 'Super_Admin') || (sessionState.user.role === 'PACD' && (user.role === 'User')));
                 const canDelete = sessionState.user.id !== user.id && canEdit;
-                return (
+
+                  return (
                   <tr key={user.id} className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors duration-200">
                     <td className="px-5 py-4 font-medium text-gray-900 dark:text-white">{[user.first_name, user.middle_initial, user.last_name, user.suffix].filter(Boolean).join(' ')}</td>
                     <td className="px-5 py-4 text-gray-700 dark:text-gray-300">{user.email}</td>
                     <td className="px-5 py-4"><span className="relative inline-block px-3 py-1 font-semibold text-green-900 dark:text-green-200 leading-tight"><span aria-hidden className="absolute inset-0 bg-green-200 dark:bg-green-800 opacity-50 rounded-full"></span><span className="relative">{user.role}</span></span></td>
                     <td className="px-5 py-4 text-gray-700 dark:text-gray-300">{user.created_at ? format(parseISO(user.created_at), 'MMMM d, yyyy') : 'N/A'}</td>
-                    <td className="px-5 py-4">
+                   <td className="px-5 py-4">
                       <div className="flex items-center space-x-4">
-                        {canEdit && <button onClick={() => handleEditClick(user)} className="font-medium text-blue-600 transition-colors hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300">Edit</button>}
-                        {canDelete && (
+                          <button
+                            onClick={() => handleEditClick(user)}
+                            disabled={!canEdit}
+                            title={isCurrentUser ? "You cannot edit your own account." : !canEdit ? "Insufficient permissions" : "Edit User"}
+                            className={`p-1 rounded-lg transition-colors ${canEdit ? 'text-indigo-600 hover:text-indigo-900 hover:bg-indigo-50 dark:text-indigo-400 dark:hover:text-indigo-300 dark:hover:bg-indigo-900/20' : 'text-gray-400 cursor-not-allowed dark:text-gray-600'}`}
+                          >
+                            <FaPencilAlt className="w-4 h-4" />
+                          </button>
+                            
+                              {canDelete ? (
                           <button 
                             onClick={() => handleDeleteClick(user)} 
                             disabled={assignedFocalPersonIds.has(user.id)}
-                            title={assignedFocalPersonIds.has(user.id) ? "Cannot delete: User is assigned to an employee" : "Delete User"}
+                            title={assignedFocalPersonIds.has(user.id) ? "Cannot delete: Focal Person of an existing survey" : "Delete User"}
                             className={`font-medium transition-colors ${assignedFocalPersonIds.has(user.id) ? 'text-gray-400 cursor-not-allowed' : 'text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300'}`}
                           >
-                            Delete
+                            <FaTrash className="w-4 h-4" />
                           </button>
-                        )}
+                      ) : (
+                          <button title="You cannot delete your own account." className="font-medium transition-colors text-gray-400 cursor-not-allowed">
+                              <FaTrash className="w-4 h-4" />
+                          </button>
+                      )}
+                          
                       </div>
                     </td>
                   </tr>
                 );
               })
-            ) : (
+             ) : (
               <tr>
                 <td colSpan="5" className="py-16 text-center text-gray-500 dark:text-gray-400">
                   <h3 className="text-lg font-medium">No Records Found</h3>
@@ -509,6 +524,7 @@ const Accounts = () => {
             )}
           </tbody>
         </table>
+        
       </div>
 
       <div className="flex justify-between items-center mt-1">
@@ -649,5 +665,6 @@ const Accounts = () => {
     </div>
   );
 };
+
 
 export default Accounts;

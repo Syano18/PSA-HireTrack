@@ -14,8 +14,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   loginGoogleLoopback: () => ipcRenderer.invoke('login-google-loopback'),
   loginGoogleSilent: () => ipcRenderer.invoke('login-google-silent'),
   clearGoogleRefreshToken: () => ipcRenderer.invoke('clear-google-refresh-token'),
+  hasGoogleRefreshToken: () => ipcRenderer.invoke('has-google-refresh-token'),
 
-  // ADD THIS LINE
   handleSessionExpired: () => ipcRenderer.invoke('session-expired'),
 
   getServerIp: () => ipcRenderer.invoke('get-server-ip'),

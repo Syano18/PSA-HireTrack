@@ -495,7 +495,8 @@ const Trainings = () => {
             today.setHours(0, 0, 0, 0); // Normalize to start of day
             const [year, month, day] = endDateStr.split('-').map(Number);
             const localEndDate = new Date(year, month - 1, day);
-            return localEndDate >= today;
+            // Allow proceed only when end date is today or earlier
+            return localEndDate <= today;
         } catch (e) {
             return false; // Invalid date format
         }
@@ -1007,7 +1008,8 @@ const Trainings = () => {
                                                         type="date"
                                                         value={syncTrainingForm.start_date}
                                                         onChange={(e) => setSyncTrainingForm({ ...syncTrainingForm, start_date: e.target.value })}
-                                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200"
+                                                        disabled={!isCreatingNewTitle}
+                                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed"
                                                     />
                                                 </div>
                                                 <div>
@@ -1016,7 +1018,8 @@ const Trainings = () => {
                                                         type="date"
                                                         value={syncTrainingForm.end_date}
                                                         onChange={(e) => setSyncTrainingForm({ ...syncTrainingForm, end_date: e.target.value })}
-                                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200"
+                                                        disabled={!isCreatingNewTitle}
+                                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed"
                                                     />
                                                 </div>
                                                 <div>
@@ -1025,7 +1028,8 @@ const Trainings = () => {
                                                         type="number"
                                                         value={syncTrainingForm.hours}
                                                         onChange={(e) => setSyncTrainingForm({ ...syncTrainingForm, hours: e.target.value })}
-                                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200"
+                                                        disabled={!isCreatingNewTitle}
+                                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed"
                                                         placeholder="0"
                                                     />
                                                 </div>
@@ -1038,7 +1042,8 @@ const Trainings = () => {
                                                         type="text"
                                                         value={syncTrainingForm.venue}
                                                         onChange={(e) => setSyncTrainingForm({ ...syncTrainingForm, venue: e.target.value })}
-                                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200"
+                                                        disabled={!isCreatingNewTitle}
+                                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed"
                                                         placeholder="Enter venue"
                                                     />
                                                 </div>
@@ -1063,7 +1068,7 @@ const Trainings = () => {
                                             !syncSelectedPosition ? 'Please select a position' :
                                             !isCreatingNewTitle && !syncTrainingForm.id ? 'Please select an existing training' :
                                             isCreatingNewTitle && !syncTrainingForm.title ? 'Please enter a new training title' :
-                                            !isTrainingEndDateValid ? 'Cannot proceed: The training has already ended.' :
+                                            !isTrainingEndDateValid ? 'Cannot proceed: Training end date must be today or earlier.' :
                                             isSyncLoading ? 'Processing...' :
                                             'Proceed to sync applicants'
                                         }

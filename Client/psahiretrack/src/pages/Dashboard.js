@@ -4,7 +4,7 @@ import DemographicsRechart from '../components/DemographicsRechart';
 import { motion } from 'framer-motion';
 import MunicipalityBarChart from '../components/MunicipalityBarChart';
 import PerformanceRatingsChart from '../components/PerformanceRatingsChart';
-import Cover from '../assets/cover.jpg';
+const Cover = require('../assets/cover.jpg');
 import { apiFetch } from '../components/API';
 import ToastContainer from '../components/ToastContainer';
 import useToast from '../hooks/useToast';

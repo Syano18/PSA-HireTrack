@@ -196,7 +196,12 @@ router.get('/', async (req, res) => {
 // GET all focal persons for dropdowns
 router.get('/focal-persons', async (req, res) => {
     try {
-        const [results] = await dbPool.query("SELECT id, first_name, middle_initial ,last_name, suffix FROM users WHERE hiretrack_role = 'Focal Person' ORDER BY last_name");
+        // This endpoint is used by multiple pages (Assessment, Employments) to look up user names by ID.
+        // It needs to return ALL users, not just those with the 'Focal Person' role,
+        // to ensure that if a Super Admin or Admin is assigned as a focal person, their name can be found.
+        const [results] = await dbPool.query(
+            "SELECT id, first_name, middle_initial, last_name, suffix FROM users ORDER BY last_name"
+        );
         res.json(results);
     } catch (err) {
         console.error(`Database error fetching focal persons: ${err.message}`);
@@ -515,83 +520,70 @@ router.put('/:id', async (req, res) => {
         if (oldRecordRows.length === 0) return res.status(404).json({ error: 'Record not found.' });
         const oldRecord = oldRecordRows[0];
         
-        let sqlQuery;
-        let values;
-        let newData;
+        const isRatingSubmission = 'rating' in employmentData;
+        const ratingIsLocked = oldRecord.rating && oldRecord.rating.trim() !== '';
 
-        if (['Super_Admin', 'Admin'].includes(actingUser.role)) {
-            const { employee_id, position_id, survey_id, contract_start_date, contract_end_date } = employmentData;
-            if (!employee_id || !position_id || !survey_id || !contract_start_date || !contract_end_date) {
-                return res.status(400).json({ error: 'Missing required fields.' });
-            }
-
-            // --- ✅ ADD THIS DUPLICATE CHECK BLOCK ---
-            const [existing] = await dbPool.query(
-                'SELECT id FROM employments WHERE employee_id = ? AND position_id = ? AND contract_start_date = ? AND id != ?',
-                [employee_id, position_id, contract_start_date, id]
-            );
-            if (existing.length > 0) {
-                return res.status(409).json({ error: 'Another employment record with this employee, position, and start date already exists.' });
-            }
-            // --- END OF DUPLICATE CHECK ---
-
-            // Only Super_Admin can overwrite an already-saved rating
-            const ratingIsLocked = oldRecord.rating && oldRecord.rating.trim() !== '';
-            if (ratingIsLocked && actingUser.role !== 'Super_Admin') {
-                // Strip rating/remarks from the update — leave them untouched
-                const columns = ['employee_id', 'position_id', 'survey_id', 'focal_person_id', 'contract_start_date', 'contract_end_date'];
-                values = [...columns.map(col => employmentData[col] || null), id];
-                sqlQuery = `UPDATE employments SET ${columns.map(col => `${col} = ?`).join(', ')} WHERE id = ?`;
-                newData = Object.fromEntries(columns.map(c => [c, employmentData[c]]));
-            } else {
-                const columns = ['employee_id', 'position_id', 'survey_id', 'focal_person_id', 'contract_start_date', 'contract_end_date', 'rating', 'remarks'];
-                values = [...columns.map(col => employmentData[col] || null), id];
-                sqlQuery = `UPDATE employments SET ${columns.map(col => `${col} = ?`).join(', ')} WHERE id = ?`;
-                newData = employmentData;
-            }
-
-        } else if (actingUser.role === 'PACD') {
-            const { employee_id, position_id, survey_id, contract_start_date, contract_end_date } = employmentData;
-            if (!employee_id || !position_id || !survey_id || !contract_start_date || !contract_end_date) {
-                return res.status(400).json({ error: 'Missing required fields.' });
-            }
-            
-            // --- ✅ ADD THIS DUPLICATE CHECK BLOCK HERE AS WELL ---
-            const [existing] = await dbPool.query(
-                'SELECT id FROM employments WHERE employee_id = ? AND position_id = ? AND contract_start_date = ? AND id != ?',
-                [employee_id, position_id, contract_start_date, id]
-            );
-            if (existing.length > 0) {
-                return res.status(409).json({ error: 'Another employment record with this employee, position, and start date already exists.' });
-            }
-            // --- END OF DUPLICATE CHECK ---
-
-            const columns = ['employee_id', 'position_id', 'survey_id', 'focal_person_id', 'contract_start_date', 'contract_end_date'];
-            values = [...columns.map(col => employmentData[col] || null), id];
-            sqlQuery = `UPDATE employments SET ${columns.map(col => `${col} = ?`).join(', ')} WHERE id = ?`;
-            newData = Object.fromEntries(columns.map(c => [c, employmentData[c]]));
-
-        } else if (actingUser.role === 'Focal Person') {
-            if (oldRecord.focal_person_id !== actingUserId) {
-                return res.status(403).json({ error: 'You are not the assigned focal person for this record.' });
-            }
-            // Block if rating is already saved
-            if (oldRecord.rating && oldRecord.rating.trim() !== '') {
+        // Scenario 1: User is trying to submit/change a rating.
+        if (isRatingSubmission) {
+            // Rule 1: Once a rating is saved, it's locked for everyone.
+            if (ratingIsLocked) {
                 return res.status(403).json({ error: 'Performance rating has already been submitted and cannot be changed.' });
             }
-            const { rating, remarks } = employmentData;
-            values = [rating || null, remarks || null, id];
-            sqlQuery = 'UPDATE employments SET rating = ?, remarks = ? WHERE id = ?';
-            newData = { rating, remarks };
-        
-        } else {
-            return res.status(403).json({ error: 'You do not have permission to edit records.' });
-        }
-        
-        const [result] = await dbPool.query(sqlQuery, values);
-        if (result.affectedRows === 0) return res.status(404).json({ error: 'Record not found during update.' });
 
-        return res.json({ message: 'Employment record updated successfully' });
+            // Rule 2: Only Super_Admin or the assigned Focal Person can provide the initial rating.
+            const isSuperAdmin = actingUser.role === 'Super_Admin';
+            const isAssignedFocal = actingUser.role === 'Focal Person' && oldRecord.focal_person_id === actingUserId;
+
+            if (isSuperAdmin) {
+                // Super_Admin is submitting a rating as part of a larger edit.
+                // We will let the general edit logic below handle this, after confirming they have permission.
+            } else if (isAssignedFocal) {
+                // Focal person is submitting a rating. This is a rating-only update.
+                const { rating, remarks } = employmentData;
+                const [result] = await dbPool.query('UPDATE employments SET rating = ?, remarks = ? WHERE id = ?', [rating || null, remarks || null, id]);
+                if (result.affectedRows === 0) return res.status(404).json({ error: 'Record not found during update.' });
+                return res.json({ message: 'Performance rating submitted successfully.' });
+            } else {
+                // Any other role trying to submit a rating.
+                return res.status(403).json({ error: 'You do not have permission to provide a rating.' });
+            }
+        }
+
+        // Scenario 2: General record edit (no rating submission, or a Super_Admin submitting a new rating).
+        if (['Super_Admin', 'Admin', 'PACD'].includes(actingUser.role)) {
+            const { employee_id, position_id, survey_id, contract_start_date, contract_end_date } = employmentData;
+            if (!employee_id || !position_id || !survey_id || !contract_start_date || !contract_end_date) {
+                return res.status(400).json({ error: 'Missing required fields for a full record edit.' });
+            }
+
+            // Duplicate check
+            const [existing] = await dbPool.query(
+                'SELECT id FROM employments WHERE employee_id = ? AND position_id = ? AND contract_start_date = ? AND id != ?',
+                [employee_id, position_id, contract_start_date, id]
+            );
+            if (existing.length > 0) {
+                return res.status(409).json({ error: 'Another employment record with this employee, position, and start date already exists.' });
+            }
+
+            // Determine which columns can be updated by this role.
+            let columnsToUpdate = ['employee_id', 'position_id', 'survey_id', 'focal_person_id', 'contract_start_date', 'contract_end_date'];
+            
+            // If it's a Super_Admin submitting a NEW rating (already validated above).
+            if (actingUser.role === 'Super_Admin' && isRatingSubmission && !ratingIsLocked) {
+                columnsToUpdate.push('rating', 'remarks');
+            }
+
+            const values = columnsToUpdate.map(col => employmentData[col] || null);
+            const sqlQuery = `UPDATE employments SET ${columnsToUpdate.map(col => `${col} = ?`).join(', ')} WHERE id = ?`;
+            
+            const [result] = await dbPool.query(sqlQuery, [...values, id]);
+            if (result.affectedRows === 0) return res.status(404).json({ error: 'Record not found during update.' });
+            
+            return res.json({ message: 'Employment record updated successfully.' });
+        }
+
+        // If we reach here, the user has no permission to perform any edit.
+        return res.status(403).json({ error: 'You do not have permission to edit records.' });
 
     } catch (err) {
         console.error(`Database error during employment update: ${err.message}`);

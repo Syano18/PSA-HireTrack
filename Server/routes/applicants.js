@@ -812,6 +812,7 @@ router.get('/for-assessment', verifyToken, async (req, res) => {
         s.name as survey_name,
         s.contract_end_date,
         s.positions,
+        s.hiring_date,
         p.title as position
       FROM profile_entries pe
       LEFT JOIN surveys s ON pe.survey_id = s.id
@@ -825,6 +826,7 @@ router.get('/for-assessment', verifyToken, async (req, res) => {
         s.name as survey_name,
         s.contract_end_date,
         s.positions,
+        s.hiring_date,
         p.title as position
       FROM profile_entries pe
       LEFT JOIN surveys s ON pe.survey_id = s.id
@@ -858,11 +860,26 @@ router.put('/:id/assessment', verifyToken, async (req, res) => {
     }
 
     const { id } = req.params;
-    const { assessment_remarks, grand_total } = req.body;
-    const [result] = await dbPool.query(
-      'UPDATE profile_entries SET assessment_remarks = ?, grand_total = ? WHERE id = ?',
-      [assessment_remarks ?? null, grand_total ?? null, id]
-    );
+    const { assessment_remarks, grand_total, assistant_id } = req.body;
+
+    // Ignore any attempt to set grand_total via this endpoint — grand totals
+    // should only be managed via the weights endpoint or dedicated flows.
+    if (grand_total !== undefined) {
+      console.warn(`Ignored grand_total update attempt for profile_entries id=${id}`);
+    }
+
+    // Build dynamic update: always update assessment_remarks; update assistant_id
+    // only if it's provided in the request body to avoid overwriting with null.
+    const updates = ['assessment_remarks = ?'];
+    const params = [assessment_remarks ?? null];
+    if (Object.prototype.hasOwnProperty.call(req.body, 'assistant_id')) {
+      updates.push('assistant_id = ?');
+      params.push(assistant_id ?? null);
+    }
+
+    const sql = `UPDATE profile_entries SET ${updates.join(', ')} WHERE id = ?`;
+    params.push(id);
+    const [result] = await dbPool.query(sql, params);
     if (result.affectedRows === 0) return res.status(404).json({ error: 'Applicant not found.' });
     res.json({ message: 'Assessment saved.' });
   } catch (err) {

@@ -141,16 +141,16 @@ const getTargetHiringCount = (positionsJson, position) => {
   }
 };
 
-// Helper function to check if contract end date is earlier than today
-const isContractEnded = (contractEndDate) => {
-  if (!contractEndDate) return false;
+// Helper function to check if a date is earlier than today
+const isHiringEnded = (someDate) => {
+  if (!someDate) return false;
   try {
-    const contractDate = new Date(contractEndDate);
+    const d = new Date(someDate);
     const today = new Date();
     // Set time to midnight for accurate date comparison
     today.setHours(0, 0, 0, 0);
-    contractDate.setHours(0, 0, 0, 0);
-    return contractDate < today;
+    d.setHours(0, 0, 0, 0);
+    return d < today;
   } catch (err) {
     return false;
   }
@@ -218,13 +218,30 @@ const Assessment = () => {
   const [showGenerateConfirmation, setShowGenerateConfirmation] = useState(false);
 
   // Assessment Report states
+  const [userRole, setUserRole] = useState(null);
   const [users, setUsers] = useState([]);
   const [selectedAssistantFocalPerson, setSelectedAssistantFocalPerson] = useState('');
 
   // Hiring tracking states
   const [targetHiringCount, setTargetHiringCount] = useState(0);
   const [currentHiredCount, setCurrentHiredCount] = useState(0);
-  const [contractEnded, setContractEnded] = useState(false);
+  const [hiringEnded, setHiringEnded] = useState(false);
+
+  const isReadOnly = useMemo(() => ['Admin', 'PACD'].includes(userRole), [userRole]);
+
+  useEffect(() => {
+    const getSession = async () => {
+        try {
+            const state = await window.electronAPI.getLoginState();
+            if (state?.user?.role) {
+                setUserRole(state.user.role);
+            }
+        } catch (err) {
+            showToast('Could not retrieve user session.', 'error');
+        }
+    };
+    getSession();
+  }, [showToast]);
 
   // Reset position filter when survey filter changes
   useEffect(() => {
@@ -522,15 +539,8 @@ const Assessment = () => {
       // Ensure we properly handle number types since strictly comparing selectedReplacementId string to app.id (which might be number) using === fails
       const originalAppStrId = String(replacingAppId);
       const replacementAppStrId = String(selectedReplacementId);
-      
-      const originalApp = applicants.find(a => String(a.id) === originalAppStrId);
-      const replacementApp = applicants.find(a => String(a.id) === replacementAppStrId);
 
-      const originalGrandTotal = parseFloat(originalApp?.grand_total || 0);
-      
-      // Calculate the replacement applicant's grand total based on their pre-assessment scores
-      const replacementPA = parsePA(replacementApp);
-      const replacementGrandTotal = parseFloat(computeGrandTotal(replacementPA));
+      // We intentionally do NOT compute or send grand_total or assistant_id
 
       // Use the selectedReplacementName that was captured when the dropdown was changed
       // This ensures the replacement name is always captured correctly
@@ -541,7 +551,6 @@ const Assessment = () => {
         method: 'PUT',
         body: JSON.stringify({
           assessment_remarks: `REPLACED: ${replacementRemarks} - Replaced by ${finalReplacementName}`,
-          grand_total:        originalGrandTotal,
         }),
       });
 
@@ -550,7 +559,6 @@ const Assessment = () => {
         method: 'PUT',
         body: JSON.stringify({
           assessment_remarks: 'Hired',
-          grand_total:        replacementGrandTotal,
         }),
       });
 
@@ -566,7 +574,6 @@ const Assessment = () => {
           return { 
             ...app, 
             assessment_remarks: 'Hired',
-            grand_total: replacementGrandTotal
           };
         }
         return app;
@@ -671,12 +678,12 @@ const Assessment = () => {
     if (filterSurvey === '' || filterPosition === '') {
       setCurrentHiredCount(0);
       setTargetHiringCount(0);
-      setContractEnded(false);
+      setHiringEnded(false);
       return;
     }
 
-    // Get first applicant's contract end date and survey positions
-    let contractEndDate = null;
+    // Get first applicant's hiring end date and survey positions
+    let hiringEndDate = null;
     let positionsJson = null;
     
     const filtered = dropdownFiltered.filter(app => 
@@ -684,7 +691,7 @@ const Assessment = () => {
     );
 
     if (filtered.length > 0) {
-      contractEndDate = filtered[0].contract_end_date;
+      hiringEndDate = filtered[0].hiring_date;
       positionsJson = filtered[0].positions;
     }
 
@@ -696,37 +703,50 @@ const Assessment = () => {
     // Get target hiring count from survey positions JSON
     const targetCount = getTargetHiringCount(positionsJson, filterPosition);
 
-    // Check if contract has ended
-    const hasEnded = isContractEnded(contractEndDate);
+    // Check if hiring period has ended (using survey.hiring_date)
+    const hasEnded = isHiringEnded(hiringEndDate);
 
     setCurrentHiredCount(hiredCount);
     setTargetHiringCount(targetCount);
-    setContractEnded(hasEnded);
+    setHiringEnded(hasEnded);
   }, [filterSurvey, filterPosition, dropdownFiltered, rowData]);
 
   // Check if conditions are met to generate assessment report
   const canGenerateAssessmentReport = useMemo(() => {
+    // For Admin/PACD, they can only generate if the report is already assessed.
+    if (['Admin', 'PACD'].includes(userRole)) {
+        return filterSurvey !== '' && filterPosition !== '' && allAssessed;
+    }
+
     // Condition 1: Must be same as Pre-Assessment (survey and position selected)
     if (!canExportPDF) return false;
     
     // Condition 2: Weights must be saved
     if (!weightsSaved) return false;
-
+  
     // Condition 3: All applicants must be transmitted to focal
     if (!allTransmittedToFocal) return false;
-
+  
     // Condition 4: Number of applicants hired must be equal to the set applicants to be hired
     if (currentHiredCount !== targetHiringCount || targetHiringCount === 0) return false;
-
+  
     return true;
-  }, [canExportPDF, weightsSaved, allTransmittedToFocal, currentHiredCount, targetHiringCount]);
+  }, [userRole, filterSurvey, filterPosition, allAssessed, canExportPDF, weightsSaved, allTransmittedToFocal, currentHiredCount, targetHiringCount]);
+
+  const currentFocalId = useMemo(() => {
+    if (!filterSurvey) return null;
+    const app = applicants.find(a => a.survey_name === filterSurvey && a.focal_id);
+    return app ? app.focal_id : null;
+  }, [filterSurvey, applicants]);
 
   const assistantFocalPersonOptions = useMemo(() => 
-    users.map(user => {
+    users
+      .filter(user => user.id !== currentFocalId)
+      .map(user => {
         const name = [user.first_name, user.middle_initial, user.last_name, user.suffix].filter(Boolean).join(' ');
-        return { value: name, label: name };
+        return { value: user.id, label: name };
     }).sort((a, b) => a.label.localeCompare(b.label)),
-  [users]);
+  [users, currentFocalId]);
 
   const replacementApplicantOptions = useMemo(() => 
     applicants
@@ -767,21 +787,27 @@ const Assessment = () => {
       pdf.setFont('times');
 
       // Title
+      const titleStartY = 12;
       pdf.setFontSize(14);
-      pdf.text(`Pre-Assessment Report - ${filterSurvey}`, margin, 12, { maxWidth: pageWidth - 2*margin });
+      const titleText = `Pre-Assessment Report - ${filterSurvey}`;
+      const titleLines = pdf.splitTextToSize(titleText, pageWidth - 2 * margin);
+      pdf.text(titleLines, margin, titleStartY);
+
+      // Calculate Y position for the position text, accounting for wrapped title lines.
+      const positionY = titleStartY + (titleLines.length * 7); // Approx. 5mm per 14pt line
       pdf.setFontSize(11);
-      pdf.text(`Position: ${filterPosition}`, margin, 18);
+      pdf.text(`Position: ${filterPosition}`, margin, positionY);
 
       // Prepare table data (without Survey and Position columns)
       const tableHeaders = [
         'Full Name',
         'Phone Number',
-        `Educational Attainment (${weights.educational_attainment}%)`,
-        `Relevant Trainings (${weights.relevant_training}%)`,
-        `Relevant Work Experience (${weights.relevant_work_experience}%)`,
-        `Written Examination (${weights.written_examination}%)`,
-        `Personal Interview (${weights.interview_average}%)`,
-        'Grand Total',
+        `Educational Attainment\n(${weights.educational_attainment !== '' ? weights.educational_attainment + '%' : 'N/A'})`,
+        `Relevant Trainings\n(${weights.relevant_training !== '' ? weights.relevant_training + '%' : 'N/A'})`,
+        `Relevant Work Experience\n(${weights.relevant_work_experience !== '' ? weights.relevant_work_experience + '%' : 'N/A'})`,
+        `Written Examination\n(${weights.written_examination !== '' ? weights.written_examination + '%' : 'N/A'})`,
+        `Personal Interview\n(${weights.interview_average !== '' ? weights.interview_average + '%' : 'N/A'})`,
+        'Total Rating\n(100%)',
         'Interviewers Remarks'
       ];
       const tableData = filtered.map(app => {
@@ -801,22 +827,22 @@ const Assessment = () => {
       });
 
       // Draw table manually
-      // A4 Landscape width is 297mm, minus margins = available width
       const availableWidth = pageWidth - (2 * margin);
+      // Use the same table layout proportions as the Final Assessment report
       const colWidths = [
-        availableWidth * 0.18, // Full Name
-        availableWidth * 0.11, // Phone Number
-        availableWidth * 0.10, // Educational Attainment
-        availableWidth * 0.10, // Relevant Trainings
-        availableWidth * 0.10, // Relevant Work Experience
-        availableWidth * 0.10, // Written Examination
-        availableWidth * 0.05, // Personal Interview
-        availableWidth * 0.05, // Grand Total
-        availableWidth * 0.21, // Interviewers Remarks (wider for text)
+        availableWidth * 0.1842, // Full Name
+        availableWidth * 0.0921, // Phone Number
+        availableWidth * 0.0921, // Educational Attainment
+        availableWidth * 0.0921, // Relevant Trainings
+        availableWidth * 0.0921, // Relevant Work Experience
+        availableWidth * 0.0921, // Written Examination
+        availableWidth * 0.0921, // Personal Interview
+        availableWidth * 0.0921, // Grand Total
+        availableWidth * 0.1711, // Interviewers Remarks
       ];
-      const rowHeight = 6;
-      const headerHeight = 13;
-      let yPos = 20;
+      const rowHeight = 5.5; // match final report
+      const headerHeight = 11; // match final report
+      let yPos = positionY + 2; // Start table below the position text with a small gap.
       let xPos = margin;
 
       // Draw header with dark gray background and white text
@@ -830,17 +856,17 @@ const Assessment = () => {
         pdf.setTextColor(255, 255, 255); // White text
         pdf.rect(xPos, yPos, colWidths[col], headerHeight, 'FD');
         
-        // Split long header text into multiple lines
+        // Split long header text into multiple lines (use same sizing as final report)
         const splitText = pdf.splitTextToSize(header, colWidths[col] - 2);
-        // Improved vertical centering and line spacing for wrapped text
-        const lineHeight = 3.5;
+        const lineHeight = 3.2;
         const totalTextHeight = splitText.length * lineHeight;
-        const startY = yPos + (headerHeight - totalTextHeight) / 2 + 3;
-        
+        const startY = yPos + (headerHeight / 2) - (totalTextHeight / 2) + (lineHeight / 2);
+
         splitText.forEach((line, index) => {
           pdf.text(line, xPos + colWidths[col] / 2, startY + (index * lineHeight), { 
             maxWidth: colWidths[col] - 2,
-            align: 'center'
+            align: 'center',
+            baseline: 'middle'
           });
         });
         
@@ -850,9 +876,9 @@ const Assessment = () => {
       yPos += headerHeight;
       pdf.setTextColor(0, 0, 0); // Reset text color to black for body
 
-      // Draw rows
+      // Draw rows (match final report font size)
       pdf.setFont('times', 'normal');
-      pdf.setFontSize(8);
+      pdf.setFontSize(9);
       pdf.setTextColor(0, 0, 0);
       tableData.forEach((row, rowIndex) => {
         // Check if we need a new page (leave space for header + 3 rows minimum)
@@ -871,14 +897,17 @@ const Assessment = () => {
             pdf.setTextColor(255, 255, 255); // White text
             pdf.rect(xPos, yPos, colWidths[col], headerHeight, 'FD');
             
-            // Split long header text into multiple lines
+            // Split long header text into multiple lines (match final report)
             const splitText = pdf.splitTextToSize(header, colWidths[col] - 2);
-            const startY = yPos + (headerHeight - (splitText.length * 3)) / 2 + 3;
-            
+            const lineHeight = 3.2;
+            const totalTextHeight = splitText.length * lineHeight;
+            const startY = yPos + (headerHeight / 2) - (totalTextHeight / 2) + (lineHeight / 2);
+
             splitText.forEach((line, index) => {
-              pdf.text(line, xPos + colWidths[col] / 2, startY + (index * 3), {
+              pdf.text(line, xPos + colWidths[col] / 2, startY + (index * lineHeight), {
                 maxWidth: colWidths[col] - 2,
-                align: 'center'
+                align: 'center',
+                baseline: 'middle'
               });
             });
             
@@ -887,7 +916,7 @@ const Assessment = () => {
           
           yPos += headerHeight;
           pdf.setFont('times', 'normal');
-          pdf.setFontSize(8);
+          pdf.setFontSize(9);
           pdf.setTextColor(0, 0, 0);
         }
 
@@ -908,7 +937,7 @@ const Assessment = () => {
         // Pre-calculate max height needed for wrapped text (checks all columns now)
         row.forEach((cell, col) => {
           const wrappedText = pdf.splitTextToSize(String(cell), colWidths[col] - 2);
-          const wrappedHeight = (wrappedText.length * 3) + 2; // 3mm per line + 2mm padding
+          const wrappedHeight = (wrappedText.length * 3.5) + 2; // 3.5mm per line + 2mm padding (match final report)
           if (wrappedHeight > maxWrappedHeight) {
             maxWrappedHeight = wrappedHeight;
           }
@@ -931,11 +960,14 @@ const Assessment = () => {
             pdf.setTextColor(255, 255, 255);
             pdf.rect(xPos, yPos, colWidths[col], headerHeight, 'FD');
             const splitText = pdf.splitTextToSize(header, colWidths[col] - 2);
-            const startY = yPos + (headerHeight - (splitText.length * 3)) / 2 + 3;
+            const lineHeight = 3.2;
+            const totalTextHeight = splitText.length * lineHeight;
+            const startY = yPos + (headerHeight / 2) - (totalTextHeight / 2) + (lineHeight / 2);
             splitText.forEach((line, index) => {
-              pdf.text(line, xPos + colWidths[col] / 2, startY + (index * 3), { 
+              pdf.text(line, xPos + colWidths[col] / 2, startY + (index * lineHeight), { 
                 maxWidth: colWidths[col] - 2,
-                align: 'center'
+                align: 'center',
+                baseline: 'middle'
               });
             });
             xPos += colWidths[col];
@@ -943,7 +975,7 @@ const Assessment = () => {
           
           yPos += headerHeight;
           pdf.setFont('times', 'normal');
-          pdf.setFontSize(8);
+          pdf.setFontSize(9);
           pdf.setTextColor(0, 0, 0);
         }
 
@@ -958,22 +990,33 @@ const Assessment = () => {
           // Handle remarks column with text wrapping (index 8)
           if (col === 8) {
             const wrappedText = pdf.splitTextToSize(String(cell), colWidths[col] - 2);
-            const startY = yPos + 2 + (currentRowHeight - (wrappedText.length * 3)) / 2;
+            const lineHeight = 3.5; // mm per line used for body rows (match final report)
+            const totalTextHeight = wrappedText.length * lineHeight;
+            const startY = yPos + (currentRowHeight / 2) - (totalTextHeight / 2) + (lineHeight / 2);
             wrappedText.forEach((line, index) => {
-              pdf.text(line, xPos + 1, startY + (index * 3), { 
+              pdf.text(line, xPos + 1, startY + (index * lineHeight), { 
                 maxWidth: colWidths[col] - 2,
-                align: 'left'
+                align: 'left',
+                baseline: 'middle'
               });
             });
           } else {
-            // Center align numeric columns (columns 2-7: scores and grand total)
+            // Better vertical centering: handle wrapped text for all non-remarks columns
+            const wrappedText = pdf.splitTextToSize(String(cell), colWidths[col] - 2);
+            const lineHeight = 3.5; // mm per line used for body rows (match final report)
+            const totalTextHeight = wrappedText.length * lineHeight;
+            const startY = yPos + (currentRowHeight / 2) - (totalTextHeight / 2) + (lineHeight / 2);
+
             const isNumericCol = col >= 2;
             const align = isNumericCol ? 'center' : 'left';
             const startX = isNumericCol ? xPos + colWidths[col] / 2 : xPos + 1;
-            
-            pdf.text(String(cell), startX, yPos + currentRowHeight / 2, { 
-              maxWidth: colWidths[col] - 2,
-              align: align
+
+            wrappedText.forEach((line, idx) => {
+              pdf.text(line, startX, startY + (idx * lineHeight), {
+                maxWidth: colWidths[col] - 2,
+                align: align,
+                baseline: 'middle'
+              });
             });
           }
           
@@ -1130,12 +1173,12 @@ const Assessment = () => {
         { label: 'Age', width: colWidths.age },
         { label: 'Sex', width: colWidths.sex },
         { label: 'Present Address', width: colWidths.address },
-        { label: `Educational Attainment (${weights.educational_attainment}%)`, width: colWidths.ea },
-        { label: `Relevant Training (${weights.relevant_training}%)`, width: colWidths.rt },
-        { label: `Relevant Work Experience (${weights.relevant_work_experience}%)`, width: colWidths.rwe },
-        { label: `Written Examination (${weights.written_examination}%)`, width: colWidths.we },
-        { label: `Personal Interview (${weights.interview_average}%)`, width: colWidths.pi },
-        { label: 'Total Score', width: colWidths.totalScore },
+        { label: `Educational Attainment\n(${weights.educational_attainment !== '' ? weights.educational_attainment + '%' : 'N/A'})`, width: colWidths.ea },
+        { label: `Relevant Trainings\n(${weights.relevant_training !== '' ? weights.relevant_training + '%' : 'N/A'})`, width: colWidths.rt },
+        { label: `Relevant Work Experience\n(${weights.relevant_work_experience !== '' ? weights.relevant_work_experience + '%' : 'N/A'})`, width: colWidths.rwe },
+        { label: `Written Examination\n(${weights.written_examination !== '' ? weights.written_examination + '%' : 'N/A'})`, width: colWidths.we },
+        { label: `Personal Interview\n(${weights.interview_average !== '' ? weights.interview_average + '%' : 'N/A'})`, width: colWidths.pi },
+        { label: 'Total Rating\n(100%)', width: colWidths.totalScore },
         { label: 'Remarks', width: colWidths.remarks },
       ];
 
@@ -1151,12 +1194,13 @@ const Assessment = () => {
         // Improved line height and vertical alignment for wrapped text
         const lineHeight = 3.2;
         const totalTextHeight = splitText.length * lineHeight;
-        const startY = yPos + (headerHeight - totalTextHeight) / 2 + 2;
+        const startY = yPos + (headerHeight / 2) - (totalTextHeight / 2) + (lineHeight / 2);
         
         splitText.forEach((line, index) => {
           pdf.text(line, xPos + header.width / 2, startY + (index * lineHeight), {
             align: 'center',
             maxWidth: header.width - 1,
+            baseline: 'middle'
           });
         });
         xPos += header.width;
@@ -1234,11 +1278,14 @@ const Assessment = () => {
             pdf.setTextColor(255, 255, 255);
             pdf.rect(xPos, yPos, header.width, headerHeight, 'FD');
             const splitText = pdf.splitTextToSize(header.label, header.width - 1);
-            const startY = yPos + (headerHeight - (splitText.length * 2.5)) / 2 + 1.5;
+            const lineHeight = 3.2;
+            const totalTextHeight = splitText.length * lineHeight;
+            const startY = yPos + (headerHeight / 2) - (totalTextHeight / 2) + (lineHeight / 2);
             splitText.forEach((line, index) => {
-              pdf.text(line, xPos + header.width / 2, startY + (index * 2.5), {
+              pdf.text(line, xPos + header.width / 2, startY + (index * lineHeight), {
                 align: 'center',
                 maxWidth: header.width - 1,
+                baseline: 'middle'
               });
             });
             xPos += header.width;
@@ -1264,11 +1311,13 @@ const Assessment = () => {
         pdf.setFontSize(9);
         pdfRowData.forEach((cell, colIndex) => {
           const colWidth = headers[colIndex].width;
-          
-          // Handle text wrapping for any column
+
+          // Better vertical centering: split text into wrapped lines and center the block
           const wrappedText = pdf.splitTextToSize(cell.text, colWidth - 2);
-          const startY = yPos + 1 + (currentRowHeight - (wrappedText.length * 3.5)) / 2;
-          
+          const lineHeight = 3.5; // mm per line for body rows
+          const totalTextHeight = wrappedText.length * lineHeight;
+          const startY = yPos + (currentRowHeight / 2) - (totalTextHeight / 2) + (lineHeight / 2);
+
           wrappedText.forEach((line, index) => {
             let textX;
             if (cell.align === 'left') {
@@ -1276,12 +1325,13 @@ const Assessment = () => {
             } else {
               textX = xPos + colWidth / 2; // Center
             }
-            pdf.text(line, textX, startY + (index * 3.5) + 2.5, {
+            pdf.text(line, textX, startY + (index * lineHeight), {
               align: cell.align,
               maxWidth: colWidth - 2,
+              baseline: 'middle'
             });
           });
-          
+
           pdf.rect(xPos, yPos, colWidth, currentRowHeight);
           xPos += colWidth;
         });
@@ -1384,28 +1434,49 @@ const Assessment = () => {
       return;
     }
 
+    // Auto-populate logic
+    const filtered = dropdownFiltered.filter(app => app.survey_name === filterSurvey && app.position === filterPosition);
+    const existingAssistant = filtered.find(app => app.assistant_id);
+    if (existingAssistant && existingAssistant.assistant_id) {
+        setSelectedAssistantFocalPerson(existingAssistant.assistant_id);
+    } else {
+        setSelectedAssistantFocalPerson('');
+    }
+
     // Show confirmation dialog first
     setShowGenerateConfirmation(true);
-  }, [filterSurvey, filterPosition, showToast]);
+  }, [filterSurvey, filterPosition, showToast, dropdownFiltered]);
 
-  const performGenerateAssessmentReport = useCallback(async (assistantFocalPersonName) => {
+  const performGenerateAssessmentReport = useCallback(async (assistantFocalPersonId) => {
     setShowGenerateConfirmation(false);
+
+    const assistantUser = users.find(u => u.id === assistantFocalPersonId);
+    const assistantFocalPersonName = assistantUser 
+        ? [assistantUser.first_name, assistantUser.middle_initial, assistantUser.last_name, assistantUser.suffix].filter(Boolean).join(' ') 
+        : '';
+
+    // If user is Admin or PACD, skip saving and just generate the report.
+    if (['Admin', 'PACD'].includes(userRole)) {
+        generateAssessmentReportPDF(assistantFocalPersonName);
+        showToast('Assessment Report generated.', 'success');
+        return;
+    }
 
     // Save all status and remarks before generating report
     const filtered = dropdownFiltered.filter(app => app.survey_name === filterSurvey && app.position === filterPosition);
     try {
       for (const app of filtered) {
-        // Skip update if already assessed
-        if (app.interview_status === 'Assessed') continue;
-
-        const rd = rowData[app.id] || { remarks: '' };
+        const rd = rowData[app.id] || {};
         
-        // Save assessment data (remarks and grand total)
+        // Ensure 'Hired' status is preserved if checked, otherwise use remarks
+        const remarksToSave = rd.checked ? 'Hired' : (rd.remarks || '');
+        
+        // Save assessment data (only remarks and assistant assignment). Do NOT save grand_total here.
         await apiFetch(`applicants/${app.id}/assessment`, serverIp, {
           method: 'PUT',
           body: JSON.stringify({
-            assessment_remarks: rd.remarks || '',
-            grand_total:        parseFloat(app.grand_total || 0),
+            assessment_remarks: remarksToSave,
+            assistant_id:       assistantFocalPersonId || null
           }),
         });
 
@@ -1427,7 +1498,7 @@ const Assessment = () => {
 
     // Refresh the table after report generation
     fetchApplicants();
-  }, [filterSurvey, filterPosition, dropdownFiltered, rowData, showToast, serverIp, generateAssessmentReportPDF, fetchApplicants]);
+  }, [filterSurvey, filterPosition, dropdownFiltered, rowData, showToast, serverIp, generateAssessmentReportPDF, fetchApplicants, users, userRole]);
 
   if (isLoading || isSettingsLoading) {
     return <div className="p-8 text-gray-500 dark:text-gray-400">Loading Assessment Records...</div>;
@@ -1454,11 +1525,11 @@ const Assessment = () => {
                   </p>
                 </div>
                 <div className="h-8 w-px bg-gray-300 dark:bg-gray-600"></div>
-                {/* Contract Status */}
+                {/* Hiring Status */}
                 <div className="text-right">
-                  <h3 className="text-xs font-semibold text-gray-600 dark:text-gray-400">Contract Status</h3>
-                  <p className={`text-sm font-semibold ${contractEnded ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'}`}>
-                    {contractEnded ? '✗ Ended' : '✓ Active'}
+                  <h3 className="text-xs font-semibold text-gray-600 dark:text-gray-400">Hiring Status</h3>
+                  <p className={`text-sm font-semibold ${hiringEnded ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'}`}>
+                    {hiringEnded ? 'Ended' : 'Ongoing'}
                   </p>
                 </div>
               </>
@@ -1558,54 +1629,62 @@ const Assessment = () => {
 
           {/* Right controls */}
           <div className="flex items-center gap-3 flex-wrap">
-            <button
-              onClick={handleSaveWeights}
-              disabled={filterSurvey === '' || filterPosition === '' || weightsSaved || !allTransmittedToFocal}
-              title={
-                filterSurvey === '' || filterPosition === '' ? 'Select both survey and position' 
-                : !allTransmittedToFocal ? 'All applicants must be transmitted to focal person'
-                : weightsSaved ? 'Weights already saved for this survey and position'
-                : 'Save current weights for this survey and position'
-              }
-              className="px-3 py-2 text-xs font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-blue-700 dark:hover:bg-blue-600"
-            >
-              Save Weights
-            </button>
-            <button
-              onClick={handleExportPDF}
-              disabled={!canExportPDF || !allTransmittedToFocal || !weightsSaved || allAssessed}
-              title={
-                filterSurvey === '' || filterPosition === '' ? 'Select both survey and position'
-                : !weightsSaved ? 'Save weights first before generating pre-assessment report'
-                : !allTransmittedToFocal ? 'All applicants must be Transmitted to Focal or Assessed'
-                : allAssessed ? 'Pre-Assessment Report is unavailable after Final Assessment generation'
-                : 'Export assessment data to PDF'
-              }
-              className="px-3 py-2 text-xs font-semibold text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-red-700 dark:hover:bg-red-600 flex items-center gap-2"
-            >
-              <FaFilePdf className="w-4 h-4" /> Pre-Assessment Report
-            </button>
-            <button
-              onClick={handleGenerateAssessmentReport}
-              disabled={!canGenerateAssessmentReport}
-              title={
-                !canExportPDF 
-                  ? 'Select both survey and position' 
-                  : !allTransmittedToFocal
-                    ? 'All applicants must be Transmitted to Focal or Assessed'
-                    : !weightsSaved
-                      ? 'Save weights first before generating report'
-                      : targetHiringCount === 0 
-                        ? `Target hiring count not set for: ${filterPosition}`
-                        : currentHiredCount !== targetHiringCount 
-                          ? `Hired applicants (${currentHiredCount}) must equal target (${targetHiringCount})`
-                          : 'Generate Final Assessment Report'
-              }
-              className="px-3 py-2 text-xs font-semibold text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-green-700 dark:hover:bg-green-600 flex items-center gap-2"
-            >
-              <FaFilePdf className="w-4 h-4" /> Final Assessment Report
-            </button>
-          </div>
+            {!isReadOnly && (
+              <div className="flex items-center gap-3 flex-wrap">
+                <button
+                  onClick={handleSaveWeights}
+                  disabled={filterSurvey === '' || filterPosition === '' || weightsSaved || !allTransmittedToFocal || !hiringEnded}
+                  title={
+                    filterSurvey === '' || filterPosition === '' ? 'Select both survey and position' 
+                    : !allTransmittedToFocal ? 'All applicants must be transmitted to focal person'
+                    : !hiringEnded ? 'Hiring is still ongoing'
+                    : weightsSaved ? 'Weights already saved for this survey and position'
+                    : 'Save current weights for this survey and position'
+                  }
+                  className="px-3 py-2 text-xs font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-blue-700 dark:hover:bg-blue-600"
+                >
+                  Save Weights
+                </button>
+                <button
+                  onClick={handleExportPDF}
+                  disabled={!canExportPDF || !allTransmittedToFocal || !weightsSaved || allAssessed || !hiringEnded}
+                  title={
+                    filterSurvey === '' || filterPosition === '' ? 'Select both survey and position'
+                    : !weightsSaved ? 'Save weights first before generating pre-assessment report'
+                    : !allTransmittedToFocal ? 'All applicants must be Transmitted to Focal or Assessed'
+                    : !hiringEnded ? 'Hiring is still ongoing'
+                    : allAssessed ? 'Pre-Assessment Report is unavailable after Final Assessment generation'
+                    : 'Export assessment data to PDF'
+                  }
+                  className="px-3 py-2 text-xs font-semibold text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-red-700 dark:hover:bg-red-600 flex items-center gap-2"
+                >
+                  <FaFilePdf className="w-4 h-4" /> Pre-Assessment Report
+                </button>
+              </div>
+            )}
+              <button
+                onClick={handleGenerateAssessmentReport}
+                disabled={!canGenerateAssessmentReport}
+                title={
+                  !canExportPDF 
+                    ? 'Select both survey and position' 
+                    : !allTransmittedToFocal
+                      ? 'All applicants must be Transmitted to Focal or Assessed'
+                      :isReadOnly
+                        ? 'Ask the focal to provide assessment first'
+                        : !weightsSaved
+                          ? 'Save weights first before generating report'
+                          : targetHiringCount === 0 
+                            ? `Target hiring count not set for: ${filterPosition}`
+                            : currentHiredCount !== targetHiringCount 
+                              ? `Hired applicants (${currentHiredCount}) must equal target (${targetHiringCount})`
+                              : 'Generate Final Assessment Report'
+                }
+                className="px-3 py-2 text-xs font-semibold text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-green-700 dark:hover:bg-green-600 flex items-center gap-2"
+              >
+                <FaFilePdf className="w-4 h-4" /> Final Assessment Report
+              </button>
+            </div>
         </div>
       </div>
 
@@ -1678,7 +1757,7 @@ const Assessment = () => {
               <button
                 onClick={() => {
                   if (selectedAssistantFocalPerson) {
-                    performGenerateAssessmentReport(selectedAssistantFocalPerson);
+                    performGenerateAssessmentReport(selectedAssistantFocalPerson); // Now passing ID
                     setSelectedAssistantFocalPerson('');
                   }
                 }}
@@ -1856,7 +1935,7 @@ const Assessment = () => {
                         max={99}
                         value={isNA ? '0' : (weights && weights[key] != null ? weights[key] : '')}
                         onChange={e => {
-                          if (disableWeights) return;
+                          if (disableWeights || isReadOnly) return;
                           const value = e.target.value;
                           // Allow empty string, or a 1-2 digit number.
                           if (value === '' || /^\d{1,2}$/.test(value)) {
@@ -1864,7 +1943,7 @@ const Assessment = () => {
                             setWeightsSaved(false);
                           }
                         }}
-                        disabled={disableWeights || hasMixed || isNA || weightsSaved}
+                        disabled={disableWeights || hasMixed || isNA || weightsSaved || isReadOnly}
                         className="w-14 px-1 py-1 text-xs text-center border border-blue-300 dark:border-blue-600 rounded bg-white dark:bg-gray-700 dark:text-white focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 dark:disabled:bg-gray-800 disabled:cursor-not-allowed"
                       />
                     </div>
@@ -1980,6 +2059,7 @@ const Assessment = () => {
                                   },
                                 }));
                               }}
+                              disabled={isReadOnly}
                               className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 cursor-pointer"
                             />
                             {rowData[app.id]?.checked && (
@@ -2000,14 +2080,13 @@ const Assessment = () => {
                           setEditingRemarksText(rowData[app.id]?.remarks || '');
                         }}
                         disabled={
-                          (app.assessment_remarks != null) ||
-                          rowData[app.id]?.checked || !weightsSaved
+                          (app.assessment_remarks != null) || rowData[app.id]?.checked || !weightsSaved || isReadOnly
                         }
                         title={
                           (app.assessment_remarks != null)
                             ? 'Remarks cannot be edited once saved in the database' 
                             : rowData[app.id]?.checked
-                            ? 'Remarks are set to Hired when selected'
+                            ? 'Remarks are set to "Hired" when selected'
                             : !weightsSaved
                             ? 'Save weights first to enable remarks'
                             : 'Edit or add remarks for this applicant'

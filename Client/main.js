@@ -94,7 +94,7 @@ async function startApp() {
     // --- CLEANUP: remove existing handlers to avoid "second handler" errors when we recreate the window ---
     const ipcHandleChannels = [
       'get-login-state','set-login-state','clear-login-state','session-expired',
-      'get-dark-mode','set-dark-mode',
+      'get-dark-mode','set-dark-mode', 'has-google-refresh-token',
       'login-google-loopback', 'login-google-silent', 'clear-google-refresh-token',
       'get-server-ip','set-server-ip','restart-app','get-local-ip',
       'login','prepare-download','save-file','open-file','auto-save-certificate',
@@ -435,6 +435,9 @@ async function startApp() {
       }
     });
 
+    // --- Check for Google Refresh Token ---
+    ipcMain.handle('has-google-refresh-token', () => !!store.get('googleRefreshToken'));
+
     // --- Clear Google Refresh Token Handler ---
     // This allows users to disconnect their Google account
     ipcMain.handle('clear-google-refresh-token', async () => {
@@ -761,41 +764,61 @@ async function startApp() {
         }
     });
 
-    // --- Auto Updater Handlers ---
-    ipcMain.handle('get-app-version', () => app.getVersion());
-
-    ipcMain.on('check-for-updates', () => {
+    // --- Auto Updater Logic ---
+    function setupAutoUpdater() {
       // Explicitly configure for private repository to avoid 404 on releases.atom
+      autoUpdater.autoDownload = true;
+      autoUpdater.autoInstallOnAppQuit = true;
+      autoUpdater.allowPrerelease = false;
+      
       autoUpdater.setFeedURL({
         provider: 'github',
         owner: 'Syano18',
         repo: 'PSA-HireTrack',
         private: true
       });
+
+      // Logging for troubleshooting
+      autoUpdater.logger = console;
+
+      // Clean up previous listeners and add new ones once
+      autoUpdater.removeAllListeners();
+      
+      autoUpdater.on('update-available', (info) => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-available', info);
+      });
+      autoUpdater.on('update-not-available', () => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-not-available');
+      });
+      autoUpdater.on('error', (err) => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-error', err.toString());
+      });
+      autoUpdater.on('download-progress', (progressObj) => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-progress', progressObj);
+      });
+      autoUpdater.on('update-downloaded', (info) => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-downloaded', info);
+      });
+
+      // Perform a silent background check 5 seconds after launch
+      setTimeout(() => {
+        autoUpdater.checkForUpdates().catch(err => console.log('Silent background update check failed (this is normal if offline)'));
+      }, 5000);
+    }
+
+    // Call setup once
+    setupAutoUpdater();
+
+    // --- Auto Updater Handlers ---
+    ipcMain.handle('get-app-version', () => app.getVersion());
+
+    ipcMain.on('check-for-updates', () => {
+      // Since setupAutoUpdater already configured it, we just need to trigger
       autoUpdater.checkForUpdates();
     });
 
     ipcMain.on('quit-and-install', () => {
       autoUpdater.quitAndInstall();
-    });
-
-    // Auto Updater Events
-    autoUpdater.removeAllListeners(); // Clean up previous listeners
-    
-    autoUpdater.on('update-available', (info) => {
-      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-available', info);
-    });
-    autoUpdater.on('update-not-available', () => {
-      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-not-available');
-    });
-    autoUpdater.on('error', (err) => {
-      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-error', err.toString());
-    });
-    autoUpdater.on('download-progress', (progressObj) => {
-      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-progress', progressObj);
-    });
-    autoUpdater.on('update-downloaded', (info) => {
-      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-downloaded', info);
     });
 
     if (isDev) {

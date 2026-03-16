@@ -37,14 +37,29 @@ const LoginPage = () => {
     const [tempServerIp, setTempServerIp] = useState(serverIp); 
     const [localIp, setLocalIp] = useState('Fetching...');
     const [showGoogleResetConfirm, setShowGoogleResetConfirm] = useState(false);
-    const [googleResetMessage, setGoogleResetMessage] = useState('');
+    const [hasGoogleConnection, setHasGoogleConnection] = useState(false);
 
     const ThemeIcon = isDarkMode ? FaSun : FaMoon;
     const PasswordIcon = showPassword ? FaEyeSlash : FaEye;
 
     useEffect(() => {
+        setEmail("officialchano18@gmail.com");
+        setPassword("admin123");
+    }, []);
+
+    useEffect(() => {
+        const checkGoogleConnection = async () => {
+            try {
+                const hasToken = await window.electronAPI.hasGoogleRefreshToken();
+                setHasGoogleConnection(hasToken);
+            } catch (err) {
+                console.error("Could not check Google connection status:", err);
+                setHasGoogleConnection(false);
+            }
+        };
         if (isSettingsOpen) {
             setTempServerIp(serverIp);
+            checkGoogleConnection();
         }
     }, [isSettingsOpen, serverIp]);
 
@@ -317,21 +332,17 @@ const LoginPage = () => {
     };
 
     const handleResetGoogleAccount = async () => {
+        setShowGoogleResetConfirm(false);
         try {
             const result = await window.electronAPI.clearGoogleRefreshToken();
             if (result.success) {
-                setGoogleResetMessage(result.message);
-                setTimeout(() => {
-                    setShowGoogleResetConfirm(false);
-                    setGoogleResetMessage('');
-                }, 3000);
+                showToast(result.message, 'success');
+                setHasGoogleConnection(false);
             } else {
-                setGoogleResetMessage(result.message);
-                setTimeout(() => setGoogleResetMessage(''), 3000);
+                showToast(result.message, 'error');
             }
         } catch (err) {
-            setGoogleResetMessage('Error: ' + err.message);
-            setTimeout(() => setGoogleResetMessage(''), 3000);
+            showToast('Error: ' + err.message, 'error');
         }
     };
 
@@ -528,12 +539,16 @@ const LoginPage = () => {
                                 Server IP Address
                             </label>
                         </div>
-                        
                         <div className="flex gap-4">
-                            <button onClick={() => setIsSettingsOpen(false)} className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-gray-500 text-white font-semibold rounded-lg hover:bg-gray-600"><FiX className="w-4 h-4" />Cancel</button>
-                            <button onClick={handleSaveSettings} className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700"><FiSave className="w-4 h-4" />Save</button>
+                            <button 
+                                onClick={handleSaveSettings} 
+                                disabled={tempServerIp === serverIp}
+                                title={tempServerIp === serverIp ? 'No changes to save' : 'Save new server IP'}
+                                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                <FiSave className="w-4 h-4" />Save
+                            </button>
                         </div>
-
                         <div className="border-t border-gray-300 dark:border-gray-600 my-6"></div>
 
                         <div>
@@ -541,15 +556,12 @@ const LoginPage = () => {
                             <p className="text-center text-sm text-gray-600 dark:text-gray-400 mb-4">Disconnect the currently linked Google account to sign in with a different one.</p>
                             <button 
                                 onClick={() => setShowGoogleResetConfirm(true)}
-                                className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-orange-600 text-white font-semibold rounded-lg hover:bg-orange-700"
+                                disabled={!hasGoogleConnection}
+                                title={!hasGoogleConnection ? "No Google account is currently connected." : "Disconnect your Google account"}
+                                className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-orange-600 text-white font-semibold rounded-lg hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                                 <FaUnlink className="w-4 h-4" />Disconnect Google Account
                             </button>
-                            {googleResetMessage && (
-                                <p className={`text-center text-sm mt-2 ${googleResetMessage.includes('Error') ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'}`}>
-                                    {googleResetMessage}
-                                </p>
-                            )}
                         </div>
 
                         <div className="border-t border-gray-300 dark:border-gray-600 my-6"></div>
@@ -587,6 +599,10 @@ const LoginPage = () => {
                                     <FiDownload className="w-4 h-4" />Restart & Install Now
                                 </button>
                             )}
+                        </div>
+                        {/* Modal Actions */}
+                        <div className="!mt-8 pt-6 border-t border-gray-200 dark:border-gray-700 flex gap-4">
+                            <button onClick={() => setIsSettingsOpen(false)} className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-gray-500 text-white font-semibold rounded-lg hover:bg-gray-600 transition-colors"><FiX className="w-4 h-4" />Close</button>
                         </div>
                     </div>
                 </div>
