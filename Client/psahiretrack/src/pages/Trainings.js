@@ -485,6 +485,20 @@ const Trainings = () => {
         return JSON.stringify(formData) !== JSON.stringify(originalFormData);
     }, [formData, originalFormData, editingTraining]);
 
+    const isManualTrainingValid = useMemo(() => {
+        const endDateStr = formData.end_date;
+        if (!endDateStr) return true;
+        try {
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const [year, month, day] = endDateStr.split('-').map(Number);
+            const localEndDate = new Date(year, month - 1, day);
+            return localEndDate <= today;
+        } catch (e) {
+            return false;
+        }
+    }, [formData.end_date]);
+
     const isTrainingEndDateValid = useMemo(() => {
         const endDateStr = syncTrainingForm.end_date;
         if (!endDateStr) {
@@ -501,6 +515,20 @@ const Trainings = () => {
             return false; // Invalid date format
         }
     }, [syncTrainingForm.end_date]);
+
+    const isStartEndValid = useMemo(() => {
+        const s = syncTrainingForm.start_date;
+        const e = syncTrainingForm.end_date;
+        if (!s || !e) return true; // not enough info yet
+        try {
+            const start = new Date(s);
+            const end = new Date(e);
+            if (isNaN(start.getTime()) || isNaN(end.getTime())) return false;
+            return start <= end;
+        } catch (err) {
+            return false;
+        }
+    }, [syncTrainingForm.start_date, syncTrainingForm.end_date]);
 
     if (!sessionState || isLoading || isSettingsLoading) {
         return (
@@ -786,7 +814,7 @@ const Trainings = () => {
                         </div>
                         <form onSubmit={handleFormSubmit} id="trainingForm" className="flex-auto p-6 space-y-4">
                             <div>
-                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Employee Name*</label>
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Employee Name <span className="text-red-500">*</span></label>
                                 <SearchableDropdown
                                     id="employee_id"
                                     options={employeeOptions}
@@ -798,7 +826,7 @@ const Trainings = () => {
                                 />
                             </div>
                             <div>
-                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Training Title*</label>
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Training Title <span className="text-red-500">*</span></label>
                                 <SearchableDropdown
                                     id="training_title_id"
                                     options={trainingTitleOptions}
@@ -808,10 +836,52 @@ const Trainings = () => {
                                     required
                                 />
                             </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Start Date</label>
+                                    <input
+                                        type="date"
+                                        value={formData.start_date}
+                                        readOnly
+                                        disabled
+                                        className="mt-1 block w-full p-2 bg-gray-100 dark:bg-gray-600 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm text-gray-500 dark:text-gray-400 cursor-not-allowed"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">End Date</label>
+                                    <input
+                                        type="date"
+                                        value={formData.end_date}
+                                        readOnly
+                                        disabled
+                                        className={`mt-1 block w-full p-2 bg-gray-100 dark:bg-gray-600 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm text-gray-500 dark:text-gray-400 cursor-not-allowed ${!isManualTrainingValid ? 'border-red-500 dark:border-red-500 text-red-500 dark:text-red-400' : ''}`}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Hours</label>
+                                    <input
+                                        type="text"
+                                        value={formData.hours}
+                                        readOnly
+                                        disabled
+                                        className="mt-1 block w-full p-2 bg-gray-100 dark:bg-gray-600 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm text-gray-500 dark:text-gray-400 cursor-not-allowed"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Venue</label>
+                                    <input
+                                        type="text"
+                                        value={formData.venue}
+                                        readOnly
+                                        disabled
+                                        className="mt-1 block w-full p-2 bg-gray-100 dark:bg-gray-600 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm text-gray-500 dark:text-gray-400 cursor-not-allowed"
+                                    />
+                                </div>
+                            </div>
                         </form>
                         <div className="flex-shrink-0 flex justify-end px-6 py-4 space-x-2 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-200 dark:border-gray-700 rounded-b-lg">
                             <button type="button" onClick={handleCloseAddEditModal} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600"><FiX className="w-4 h-4" />Cancel</button>
-                            <button type="submit" form="trainingForm" disabled={!formData.employee_id || !formData.training_title_id || (editingTraining && !hasChanges)} title={!formData.employee_id || !formData.training_title_id ? 'Please select both employee and training title' : (editingTraining && !hasChanges) ? 'No changes made' : ''} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"><FiSave className="w-4 h-4" />Save Record</button>
+                            <button type="submit" form="trainingForm" disabled={!formData.employee_id || !formData.training_title_id || (editingTraining && !hasChanges) || !isManualTrainingValid} title={!formData.employee_id || !formData.training_title_id ? 'Please select both employee and training title' : !isManualTrainingValid ? 'Cannot assign: Training end date is in the future' : (editingTraining && !hasChanges) ? 'No changes made' : ''} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"><FiSave className="w-4 h-4" />Save Record</button>
                         </div>
                     </div>
                 </div>
@@ -1003,7 +1073,7 @@ const Trainings = () => {
 
                                             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                                 <div>
-                                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Start Date</label>
+                                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Start Date <span className="text-red-500">*</span></label>
                                                     <input
                                                         type="date"
                                                         value={syncTrainingForm.start_date}
@@ -1013,7 +1083,7 @@ const Trainings = () => {
                                                     />
                                                 </div>
                                                 <div>
-                                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">End Date</label>
+                                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">End Date <span className="text-red-500">*</span></label>
                                                     <input
                                                         type="date"
                                                         value={syncTrainingForm.end_date}
@@ -1023,7 +1093,7 @@ const Trainings = () => {
                                                     />
                                                 </div>
                                                 <div>
-                                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Training Hours</label>
+                                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Training Hours <span className="text-red-500">*</span></label>
                                                     <input
                                                         type="number"
                                                         value={syncTrainingForm.hours}
@@ -1037,7 +1107,7 @@ const Trainings = () => {
 
                                             <div className="grid grid-cols-1 md:grid-cols-1 gap-4">
                                                 <div>
-                                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Venue</label>
+                                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Venue <span className="text-red-500">*</span></label>
                                                     <textarea
                                                         type="text"
                                                         value={syncTrainingForm.venue}
@@ -1059,15 +1129,25 @@ const Trainings = () => {
                                     >
                                         <FiX className="w-4 h-4" />Cancel
                                     </button>
-                                    <button 
+                                    <button
                                         type="submit"
-                                        disabled={!syncSelectedSurveyName || !syncSelectedPosition || (!isCreatingNewTitle && !syncTrainingForm.id) || (isCreatingNewTitle && !syncTrainingForm.title) || isSyncLoading || !isTrainingEndDateValid}
+                                        disabled={
+                                            !syncSelectedSurveyName ||
+                                            !syncSelectedPosition ||
+                                            isSyncLoading ||
+                                            !isTrainingEndDateValid ||
+                                            !isStartEndValid ||
+                                            (isCreatingNewTitle
+                                                ? !(syncTrainingForm.title && syncTrainingForm.start_date && syncTrainingForm.end_date && syncTrainingForm.hours && syncTrainingForm.venue)
+                                                : !syncTrainingForm.id)
+                                        }
                                         className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 shadow-sm hover:shadow"
                                         title={
                                             !syncSelectedSurveyName ? 'Please select a survey' :
                                             !syncSelectedPosition ? 'Please select a position' :
+                                            (isCreatingNewTitle && !(syncTrainingForm.title && syncTrainingForm.start_date && syncTrainingForm.end_date && syncTrainingForm.hours && syncTrainingForm.venue)) ? 'Please fill all training fields (title, start date, end date, hours, venue)' :
+                                            (isCreatingNewTitle && !isStartEndValid) ? 'Start date must be on or before end date' :
                                             !isCreatingNewTitle && !syncTrainingForm.id ? 'Please select an existing training' :
-                                            isCreatingNewTitle && !syncTrainingForm.title ? 'Please enter a new training title' :
                                             !isTrainingEndDateValid ? 'Cannot proceed: Training end date must be today or earlier.' :
                                             isSyncLoading ? 'Processing...' :
                                             'Proceed to sync applicants'

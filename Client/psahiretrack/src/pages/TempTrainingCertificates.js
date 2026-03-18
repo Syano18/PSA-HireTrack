@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import Papa from 'papaparse';
 import { FaFilePdf, FaArrowLeft, FaArrowRight } from 'react-icons/fa';
-import { FiDownload, FiUpload, FiX } from 'react-icons/fi';
+import { FiDownload, FiUpload } from 'react-icons/fi';
 import { useSettings } from '../context/SettingsContext';
 import ProgressModal from '../components/Progress';
 import ToastContainer from '../components/ToastContainer';
@@ -88,6 +88,8 @@ const TempTrainingCertificates = () => {
   const [progressMessage, setProgressMessage] = useState('');
   const [isProgressComplete, setIsProgressComplete] = useState(false);
   const [savedFilePath, setSavedFilePath] = useState(null);
+  const [duplicateRecords, setDuplicateRecords] = useState([]);
+  const [isDuplicateModalOpen, setIsDuplicateModalOpen] = useState(false);
 
   useEffect(() => {
     const getSession = async () => {
@@ -278,24 +280,36 @@ const TempTrainingCertificates = () => {
           throw new Error(prepareResponse.message || 'Failed to prepare download');
       }
 
-      setProgressMessage('Generating PDF... Please save the file.');
+      setProgressMessage('Generating PDF... Auto-saving to C:\\HireTrack PDFs\\External');
 
-      const saveResult = await window.electronAPI.saveFile({
+      const autoSaveResult = await window.electronAPI.autoSaveCertificate({
         downloadId: prepareResponse.downloadId,
-        fileName: `Batch-Certificates-${Date.now()}.pdf`,
-        fileType: 'pdf'
+        fileName: `Batch-Certificates-${Date.now()}`,
+        certificateType: 'external'
       });
 
-      if (saveResult.status === 'completed') {
+      if (autoSaveResult.status === 'completed') {
+        // Close progress modal immediately (match Certificates.js behavior)
+        setSavedFilePath(autoSaveResult.path);
+        setIsProgressModalOpen(false);
+        showToast('Batch certificates generated, saved to External folder, and opened.', 'success');
+      } else {
         setIsProgressComplete(true);
-        setProgressMessage('Batch certificates generated and saved successfully!');
-        setSavedFilePath(saveResult.path);
-      } else if (saveResult.status === 'failed') {
-        setIsProgressComplete(true);
-        setProgressMessage(`Failed to save file: ${saveResult.message}`);
+        setProgressMessage(`Failed to auto-save file: ${autoSaveResult.message}`);
       }
     } catch (error) {
       console.error('Error generating certificates:', error);
+      try {
+        const parsedMessage = JSON.parse(error.message);
+        if (parsedMessage.type === 'DUPLICATES') {
+          setIsProgressModalOpen(false); // Hide progress modal
+          setDuplicateRecords(parsedMessage.duplicates);
+          setIsDuplicateModalOpen(true);
+          return;
+        }
+      } catch(e) {
+        // Not a JSON error, fallback to normal error handling
+      }
       setIsProgressComplete(true);
       setProgressMessage(`Failed to generate certificates: ${error.message}`);
     } finally {
@@ -480,6 +494,43 @@ const TempTrainingCertificates = () => {
         isComplete={isProgressComplete}
         filePath={savedFilePath}
       />
+
+      {isDuplicateModalOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black bg-opacity-50">
+          <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-xl w-[90%] max-w-2xl max-h-[90vh] flex flex-col">
+            <h2 className="text-xl font-bold text-red-600 dark:text-red-400 mb-2">Duplicate Certificates Found</h2>
+            <p className="text-gray-700 dark:text-gray-300 mb-4">
+              The following records have already been generated. Please remove the found duplicates on the csv file and try again.
+            </p>
+            <div className="overflow-y-auto flex-grow mb-4 bg-gray-50 dark:bg-gray-700/50 rounded border border-gray-200 dark:border-gray-600">
+              <table className="min-w-full text-sm text-left">
+                <thead className="bg-gray-100 dark:bg-gray-700 sticky top-0">
+                  <tr>
+                    <th className="px-4 py-2 font-semibold text-gray-700 dark:text-gray-300 border-b border-gray-200 dark:border-gray-600">Name</th>
+                    <th className="px-4 py-2 font-semibold text-gray-700 dark:text-gray-300 border-b border-gray-200 dark:border-gray-600">Training Title</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                  {duplicateRecords.map((rec, idx) => (
+                    <tr key={idx} className="hover:bg-gray-100 dark:hover:bg-gray-600/50">
+                      <td className="px-4 py-2 text-gray-900 dark:text-white break-words">{rec.name}</td>
+                      <td className="px-4 py-2 text-gray-900 dark:text-white break-words">{rec.title}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex justify-end">
+              <button
+                onClick={() => setIsDuplicateModalOpen(false)}
+                className="px-4 py-2 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-white rounded-lg font-medium transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <ToastContainer toasts={toasts} onClose={removeToast} />
     </div>

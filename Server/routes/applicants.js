@@ -264,7 +264,9 @@ router.post('/comprehensive-sync', verifyToken, async (req, res) => {
       FROM profile_entries pe
       LEFT JOIN surveys s ON pe.survey_id = s.id
       LEFT JOIN positions p ON pe.position_id = p.id
-      WHERE pe.interview_status = 'Assessed' AND pe.training_title_id IS NOT NULL
+      WHERE pe.interview_status = 'Assessed' 
+        AND (pe.assessment_remarks = 'Hired' OR pe.assessment_remarks LIKE 'REPLACED%')
+        AND pe.training_title_id IS NOT NULL
       ORDER BY pe.id
     `);
 
@@ -1073,6 +1075,7 @@ router.get('/assessed', verifyToken, async (req, res) => {
       LEFT JOIN surveys s ON pe.survey_id = s.id
       LEFT JOIN positions p ON pe.position_id = p.id
       WHERE pe.interview_status = 'Assessed'
+        AND (pe.assessment_remarks = 'Hired' OR pe.assessment_remarks LIKE 'REPLACED%')
       ORDER BY pe.last_name, pe.first_name
     `);
     

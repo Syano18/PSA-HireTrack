@@ -57,7 +57,7 @@ const ManageSurveys = ({ session }) => {
         try {
             const [surveysData, focalPersonsData, positionsData] = await Promise.all([
                 apiFetch('employments/surveys', serverIp),        // 3. PASS serverIp
-                apiFetch('employments/focal-persons', serverIp), // 3. PASS serverIp
+                apiFetch('users?role=Focal Person', serverIp), // 3. PASS serverIp
                 apiFetch('employments/positions', serverIp)
             ]);
             setSurveys(surveysData);
@@ -311,15 +311,31 @@ const ManageSurveys = ({ session }) => {
             const originalSurvey = id ? surveys.find(s => s.id === id) : null;
 
             // Prepare payload: merge original survey data with updated fields
-            // IMPORTANT: Do NOT include rating_criteria - it's managed separately in the Applicants page
+            // Normally we remove rating_criteria - it's managed separately in the Applicants page
             const payload = {
                 ...(originalSurvey || {}), // Preserve all original fields
                 ...currentSurvey,          // Apply user edits
                 actingUserId: session.user.id
             };
             
-            // Remove rating_criteria from payload - it's set via the Applicants page Set Evaluation Criteria modal
-            delete payload.rating_criteria;
+            // Check if end date is earlier than today and set rating_criteria to "Done"
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            let isEndDateInPast = false;
+            if (currentSurvey.contract_end_date) {
+                try {
+                    const endDate = parseISO(currentSurvey.contract_end_date);
+                    isEndDateInPast = endDate < today;
+                } catch (e) {
+                    isEndDateInPast = false;
+                }
+            }
+
+            if (isEndDateInPast) {
+                payload.rating_criteria = "Done";
+            } else {
+                delete payload.rating_criteria;
+            }
 
             // If start date is in future, send hiring date and positions separately (Turso only)
             if (isStartDateInPast === false && hiringDate && positionsToBeHired.length > 0) {
@@ -587,7 +603,7 @@ const ManageSurveys = ({ session }) => {
                                   onChange={(e) => setCurrentSurvey({ ...currentSurvey, focal_person_id: e.target.value })}
                                   required className="block w-full p-2 mt-1 bg-white border border-gray-300 rounded-md shadow-sm dark:bg-gray-700 dark:border-gray-600 focus:border-blue-500 focus:ring-blue-500">
                                   <option value="" disabled>(None)</option>
-                                  {focalPersons.map(fp => (
+                                  {focalPersons.filter(fp => fp.role === 'Focal Person').map(fp => (
                                       <option key={fp.id} value={fp.id}>{`${fp.first_name} ${fp.middle_initial} ${fp.last_name} ${fp.suffix || ''}`}</option>
                                   ))}
                               </select>

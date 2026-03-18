@@ -16,9 +16,9 @@ const apiEndpoints = {
 };
 
 // Helper function to parse comma or semicolon separated data
-const parseEmploymentData = (data) => {
+const parseEmploymentData = (data, separator = /[;,]/) => {
   if (!data) return [];
-  const items = data.split(/[;,]/).map(item => item.trim()).filter(Boolean);
+  const items = data.split(separator).map(item => item.trim()).filter(Boolean);
   return items.length > 0 ? items : [data];
 };
 
@@ -54,6 +54,7 @@ const Certificates = () => {
   const [editFormData, setEditFormData] = useState({});
   const [generatedCerts, setGeneratedCerts] = useState([]);
   const [hoveredGeneratedTraining, setHoveredGeneratedTraining] = useState(null);
+  const [hoveredGeneratedEmployment, setHoveredGeneratedEmployment] = useState(null);
   const [generatedTitlesList, setGeneratedTitlesList] = useState([]);
 
   const fetchGeneratedTitles = useCallback(async () => {
@@ -278,7 +279,9 @@ const Certificates = () => {
   // Returns the matching cert object if a training certificate has already been generated, or null otherwise.
   const isTrainingGenerated = useCallback((training) => {
     return generatedCerts.find(cert => {
-      if (cert.type !== 'training' || cert.details?.source !== 'employee') return false;
+      if (cert.type !== 'training') return false;
+      // Allow 'employee' source or undefined source (from batch-by-title generation)
+      if (cert.details?.source && cert.details.source !== 'employee') return false;
       const storedTitles = (cert.details.training_title || '').split(', ').map(t => t.trim());
       if (!storedTitles.includes(training.trainingTitle)) return false;
       const storedHours = String(cert.details.training_hours || '').split(', ').map(h => h.trim());
@@ -346,15 +349,10 @@ const Certificates = () => {
 
       if (saveResult.status === 'completed') {
         setSavedFilePath(saveResult.path);
-        
+
         // Close the progress modal immediately without showing completion buttons
         setIsProgressModalOpen(false);
-        
-        // Auto-open the certificate file
-        setTimeout(() => {
-          window.electronAPI.openFile(saveResult.path);
-        }, 500);
-        
+
         return saveResult.message;
       } else {
         throw new Error(saveResult.message);
@@ -886,10 +884,10 @@ const Certificates = () => {
                                               <span className="text-slate-800 dark:text-slate-200">{parseEmploymentData(validationResult.data.employment_titles)[idx]}</span>
                                             </div>
                                           )}
-                                          {parseEmploymentData(validationResult.data.contract_duration)[idx] && (
+                                          {parseEmploymentData(validationResult.data.contract_duration, ';')[idx] && (
                                             <div className="flex gap-2">
                                               <span className="text-slate-500 dark:text-slate-400 font-bold text-xs uppercase tracking-wider flex-shrink-0 min-w-[90px]">Duration</span>
-                                              <span className="text-slate-800 dark:text-slate-200">{parseEmploymentData(validationResult.data.contract_duration)[idx]}</span>
+                                              <span className="text-slate-800 dark:text-slate-200">{parseEmploymentData(validationResult.data.contract_duration, ';')[idx]}</span>
                                             </div>
                                           )}
                                           {validationResult.data.performance_rating && (
@@ -1056,7 +1054,23 @@ const Certificates = () => {
             <div className="flex-auto overflow-y-auto">
               <ul className="p-6 space-y-3">
                 {modalMode === 'Training' && (filteredTrainings.length > 0 ? (filteredTrainings.map((record, index) => { const isSelected = selectedTrainings.some(item => item.trainingTitle === record.trainingTitle); const alreadyGenerated = isTrainingGenerated(record); return ( <li key={index} onMouseEnter={() => alreadyGenerated && setHoveredGeneratedTraining(alreadyGenerated)} onMouseLeave={() => alreadyGenerated && setHoveredGeneratedTraining(null)} className={`rounded-lg shadow-sm transition-colors duration-200 ${alreadyGenerated ? 'opacity-60 bg-gray-100 dark:bg-gray-900/60' : isSelected ? 'bg-blue-50 dark:bg-blue-900/50 ring-2 ring-blue-500' : 'bg-gray-50 dark:bg-gray-900'}`}> <label className={`flex items-center justify-between w-full p-4 ${alreadyGenerated ? 'cursor-not-allowed' : 'cursor-pointer'}`}> <div className="flex flex-col gap-0.5"><span className="font-medium text-gray-900 dark:text-white whitespace-normal break-words">{record.trainingTitle}</span></div> <input type="checkbox" className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 disabled:opacity-50" checked={isSelected} onChange={() => handleTrainingSelectionChange(record)} disabled={alreadyGenerated} /> </label> </li> ); })) : <p className="py-8 text-center text-gray-500 dark:text-gray-400">No matching training records found.</p>)}
-                {modalMode === 'Employment' && (filteredEmployments.length > 0 ? (filteredEmployments.map((record, index) => { const isSelected = selectedEmployments.some(item => item.project_name === record.project_name && item.position === record.position); return ( <li key={index} className={`rounded-lg shadow-sm transition-colors duration-200 ${isSelected ? 'bg-blue-50 dark:bg-blue-900/50 ring-2 ring-blue-500' : 'bg-gray-50 dark:bg-gray-900'}`}> <label className="flex items-center justify-between w-full p-4 cursor-pointer"> <div className="flex flex-col gap-0.5"><span className="font-medium text-gray-900 dark:text-white whitespace-normal break-words">{`${record.position} (${record.project_name})`}</span></div> <input type="checkbox" className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600" checked={isSelected} onChange={() => handleEmploymentSelectionChange(record)} /> </label> </li> ); })) : <p className="py-8 text-center text-gray-500 dark:text-gray-400">No matching employment records found.</p>)}
+                {modalMode === 'Employment' && (filteredEmployments.length > 0 ? (filteredEmployments.map((record, index) => { 
+                  const isSelected = selectedEmployments.some(item => item.project_name === record.project_name && item.position === record.position); 
+                  const alreadyGenerated = isEmploymentGenerated(record); 
+                  return ( 
+                    <li 
+                      key={index} 
+                      onMouseEnter={() => alreadyGenerated && setHoveredGeneratedEmployment(alreadyGenerated)} 
+                      onMouseLeave={() => alreadyGenerated && setHoveredGeneratedEmployment(null)} 
+                      className={`rounded-lg shadow-sm transition-colors duration-200 ${alreadyGenerated ? 'opacity-60 bg-gray-100 dark:bg-gray-900/60' : isSelected ? 'bg-blue-50 dark:bg-blue-900/50 ring-2 ring-blue-500' : 'bg-gray-50 dark:bg-gray-900'}`}
+                    > 
+                      <label className={`flex items-center justify-between w-full p-4 ${alreadyGenerated ? 'cursor-not-allowed' : 'cursor-pointer'}`}> 
+                        <div className="flex flex-col gap-0.5"><span className="font-medium text-gray-900 dark:text-white whitespace-normal break-words">{`${record.position} (${record.project_name})`}</span></div> 
+                        <input type="checkbox" className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 disabled:opacity-50" checked={isSelected} onChange={() => handleEmploymentSelectionChange(record)} disabled={alreadyGenerated} /> 
+                      </label> 
+                    </li> 
+                  ); 
+                })) : <p className="py-8 text-center text-gray-500 dark:text-gray-400">No matching employment records found.</p>)}
               </ul>
             </div>
             {(() => {
@@ -1068,8 +1082,10 @@ const Certificates = () => {
                     {modalMode === 'Training' && hoveredGeneratedTraining && (
                       <span>✓ Certificate already issued — Ref: {hoveredGeneratedTraining.reference_number} — {hoveredGeneratedTraining.issued_at ? new Date(hoveredGeneratedTraining.issued_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : ''}</span>
                     )}
-                    {modalMode === 'Employment' && selectedEmployments.length === 1 && (() => { const sc = isEmploymentGenerated(selectedEmployments[0]); return sc ? <span>✓ Certificate already issued &mdash; Ref: {sc.reference_number} &mdash; {sc.issued_at ? new Date(sc.issued_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : ''}</span> : null; })()}
-                    {multiIssuedCert && (
+                    {modalMode === 'Employment' && hoveredGeneratedEmployment && (
+                      <span>✓ Certificate already issued — Ref: {hoveredGeneratedEmployment.reference_number} — {hoveredGeneratedEmployment.issued_at ? new Date(hoveredGeneratedEmployment.issued_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : ''}</span>
+                    )}
+                    {modalMode === 'Employment' && !hoveredGeneratedEmployment && multiIssuedCert && (
                       <span>✓ Certificate already issued &mdash; Ref: {multiIssuedCert.reference_number} &mdash; {multiIssuedCert.issued_at ? new Date(multiIssuedCert.issued_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : ''}</span>
                     )}
                   </div>

@@ -181,7 +181,7 @@ router.post('/', async (req, res) => {
             return res.status(409).json({ error: 'An employee with the same last name and date of birth already exists.' });
         }
         // --- ID Generation Logic ---
-        const idPrefix = 'PSAKLG-14032';
+        const idPrefix = 'PSA-14032';
         const [latestEmployee] = await dbPool.query("SELECT employee_id FROM employees WHERE employee_id LIKE ? ORDER BY id DESC LIMIT 1", [`${idPrefix}-%`]);
         let newSequenceNumber = 1;
         if (latestEmployee.length > 0) {
@@ -374,7 +374,7 @@ router.post('/import', async (req, res) => {
             let isExactDuplicate = false;
 
             if (!parsedDob) {
-                errors.push(`Row ${rowNum}: Invalid or missing date_of_birth.`);
+                errors.push(`Row ${rowNum}: Invalid date format for date_of_birth. Expected:MM/DD/YYYY`);
             } else {
                  const uniqueKey = `${(employeeData.first_name || '').trim().toLowerCase()}-${(employeeData.last_name || '').trim().toLowerCase()}-${parsedDob}`;
                 if (existingEmployeeMap.has(uniqueKey)) {
@@ -453,7 +453,7 @@ router.post('/import', async (req, res) => {
         
         // If validation passes, proceed with insertion
         await connection.beginTransaction();
-        const idPrefix = 'PSAKLG-14032';
+        const idPrefix = 'PSA-14032';
         const [latestEmployee] = await connection.query("SELECT employee_id FROM employees WHERE employee_id LIKE ? ORDER BY id DESC LIMIT 1 FOR UPDATE", [`${idPrefix}-%`]);
         let nextSequenceNumber = 1;
         if (latestEmployee.length > 0) {
@@ -514,6 +514,120 @@ router.post('/import', async (req, res) => {
     }
 });
 
+// POST /api/employees/validate-import
+router.post('/validate-import', async (req, res) => {
+    const { actingUserId, employees } = req.body;
+    if (!actingUserId) return res.status(403).json({ error: 'Permission denied.' });
+    if (!Array.isArray(employees) || employees.length === 0) return res.status(400).json({ error: 'No employee data provided.' });
+    
+    const connection = await dbPool.getConnection();
+    try {
+        const actingUser = await getUserWithRole(actingUserId);
+        if (!['Super_Admin', 'Admin', 'PACD'].includes(actingUser.role)) {
+            connection.release();
+            return res.status(403).json({ error: 'You do not have permission to import employees.' });
+        }
+        
+        const [municipalities] = await connection.query("SELECT id, name FROM municipalities");
+        const [barangays] = await connection.query("SELECT name, municipality_id FROM barangays");
+        const locationMap = new Map();
+        municipalities.forEach(mun => { locationMap.set(mun.name.toLowerCase(), { id: mun.id, barangays: new Set() }); });
+        barangays.forEach(bgy => {
+            const mun = municipalities.find(m => m.id === bgy.municipality_id);
+            if (mun) locationMap.get(mun.name.toLowerCase())?.barangays.add(bgy.name.toLowerCase());
+        });
+
+        // --- STEP 1: PRE-FETCH EXISTING EMPLOYEES FOR DUPLICATE CHECK ---
+        const [dbEmployees] = await connection.query("SELECT id, employee_id, first_name, last_name, DATE_FORMAT(date_of_birth, '%Y-%m-%d') as dob FROM employees");
+        const existingEmployeeMap = new Map();
+        dbEmployees.forEach(emp => {
+            const key = `${(emp.first_name || '').trim().toLowerCase()}-${(emp.last_name || '').trim().toLowerCase()}-${emp.dob}`;
+            existingEmployeeMap.set(key, emp);
+        });
+        
+        // Prepare DB names for fuzzy matching
+        const dbNames = dbEmployees.map(emp => ({
+            first: (emp.first_name || '').trim().toLowerCase(),
+            last: (emp.last_name || '').trim().toLowerCase(),
+            fullName: `${emp.first_name} ${emp.last_name}`,
+            employee_id: emp.employee_id
+        }));
+        
+        const errors = [];
+        const warnings = [];
+        const seenInCsvKeys = new Set();
+
+        for (let i = 0; i < employees.length; i++) {
+            const employeeData = employees[i];
+            const rowNum = i + 2;
+            const requiredFields = ['first_name', 'last_name', 'date_of_birth', 'sex', 'barangay', 'city', 'highest_grade_completed'];
+            
+            const missingFields = requiredFields.filter(field => !employeeData[field] || String(employeeData[field]).trim() === '');
+            if (missingFields.length > 0) {
+                errors.push(`Row ${rowNum}: Missing required fields: ${missingFields.join(', ')}.`);
+            }
+
+            // --- ✅ STEP 2: CHECK FOR DUPLICATES USING THE PRE-FETCHED DATA ---
+            const parsedDob = parseDate(employeeData.date_of_birth);
+            
+            if (!parsedDob) {
+                errors.push(`Row ${rowNum}: Invalid or missing date_of_birth.Expected: MM/DD/YYYY`);
+            } else {
+                 const uniqueKey = `${(employeeData.first_name || '').trim().toLowerCase()}-${(employeeData.last_name || '').trim().toLowerCase()}-${parsedDob}`;
+                if (existingEmployeeMap.has(uniqueKey)) {
+                    // Existing exact duplicate - skipped in validation logic
+                } else if (seenInCsvKeys.has(uniqueKey)) {
+                    errors.push(`Row ${rowNum}: This is a duplicate record from earlier in the same file. Skipped.`);
+                } else {
+                    seenInCsvKeys.add(uniqueKey);
+                }
+            }
+
+            if (employeeData.first_name && employeeData.last_name) {
+                const currentFirst = employeeData.first_name.trim().toLowerCase();
+                const currentLast = employeeData.last_name.trim().toLowerCase();
+
+                for (const dbEmp of dbNames) {
+                    if (Math.abs(currentFirst.length - dbEmp.first.length) > 2 || Math.abs(currentLast.length - dbEmp.last.length) > 2) continue;
+
+                    const distFirst = levenshtein(currentFirst, dbEmp.first);
+                    const distLast = levenshtein(currentLast, dbEmp.last);
+                    const threshold = (currentFirst.length > 3 && currentLast.length > 3) ? 1 : 0;
+
+                    if (distFirst <= threshold && distLast <= threshold) {
+                        warnings.push({
+                            index: i,
+                            row: rowNum,
+                            message: `Row ${rowNum}: Input "${employeeData.first_name} ${employeeData.last_name}" is a possible duplicate of "${dbEmp.fullName}" (similar name found in database).`,
+                            existingEmployeeId: dbEmp.employee_id
+                        });
+                        break; 
+                    }
+                }
+            }
+
+            if (employeeData.city) {
+                const cityLower = employeeData.city.toLowerCase();
+                const validCity = locationMap.get(cityLower);
+                if (!validCity) errors.push(`Row ${rowNum}: City/Municipality "${employeeData.city}" not found.`);
+                else if (employeeData.barangay && !validCity.barangays.has(employeeData.barangay.toLowerCase())) {
+                    errors.push(`Row ${rowNum}: Barangay "${employeeData.barangay}" not found in ${employeeData.city}.`);
+                }
+            }
+        }
+        
+        connection.release();
+        if (errors.length > 0) return res.status(200).json({ status: 'error', message: 'Validation failed.', errors });
+        if (warnings.length > 0) return res.status(200).json({ status: 'warning', message: 'Potential duplicates detected.', warnings });
+        return res.status(200).json({ status: 'success', message: 'Validation complete.' });
+
+    } catch (dbErr) {
+        if (connection) connection.release();
+        console.error(`Database error during validation: ${dbErr.message}`);
+        return res.status(500).json({ error: 'Database transaction failed.' });
+    }
+});
+
 // POST /api/employees/check-duplicates - Check for possible duplicates without syncing
 router.post('/check-duplicates', async (req, res) => {
     const { actingUserId } = req.body;
@@ -530,7 +644,7 @@ router.post('/check-duplicates', async (req, res) => {
         // --- STEP 1: FETCH ALL HIRED APPLICANTS (interview_status = 'Assessed') ---
         const [hiredApplicants] = await connection.query(
             `SELECT id, first_name, middle_initial, last_name, suffix, email_address, phone_number, 
-                    date_of_birth, sex, tin, barangay, city_municipality, highest_grade_completed,
+                    DATE_FORMAT(date_of_birth, '%Y-%m-%d') as date_of_birth, sex, tin, barangay, city_municipality, highest_grade_completed,
                     interview_status, position_id
              FROM profile_entries 
              WHERE interview_status = 'Assessed'
@@ -578,7 +692,8 @@ router.post('/check-duplicates', async (req, res) => {
             first: (emp.first_name || '').trim().toLowerCase(),
             last: (emp.last_name || '').trim().toLowerCase(),
             fullName: `${emp.first_name} ${emp.last_name}`,
-            employee_id: emp.employee_id
+            employee_id: emp.employee_id,
+            id: emp.id
         }));
 
         // --- STEP 3: CHECK FOR DUPLICATES ---
@@ -598,6 +713,7 @@ router.post('/check-duplicates', async (req, res) => {
                 duplicateMatch = {
                     type: 'exact',
                     existingEmployeeId: existing.employee_id,
+                    existingId: existing.id,
                     message: `Match found: ${existing.employee_id}`
                 };
             } else if (appData.first_name && appData.last_name) {
@@ -617,6 +733,7 @@ router.post('/check-duplicates', async (req, res) => {
                         duplicateMatch = {
                             type: 'fuzzy',
                             existingEmployeeId: dbEmp.employee_id,
+                            existingId: dbEmp.id,
                             similarName: dbEmp.fullName,
                             message: `Similar to: ${dbEmp.fullName} (${dbEmp.employee_id})`
                         };
@@ -659,7 +776,7 @@ router.post('/sync-hired-applicants', async (req, res) => {
         // --- STEP 1: FETCH ALL HIRED APPLICANTS (interview_status = 'Assessed') ---
         const [hiredApplicants] = await connection.query(
             `SELECT id, first_name, middle_initial, last_name, suffix, email_address, phone_number, 
-                    date_of_birth, sex, tin, barangay, city_municipality, highest_grade_completed,
+                    DATE_FORMAT(date_of_birth, '%Y-%m-%d') as date_of_birth, sex, tin, barangay, city_municipality, highest_grade_completed,
                     interview_status, position_id
              FROM profile_entries 
              WHERE interview_status = 'Assessed'
@@ -810,7 +927,7 @@ router.post('/sync-hired-applicants', async (req, res) => {
         }
 
         await connection.beginTransaction();
-        const idPrefix = 'PSAKLG-14032';
+        const idPrefix = 'PSA-14032';
         const [latestEmployee] = await connection.query(
             "SELECT employee_id FROM employees WHERE employee_id LIKE ? ORDER BY id DESC LIMIT 1 FOR UPDATE",
             [`${idPrefix}-%`]
@@ -910,6 +1027,33 @@ router.post('/sync-hired-applicants', async (req, res) => {
         return res.status(500).json({ error: 'Database transaction failed.' });
     } finally {
         if (connection) connection.release();
+    }
+});
+
+// POST /api/employees/link-profile-entries
+router.post('/link-profile-entries', verifyToken, checkRole(['Super_Admin', 'Admin', 'PACD']), async (req, res) => {
+    const { links, actingUserId } = req.body;
+    if (!actingUserId) return res.status(403).json({ error: 'Permission denied.' });
+    if (!Array.isArray(links) || links.length === 0) return res.json({ message: 'No links to process.' });
+
+    const connection = await dbPool.getConnection();
+    try {
+        await connection.beginTransaction();
+        
+        for (const link of links) {
+            if (link.applicantId && link.employeeId) {
+                await connection.query('UPDATE profile_entries SET employee_id = ? WHERE id = ?', [link.employeeId, link.applicantId]);
+            }
+        }
+
+        await connection.commit();
+        res.json({ message: 'Profile entries linked to employees successfully.' });
+    } catch (err) {
+        await connection.rollback();
+        console.error('Error linking profile entries:', err);
+        res.status(500).json({ error: 'Failed to link profile entries.' });
+    } finally {
+        connection.release();
     }
 });
 

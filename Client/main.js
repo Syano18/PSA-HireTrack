@@ -736,16 +736,19 @@ async function startApp() {
             // Determine the target folder based on certificate type
             let targetFolder;
             if (certificateType === 'training') {
-                targetFolder = path.join('C:', 'HireTrack PDFs', 'Training Certificate');
+              targetFolder = path.join('C:', 'HireTrack PDFs', 'Training Certificate');
             } else if (certificateType === 'employment') {
-                targetFolder = path.join('C:', 'HireTrack PDFs', 'Employment Certificate');
+              targetFolder = path.join('C:', 'HireTrack PDFs', 'Employment Certificate');
+            } else if (certificateType === 'external') {
+              // New: save to External folder for external partner certificates
+              targetFolder = path.join('C:', 'HireTrack PDFs', 'External');
             } else {
-                return { status: 'failed', message: 'Invalid certificate type.' };
+              return { status: 'failed', message: 'Invalid certificate type.' };
             }
 
             // Create the folder if it doesn't exist
             if (!fs.existsSync(targetFolder)) {
-                fs.mkdirSync(targetFolder, { recursive: true });
+              fs.mkdirSync(targetFolder, { recursive: true });
             }
 
             const finalFilePath = path.join(targetFolder, `${fileName}.${extension}`);
@@ -753,10 +756,17 @@ async function startApp() {
             // Move the file from temp to target folder
             fs.renameSync(tempFilePath, finalFilePath);
 
+            // Auto-open the saved file with default PDF viewer
+            try {
+              await shell.openPath(finalFilePath);
+            } catch (openErr) {
+              console.error('Auto-open failed:', openErr?.message || openErr);
+            }
+
             return { 
-                status: 'completed', 
-                message: `Certificate saved to ${targetFolder}`,
-                path: finalFilePath
+              status: 'completed', 
+              message: `Certificate saved to ${targetFolder}`,
+              path: finalFilePath
             };
         } catch (err) {
             console.error('Failed to auto-save certificate:', err);

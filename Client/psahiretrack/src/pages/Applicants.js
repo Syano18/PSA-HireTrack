@@ -604,7 +604,7 @@ const Applicants = () => {
               onClick={handleOpenEvalModal} 
               disabled={noCriteriaSurveys.length === 0 || applicants.length === 0}
               title={
-                applicants.length === 0 ? "No applicants available to set criteria for" :
+                applicants.length === 0 ? "No available applicant to evaluate" :
                 noCriteriaSurveys.length === 0 ? "All surveys have evaluation criteria set" : 
                 "Configure evaluation criteria for applicant assessment"
               }

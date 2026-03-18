@@ -91,6 +91,26 @@ router.post('/titles', async (req, res) => {
     return res.status(403).json({ error: 'Authentication required.' });
   }
 
+  // Validate required fields
+  const missingFields = [];
+  if (!title || !String(title).trim()) missingFields.push('title');
+  if (!start_date || !String(start_date).trim()) missingFields.push('start_date');
+  if (!end_date || !String(end_date).trim()) missingFields.push('end_date');
+  if (hours === undefined || hours === null || hours === '') missingFields.push('hours');
+  if (!venue || !String(venue).trim()) missingFields.push('venue');
+  if (missingFields.length > 0) {
+    return res.status(400).json({ error: `Missing required fields: ${missingFields.join(', ')}` });
+  }
+  // Validate date order: start_date must be on or before end_date
+  const parsedStart = new Date(start_date);
+  const parsedEnd = new Date(end_date);
+  if (isNaN(parsedStart.getTime()) || isNaN(parsedEnd.getTime())) {
+    return res.status(400).json({ error: 'Invalid date format for start_date or end_date.' });
+  }
+  if (parsedStart > parsedEnd) {
+    return res.status(400).json({ error: 'start_date cannot be after end_date.' });
+  }
+
   try {
     if (!title || !title.trim()) {
       return res.status(400).json({ error: 'Title cannot be empty.' });
@@ -143,6 +163,25 @@ router.put('/titles/:id', async (req, res) => {
 
     if (!actingUserId) {
         return res.status(403).json({ error: 'Authentication required.' });
+    }
+    // Validate required fields for update
+    const missingFields = [];
+    if (!title || !String(title).trim()) missingFields.push('title');
+    if (!start_date || !String(start_date).trim()) missingFields.push('start_date');
+    if (!end_date || !String(end_date).trim()) missingFields.push('end_date');
+    if (hours === undefined || hours === null || hours === '') missingFields.push('hours');
+    if (!venue || !String(venue).trim()) missingFields.push('venue');
+    if (missingFields.length > 0) {
+      return res.status(400).json({ error: `Missing required fields: ${missingFields.join(', ')}` });
+    }
+    // Validate date order: start_date must be on or before end_date
+    const parsedStart = new Date(start_date);
+    const parsedEnd = new Date(end_date);
+    if (isNaN(parsedStart.getTime()) || isNaN(parsedEnd.getTime())) {
+      return res.status(400).json({ error: 'Invalid date format for start_date or end_date.' });
+    }
+    if (parsedStart > parsedEnd) {
+      return res.status(400).json({ error: 'start_date cannot be after end_date.' });
     }
     
     try {

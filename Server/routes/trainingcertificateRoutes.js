@@ -351,7 +351,26 @@ router.post('/generate-batch-training-certificate', async (req, res) => {
     // --- NEW: Handle Batch for Multiple Temporary Employees (from CSV) ---
     if (req.body.certificates && Array.isArray(req.body.certificates)) {
       const { certificates, transmitterName, encodedBy, certType } = req.body;
-      
+
+      try {
+        const duplicateErrors = [];
+        for (const cert of certificates) {
+          const recipientNameLocal = `${cert.first_name || ''} ${cert.middle_initial || ''} ${cert.last_name || ''} ${cert.suffix || ''}`.replace(/\s+/g, ' ').trim() || cert.name;
+          const [existingUser] = await dbPool.query(
+            "SELECT id FROM certificate_registry WHERE certificate_type = 'training' AND recipient_name = ? AND JSON_UNQUOTE(JSON_EXTRACT(details, '$.training_title')) = ? LIMIT 1",
+            [recipientNameLocal, cert.trainingTitle]
+          );
+          if (existingUser.length > 0) {
+            duplicateErrors.push({ name: recipientNameLocal, title: cert.trainingTitle });
+          }
+        }
+        if (duplicateErrors.length > 0) {
+          return res.status(409).json({ message: JSON.stringify({ type: 'DUPLICATES', duplicates: duplicateErrors }) });
+        }
+      } catch (innerErr) {
+        console.error('[generate-batch-training-certificate] individual duplicate check failed:', innerErr.message);
+      }
+
       const doc = new PDFDocument({
         size: 'A4',
         margin: 72,

@@ -236,12 +236,12 @@ router.post('/check-duplicate', async (req, res) => {
 router.get('/sync-filter-options', async (req, res) => {
     try {
         const survey = req.query.survey;
-        // Filter: Hired AND Synced Trainings
+        // Filter: Hired AND Synced Trainings, and survey contract must have ended
         const baseWhere = `
             WHERE (
                 (pe.assessment_remarks = 'Hired' AND pe.interview_status = 'Synced Trainings')
                 OR
-                (pe.assessment_remarks LIKE 'REPLACED%' AND pe.interview_status = 'Synced Employees')
+                (pe.assessment_remarks LIKE 'REPLACED%' AND pe.interview_status IN ('Synced Employees', 'Synced Trainings'))
             )
         `;
 
@@ -255,6 +255,7 @@ router.get('/sync-filter-options', async (req, res) => {
             `);
             const [pendingCount] = await dbPool.query(`
                 SELECT COUNT(*) as count FROM profile_entries pe
+                JOIN surveys s ON pe.survey_id = s.id
                 ${baseWhere}
             `);
             res.json({ surveys: surveys.map(s => s.name), positions: [], pendingCount: pendingCount[0].count });
@@ -291,7 +292,7 @@ router.post('/sync-preview', async (req, res) => {
             WHERE (
                 (pe.assessment_remarks = 'Hired' AND pe.interview_status = 'Synced Trainings')
                 OR
-                (pe.assessment_remarks LIKE 'REPLACED%' AND pe.interview_status = 'Synced Employees')
+                (pe.assessment_remarks LIKE 'REPLACED%' AND pe.interview_status IN ('Synced Employees', 'Synced Trainings'))
             )
             AND s.name = ? AND p.title = ?
         `, [surveyName, position]);
@@ -841,7 +842,7 @@ router.post('/surveys', async (req, res) => {
 // PUT (Update) an existing survey with new fields
 router.put('/surveys/:id', async (req, res) => {
     const { id } = req.params;
-    const { name, contract_start_date, contract_end_date, focal_person_id, actingUserId, hiring_date, positions } = req.body;
+    const { name, contract_start_date, contract_end_date, focal_person_id, actingUserId, hiring_date, positions, rating_criteria } = req.body;
     if (!actingUserId) return res.status(403).json({ error: 'Permission denied.' });
     
     const trimmedName = (typeof name === 'string') ? name.trim() : '';
@@ -878,10 +879,19 @@ router.put('/surveys/:id', async (req, res) => {
         const [oldRecordRows] = await dbPool.query('SELECT * FROM surveys WHERE id = ?', [id]);
         if (oldRecordRows.length === 0) return res.status(404).json({ error: 'Survey not found.' });
 
-        const [result] = await dbPool.query(
-            'UPDATE surveys SET name = ?, contract_start_date = ?, contract_end_date = ?, focal_person_id = ?, hiring_date = ?, positions = ? WHERE id = ?',
-            [trimmedName, contract_start_date || null, contract_end_date || null, focal_person_id || null, hiring_date || null, positions ? JSON.stringify(positions) : null, id]
-        );
+        let updateSql = 'UPDATE surveys SET name = ?, contract_start_date = ?, contract_end_date = ?, focal_person_id = ?, hiring_date = ?, positions = ?';
+        let updateParams = [trimmedName, contract_start_date || null, contract_end_date || null, focal_person_id || null, hiring_date || null, positions ? JSON.stringify(positions) : null];
+
+        if (rating_criteria !== undefined) {
+            updateSql += ', rating_criteria = ?';
+            updateParams.push(rating_criteria);
+        }
+
+        updateSql += ' WHERE id = ?';
+        updateParams.push(id);
+
+        const [result] = await dbPool.query(updateSql, updateParams);
+
         if (result.affectedRows === 0) return res.status(404).json({ error: 'Survey not found during update.' });
         
         // ✅ CASCADE contract date changes to all employment records (Option 1)

@@ -31,14 +31,14 @@ const Sidebar = ({ onLogout, user }) => {
     ];
 
     const visibleLinks = navLinks.filter(link => {
-        if (['Account', 'Utilities', 'Applicants', 'Certificate', 'External Partners'].includes(link.name)) {
+        if (['Account', 'Utilities', 'Certificate', 'External Partners'].includes(link.name)) {
             return ['Super_Admin', 'Admin', 'PACD'].includes(user.role);
         }
-        if (['Assessment'].includes(link.name)) {
-            return ['Super_Admin', 'Focal Person', 'Admin', 'PACD'].includes(user.role);
+        if (['Assessment' , 'Applicants'].includes(link.name)) {
+            return ['Super_Admin'].includes(user.role);
         }
         if (['Interview'].includes(link.name)) {
-            return ['Super_Admin', 'Admin', 'PACD', 'Focal Person', 'User'].includes(user.role);
+            return ['Super_Admin', 'Admin'].includes(user.role);
         }
         return true;
     });

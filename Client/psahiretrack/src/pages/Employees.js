@@ -155,7 +155,7 @@ const Employees = () => {
   const [isImportLoading, setIsImportLoading] = useState(false);
   const [showSaveButtonTooltip, setShowSaveButtonTooltip] = useState(false);
   const [employeesWithRecords, setEmployeesWithRecords] = useState(new Set());
-  // const [surveys, setSurveys] = useState([]); // Removed, not used
+  const [surveys, setSurveys] = useState([]);
   const [trainingTitles, setTrainingTitles] = useState([]);
   const viewModalRef = useRef(null);
   const firstNameRef = useRef(null);
@@ -248,8 +248,8 @@ const Employees = () => {
   const fetchSurveys = useCallback(async () => {
     if (!serverIp) return;
     try {
-      await apiFetch('employments/surveys', serverIp);
-      // setSurveys(data); // Removed, not used
+      const data = await apiFetch('employments/surveys', serverIp);
+      setSurveys(data);
     } catch (err) {
       console.error("Failed to fetch surveys:", err);
     }
@@ -449,6 +449,21 @@ const Employees = () => {
     });
   }, [syncSelectedSurveyName, syncSelectedPosition, allAssessedApplicants, trainingTitles]);
   
+  const isHiringOngoing = useMemo(() => {
+    if (!syncSelectedSurveyName || !surveys.length) return false;
+    const survey = surveys.find(s => s.name === syncSelectedSurveyName);
+    if (!survey || !survey.hiring_date) return false;
+
+    try {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const hDate = parseISO(survey.hiring_date);
+      return hDate >= today;
+    } catch (e) {
+      return false;
+    }
+  }, [syncSelectedSurveyName, surveys]);
+
   const totalPages = Math.ceil(sortedEmployees.length / rowsPerPage);
   const indexOfLastItem = currentPage * rowsPerPage;
   const indexOfFirstItem = indexOfLastItem - rowsPerPage;
@@ -541,65 +556,53 @@ const Employees = () => {
   };
 
   // Validate date format (YYYY-MM-DD or M/D/YYYY or MM/DD/YYYY or D-M-YYYY)
+  // Accepts Excel serial (5 digits), common numeric formats, and falls back
+  // to native Date parsing for forgiving input handling.
   const isValidDateFormat = (dateString) => {
     if (!dateString || String(dateString).trim() === '') return false;
     const dateStr = String(dateString).trim();
-    
-    // Excel serial number format
+
+    // Excel serial number format (e.g., 43831)
     if (/^\d{5}$/.test(dateStr)) {
-      const num = parseInt(dateStr, 10);
-      return num >= 1 && num <= 60000; // Valid Excel date range
+      const serial = parseInt(dateStr, 10);
+      return serial >= 1 && serial <= 60000; // reasonable Excel range
     }
-    
+
     // Pattern: digit(1-4) / or - digit(1-2) / or - digit(1-4)
     const dateRegex = /^(\d{1,4})[/-](\d{1,2})[/-](\d{1,4})$/;
     const match = dateRegex.exec(dateStr);
-    if (!match) return false;
-    
-    const [, part1, part2, part3] = match;
-    const num1 = parseInt(part1, 10);
-    const num2 = parseInt(part2, 10);
-    const num3 = parseInt(part3, 10);
-    
-    // Determine format and validate
-    let month, day, year;
-    
-    // YYYY-MM-DD format
-    if (part1.length === 4 && (part1[0] === '1' || part1[0] === '2')) {
-      year = num1;
-      month = num2;
-      day = num3;
-    }
-    // MM/DD/YYYY format or DD/MM/YYYY (ambiguous - try MM/DD first)
-    else if (part3.length === 4 && (part3[0] === '1' || part3[0] === '2')) {
-      // Assume MM/DD/YYYY
-      month = num1;
-      day = num2;
-      year = num3;
-      if (month > 12) {
-        // Try DD/MM/YYYY instead
-        month = num2;
-        day = num1;
+    if (match) {
+      const [, part1, part2, part3] = match;
+      const num1 = parseInt(part1, 10);
+      const num2 = parseInt(part2, 10);
+      const num3 = parseInt(part3, 10);
+
+      let month, day, year;
+      // YYYY-MM-DD
+      if (part1.length === 4 && (part1[0] === '1' || part1[0] === '2')) {
+        year = num1; month = num2; day = num3;
       }
-    } else {
-      return false; // Ambiguous format without 4-digit year
+      // MM/DD/YYYY or DD/MM/YYYY (try MM/DD first)
+      else if (part3.length === 4 && (part3[0] === '1' || part3[0] === '2')) {
+        month = num1; day = num2; year = num3;
+        if (month > 12) {
+          month = num2; day = num1; // treat as DD/MM/YYYY
+        }
+      } else {
+        return false;
+      }
+
+      if (month < 1 || month > 12) return false;
+      if (day < 1 || day > 31) return false;
+      if (year < 1900 || year > 2100) return false;
+
+      const daysInMonth = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+      const isLeapYear = (year % 4 === 0 && year % 100 !== 0) || (year % 400 === 0);
+      const maxDay = month === 2 && isLeapYear ? 29 : daysInMonth[month - 1];
+      return day <= maxDay;
     }
-    
-    // Validate month (1-12)
-    if (month < 1 || month > 12) return false;
-    
-    // Validate day (1-31 basic check, more specific per month)
-    if (day < 1 || day > 31) return false;
-    
-    // Validate year (reasonable range: 1900-2100)
-    if (year < 1900 || year > 2100) return false;
-    
-    // Month-specific day validation
-    const daysInMonth = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    const isLeapYear = (year % 4 === 0 && year % 100 !== 0) || (year % 400 === 0);
-    const maxDay = month === 2 && isLeapYear ? 29 : daysInMonth[month - 1];
-    
-    return day <= maxDay;
+
+    return false;
   };
 
   const normalizeName = (row) => {
@@ -709,7 +712,7 @@ const Employees = () => {
 
           // Validate date format
           if (rowData.date_of_birth && !isValidDateFormat(rowData.date_of_birth)) {
-            rowErrorList.push(`Invalid date format for date_of_birth. Expected: YYYY-MM-DD or MM/DD/YYYY`);
+            rowErrorList.push(`Invalid date format for date_of_birth. Expected: MM/DD/YYYY`);
           }
 
           // Validate barangay exists in city
@@ -874,6 +877,154 @@ const Employees = () => {
         setImportDuplicateMarkers(finalMarkers);
         setExcludedImportRows(new Set(Object.keys(finalMarkers).map(Number)));
         setIsImportModalOpen(true);
+
+        // Run server-side validation in background and merge results into the review table
+        (async () => {
+          if (!(sessionState && sessionState.user && sessionState.user.id)) return;
+          try {
+            const validateResult = await apiFetch('employees/validate-import', serverIp, {
+              method: 'POST',
+              body: JSON.stringify({ actingUserId: sessionState.user.id, employees: rows })
+            });
+
+            // Map server errors to the importErrors state (successful response with status field)
+            if (validateResult.status === 'error' && validateResult.errors) {
+              const newImportErrors = { ...rowErrors };
+              validateResult.errors.forEach(errStr => {
+                const m = errStr.match(/^Row\s+(\d+):\s*(.*)$/);
+                if (m) {
+                  const serverIndex = parseInt(m[1], 10) - 2; // server row numbering
+                  if (!newImportErrors[serverIndex]) newImportErrors[serverIndex] = [];
+                  
+                  const serverMsg = m[2];
+                  const existingErrors = newImportErrors[serverIndex];
+                  const isDateRedundant = existingErrors.some(e => e.includes('Invalid date format')) && serverMsg.includes('Invalid or missing date_of_birth');
+                  const isLocationRedundant = existingErrors.some(e => e.includes('does not exist in') || e.includes('not found in database')) && (serverMsg.includes('not found in') || serverMsg.includes('not found.'));
+
+                  if (!isDateRedundant && !isLocationRedundant) {
+                    newImportErrors[serverIndex].push(`${serverMsg}`);
+                  }
+                }
+              });
+              setImportErrors(newImportErrors);
+            }
+
+            // Map server warnings to duplicate markers
+            if (validateResult.status === 'warning' && validateResult.warnings) {
+              const newDuplicateMarkers = { ...finalMarkers };
+              const newExcluded = new Set(Object.keys(finalMarkers).map(Number));
+              validateResult.warnings.forEach(warn => {
+                const originalIndex = warn.index;
+                newDuplicateMarkers[originalIndex] = {
+                  duplicateStatus: 'Potential Database Match',
+                  duplicateMatch: {
+                    type: 'similar',
+                    similarName: warn.message,
+                    existingEmployeeId: warn.existingEmployeeId
+                  }
+                };
+                newExcluded.add(originalIndex);
+              });
+              setImportDuplicateMarkers(newDuplicateMarkers);
+              setExcludedImportRows(newExcluded);
+            }
+          } catch (e) {
+            // apiFetch throws for non-2xx responses; inspect e.data for structured payload
+            console.debug('validate-import error object:', e);
+
+            if (e && e.data) {
+              // Map errors
+              if (Array.isArray(e.data.errors) && e.data.errors.length > 0) {
+                const newImportErrors = { ...rowErrors };
+                e.data.errors.forEach(errStr => {
+                  const m = errStr.match(/^Row\s+(\d+):\s*(.*)$/);
+                  if (m) {
+                    const serverIndex = parseInt(m[1], 10) - 2;
+                    if (!newImportErrors[serverIndex]) newImportErrors[serverIndex] = [];
+
+                    const serverMsg = m[2];
+                    const existingErrors = newImportErrors[serverIndex];
+                    const isDateRedundant = existingErrors.some(e => e.includes('Invalid date format')) && serverMsg.includes('Invalid or missing date_of_birth');
+                    const isLocationRedundant = existingErrors.some(e => e.includes('does not exist in') || e.includes('not found in database')) && (serverMsg.includes('not found in') || serverMsg.includes('not found.'));
+
+                    if (!isDateRedundant && !isLocationRedundant) {
+                      newImportErrors[serverIndex].push(`${serverMsg}`);
+                    }
+                  }
+                });
+                setImportErrors(newImportErrors);
+              }
+
+              // Map warnings
+              if (Array.isArray(e.data.warnings) && e.data.warnings.length > 0) {
+                const newDuplicateMarkers = { ...finalMarkers };
+                const newExcluded = new Set(Object.keys(finalMarkers).map(Number));
+                e.data.warnings.forEach(warn => {
+                  const originalIndex = warn.index;
+                  newDuplicateMarkers[originalIndex] = {
+                    duplicateStatus: 'Potential Database Match',
+                    duplicateMatch: {
+                      type: 'similar',
+                      similarName: warn.message,
+                      existingEmployeeId: warn.existingEmployeeId
+                    }
+                  };
+                  newExcluded.add(originalIndex);
+                });
+                setImportDuplicateMarkers(newDuplicateMarkers);
+                setExcludedImportRows(newExcluded);
+              }
+            } else if (e && typeof e.message === 'string') {
+              // Fallback: sometimes the thrown error message contains JSON
+              try {
+                const parsed = JSON.parse(e.message);
+                console.debug('Parsed error.message JSON:', parsed);
+                if (parsed.errors && Array.isArray(parsed.errors)) {
+                  const newImportErrors = { ...rowErrors };
+                  parsed.errors.forEach(errStr => {
+                    const m = errStr.match(/^Row\s+(\d+):\s*(.*)$/);
+                    if (m) {
+                      const serverIndex = parseInt(m[1], 10) - 2;
+                      if (!newImportErrors[serverIndex]) newImportErrors[serverIndex] = [];
+
+                      const serverMsg = m[2];
+                      const existingErrors = newImportErrors[serverIndex];
+                      const isDateRedundant = existingErrors.some(e => e.includes('Invalid date format')) && serverMsg.includes('Invalid or missing date_of_birth');
+                      const isLocationRedundant = existingErrors.some(e => e.includes('does not exist in') || e.includes('not found in database')) && (serverMsg.includes('not found in') || serverMsg.includes('not found.'));
+
+                      if (!isDateRedundant && !isLocationRedundant) {
+                        newImportErrors[serverIndex].push(`${serverMsg}`);
+                      }
+                    }
+                  });
+                  setImportErrors(newImportErrors);
+                }
+                if (parsed.warnings && Array.isArray(parsed.warnings)) {
+                  const newDuplicateMarkers = { ...finalMarkers };
+                  const newExcluded = new Set(Object.keys(finalMarkers).map(Number));
+                  parsed.warnings.forEach(warn => {
+                    const originalIndex = warn.index;
+                    newDuplicateMarkers[originalIndex] = {
+                      duplicateStatus: 'Potential Database Match',
+                      duplicateMatch: {
+                        type: 'similar',
+                        similarName: warn.message,
+                        existingEmployeeId: warn.existingEmployeeId
+                      }
+                    };
+                    newExcluded.add(originalIndex);
+                  });
+                  setImportDuplicateMarkers(newDuplicateMarkers);
+                  setExcludedImportRows(newExcluded);
+                }
+              } catch (parseErr) {
+                console.error('Could not parse validate-import error message as JSON:', parseErr, e.message);
+              }
+            } else {
+              console.error('Validation request failed (no payload):', e);
+            }
+          }
+        })();
       } catch (err) {
         showToast('Failed to parse CSV file. Please ensure it is properly formatted.', 'error');
       }
@@ -911,13 +1062,22 @@ const Employees = () => {
     }
 
     setIsImportLoading(true);
+    let filterIndexToOriginalIndex = [];
     try {
+      // Create mapping from filtered index to original importData index
+      filterIndexToOriginalIndex = [];
+      importData.forEach((_, index) => {
+        if (!excludedImportRows.has(index)) {
+          filterIndexToOriginalIndex.push(index);
+        }
+      });
+
       // Filter out excluded rows with duplicates
       let filteredImportData = importData.filter((_, index) => !excludedImportRows.has(index));
-      
+
       // Normalize names (uppercase, fix middle initial)
       filteredImportData = filteredImportData.map(row => normalizeName(row));
-      
+
       const result = await apiFetch('employees/import', serverIp, {
         method: 'POST',
         body: JSON.stringify({
@@ -927,11 +1087,73 @@ const Employees = () => {
         })
       });
 
+      // If the server returns warnings, we can also display them in the table
+      if (result.status === 'warning') {
+        showToast('Potential duplicates found in database. Please review the highlighted rows.', 'warning');
+        const newDuplicateMarkers = { ...importDuplicateMarkers };
+        const newExcluded = new Set(excludedImportRows);
+
+        if (result.warnings && result.warnings.length > 0) {
+          result.warnings.forEach(warn => {
+            const originalIndex = filterIndexToOriginalIndex[warn.index];
+            if (originalIndex !== undefined) {
+              newDuplicateMarkers[originalIndex] = {
+                duplicateStatus: 'Potential Database Match',
+                duplicateMatch: {
+                  type: 'similar',
+                  similarName: 'Server Sync Warning: ' + warn.message,
+                  existingEmployeeId: warn.existingEmployeeId
+                }
+              };
+              newExcluded.add(originalIndex);
+            }
+          });
+        }
+        setImportDuplicateMarkers(newDuplicateMarkers);
+        setExcludedImportRows(newExcluded);
+        setIsImportLoading(false);
+        return;
+      }
+
       showToast(result.message || 'Import completed successfully!', 'success');
       fetchEmployees();
       handleCloseImportModal();
     } catch (err) {
-      showToast(err.message || 'Failed to import employees.', 'error');
+      if (err.data && err.data.errors && err.data.errors.length > 0) {
+        showToast('Server returned errors. Please fix the highlighted rows in your CSV.', 'error');
+        
+        // Map server errors back to their original row indices
+        const newImportErrors = { ...importErrors };
+        let hasUnmappedErrors = false;
+        
+        err.data.errors.forEach(serverError => {
+          const match = serverError.match(/^Row (\d+):\s*(.*)$/);
+          if (match) {
+            const serverRowNum = parseInt(match[1], 10);
+            const serverIndex = serverRowNum - 2; // Server uses i+2 based on filtered array
+            const originalIndex = filterIndexToOriginalIndex[serverIndex];
+            
+            if (originalIndex !== undefined) {
+              if (!newImportErrors[originalIndex]) {
+                newImportErrors[originalIndex] = [];
+              }
+              newImportErrors[originalIndex].push(`Server Action Required: ${match[2]}`);
+            } else {
+              hasUnmappedErrors = true;
+            }
+          } else {
+            hasUnmappedErrors = true;
+          }
+        });
+        
+        setImportErrors(newImportErrors);
+        
+        if (hasUnmappedErrors) {
+          showToast(err.message || 'Failed to import employees.', 'error');
+        }
+      } else {
+        showToast(err.message || 'Failed to import employees.', 'error');
+      }
     } finally {
       setIsImportLoading(false);
     }
@@ -1007,7 +1229,7 @@ const Employees = () => {
 
   const handleConfirmSyncFromPreview = async () => {
     setIsSyncLoading(true);
-    
+
     try {
       // Also exclude applicants outside the current filtered set
       const filteredIds = new Set(syncPreviewApplicants.map(a => a.id));
@@ -1016,51 +1238,67 @@ const Employees = () => {
 
       const result = await apiFetch('employees/sync-hired-applicants', serverIp, {
         method: 'POST',
-        body: JSON.stringify({ actingUserId: sessionState.user.id, ignoreWarnings: false, excludedApplicantIds: finalExcludedIds })
+        body: JSON.stringify({ actingUserId: sessionState.user.id, ignoreWarnings: true, excludedApplicantIds: finalExcludedIds })
       });
-      
-      if (result.status === 'warning') {
-        setSyncModalStep('results');
-        setSyncResults(result);
-        showToast('⚠️ Warnings detected during sync. Please review before proceeding.', 'warning');
-      } else {
-        // Update applicant interview status from Assessed to Sync
-        const syncedApplicantIds = syncPreviewApplicants
-          .filter(app => !excludedApplicants.has(app.id))
-          .map(app => app.id);
-        
-        if (syncedApplicantIds.length > 0) {
-          try {
-            await apiFetch('applicants/update-interview-status', serverIp, {
-              method: 'POST',
-              body: JSON.stringify({ applicantIds: syncedApplicantIds, newStatus: 'Synced Employees', actingUserId: sessionState.user.id })
-            });
-          } catch (statusErr) {
-            console.error('Failed to update applicant interview status:', statusErr);
-          }
-        }
 
-        // Update interview status for excluded applicants
-        const excludedApplicantIds = syncPreviewApplicants
-          .filter(app => excludedApplicants.has(app.id))
-          .map(app => app.id);
-        
-        if (excludedApplicantIds.length > 0) {
-          try {
-            await apiFetch('applicants/update-interview-status', serverIp, {
-              method: 'POST',
-              body: JSON.stringify({ applicantIds: excludedApplicantIds, newStatus: 'Excluded from Sync', actingUserId: sessionState.user.id })
-            });
-          } catch (statusErr) {
-            console.error('Failed to update excluded applicants interview status:', statusErr);
-          }
+      // Update applicant interview status from Assessed to Synced Employees for INCLUDED applicants
+      const syncedApplicantIds = syncPreviewApplicants
+        .filter(app => !excludedApplicants.has(app.id))
+        .map(app => app.id);
+
+      if (syncedApplicantIds.length > 0) {
+        try {
+          await apiFetch('applicants/update-interview-status', serverIp, {
+            method: 'POST',
+            body: JSON.stringify({ applicantIds: syncedApplicantIds, newStatus: 'Synced Employees', actingUserId: sessionState.user.id })
+          });
+        } catch (statusErr) {
+          console.error('Failed to update applicant interview status:', statusErr);
         }
-        
-        showToast(result.message || 'Sync completed successfully!', 'success');
-        await fetchEmployees();
-        await fetchAssessedApplicants();
-        handleCloseSyncModal();
       }
+
+      // Also set excluded applicants to 'Synced Employees' (do not mark as Excluded from Sync)
+      const excludedApplicantIds = syncPreviewApplicants
+        .filter(app => excludedApplicants.has(app.id))
+        .map(app => app.id);
+
+      if (excludedApplicantIds.length > 0) {
+        try {
+          await apiFetch('applicants/update-interview-status', serverIp, {
+            method: 'POST',
+            body: JSON.stringify({ applicantIds: excludedApplicantIds, newStatus: 'Synced Employees', actingUserId: sessionState.user.id })
+          });
+        } catch (statusErr) {
+          console.error('Failed to update excluded applicants interview status:', statusErr);
+        }
+      }
+
+      // Link excluded duplicates to existing employees
+      const linksToCreate = [];
+      syncPreviewApplicants.forEach(app => {
+          if (excludedApplicants.has(app.id)) {
+              const duplicate = duplicateMarkers.get(app.id);
+              if (duplicate && duplicate.duplicateMatch && duplicate.duplicateMatch.existingId) {
+                  linksToCreate.push({
+                      applicantId: app.id,
+                      employeeId: duplicate.duplicateMatch.existingId
+                  });
+              }
+          }
+      });
+      if (linksToCreate.length > 0) {
+            try {
+              await apiFetch('employees/link-profile-entries', serverIp, {
+                  method: 'POST',
+                  body: JSON.stringify({ links: linksToCreate, actingUserId: sessionState.user.id })
+              });
+            } catch (linkErr) { console.error('Failed to link profile entries:', linkErr); }
+      }
+
+      showToast(result.message || 'Sync completed successfully!', 'success');
+      await fetchEmployees();
+      await fetchAssessedApplicants();
+      handleCloseSyncModal();
     } catch (err) {
       const errorPayload = { status: 'error', message: 'An unknown error occurred.', errors: [] };
       const structured = err.data || (() => { try { return JSON.parse(err.message); } catch { return null; } })();
@@ -1094,23 +1332,23 @@ const Employees = () => {
         body: JSON.stringify({ actingUserId: sessionState.user.id, ignoreWarnings, excludedApplicantIds: finalExcludedIds })
       });
       
-      // Update applicant interview status from Assessed to Sync
+      // Update applicant interview status from Assessed to 'Synced Employees' for INCLUDED applicants
       const syncedApplicantIds = syncPreviewApplicants
         .filter(app => !excludedApplicants.has(app.id))
         .map(app => app.id);
-      
+
       if (syncedApplicantIds.length > 0) {
         try {
           await apiFetch('applicants/update-interview-status', serverIp, {
             method: 'POST',
-            body: JSON.stringify({ applicantIds: syncedApplicantIds, newStatus: 'Sync', actingUserId: sessionState.user.id })
+            body: JSON.stringify({ applicantIds: syncedApplicantIds, newStatus: 'Synced Employees', actingUserId: sessionState.user.id })
           });
         } catch (statusErr) {
           console.error('Failed to update applicant interview status:', statusErr);
         }
       }
 
-      // Update interview status for excluded applicants
+      // Also set excluded preview applicants to 'Synced Employees' (do not mark as Excluded from Sync)
       const excludedApplicantIds = syncPreviewApplicants
         .filter(app => excludedApplicants.has(app.id))
         .map(app => app.id);
@@ -1119,11 +1357,33 @@ const Employees = () => {
         try {
           await apiFetch('applicants/update-interview-status', serverIp, {
             method: 'POST',
-            body: JSON.stringify({ applicantIds: excludedApplicantIds, newStatus: 'Excluded from Sync', actingUserId: sessionState.user.id })
+            body: JSON.stringify({ applicantIds: excludedApplicantIds, newStatus: 'Synced Employees', actingUserId: sessionState.user.id })
           });
         } catch (statusErr) {
           console.error('Failed to update excluded applicants interview status:', statusErr);
         }
+      }
+
+      // Link excluded duplicates to existing employees
+      const linksToCreate = [];
+      syncPreviewApplicants.forEach(app => {
+          if (excludedApplicants.has(app.id)) {
+              const duplicate = duplicateMarkers.get(app.id);
+              if (duplicate && duplicate.duplicateMatch && duplicate.duplicateMatch.existingId) {
+                  linksToCreate.push({
+                      applicantId: app.id,
+                      employeeId: duplicate.duplicateMatch.existingId
+                  });
+              }
+          }
+      });
+      if (linksToCreate.length > 0) {
+           try {
+              await apiFetch('employees/link-profile-entries', serverIp, {
+                  method: 'POST',
+                  body: JSON.stringify({ links: linksToCreate, actingUserId: sessionState.user.id })
+              });
+           } catch (linkErr) { console.error('Failed to link profile entries:', linkErr); }
       }
       
       showToast(result.message || 'Sync completed successfully!', 'success');
@@ -1530,27 +1790,27 @@ const Employees = () => {
             </div>
             <form id="addEditForm" onSubmit={handleFormSubmit} className="flex-auto p-6">
               <div className="grid grid-cols-1 gap-x-4 gap-y-4 sm:grid-cols-6">
-                <div className="sm:col-span-2"><label className="block text-sm font-medium text-gray-700 dark:text-gray-300">First Name*</label><input ref={firstNameRef} type="text" name="first_name" value={formData.first_name} onChange={handleInputChange} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" /></div>
+                <div className="sm:col-span-2"><label className="block text-sm font-medium text-gray-700 dark:text-gray-300">First Name <span className="text-red-500">*</span></label><input ref={firstNameRef} type="text" name="first_name" value={formData.first_name} onChange={handleInputChange} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" /></div>
                 <div className="sm:col-span-1"><label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Middle Initial</label><input ref={middleInitialRef} type="text" name="middle_initial" value={formData.middle_initial} onChange={handleInputChange} className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" /></div>
-                <div className="sm:col-span-2"><label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Last Name*</label><input ref={lastNameRef} type="text" name="last_name" value={formData.last_name} onChange={handleInputChange} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" /></div>
+                <div className="sm:col-span-2"><label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Last Name <span className="text-red-500">*</span></label><input ref={lastNameRef} type="text" name="last_name" value={formData.last_name} onChange={handleInputChange} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" /></div>
                 <div className="sm:col-span-1"><label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Suffix</label><input type="text" name="suffix" value={formData.suffix} onChange={handleInputChange} className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" /></div>
-                <div className="sm:col-span-3"><label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Email Address (e.g. angelicademunyo@gmial.com)</label><input type="email" name="email" value={formData.email} onChange={handleInputChange} className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" /></div>
+                <div className="sm:col-span-3"><label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Email Address (e.g. juandelacruz@gmail.com)</label><input type="email" name="email" value={formData.email} onChange={handleInputChange} className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" /></div>
                 <div className="sm:col-span-3"><label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Phone Number (e.g. 9179836137)</label><input type="tel" name="phone_number" value={formData.phone_number} onChange={handleInputChange} pattern="^9\d{9}$" maxLength="10" title="Must be 10 digits starting with 9" className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" /></div>
-                <div className="sm:col-span-2"><label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Date of Birth*</label><input ref={dateOfBirthRef} type="date" name="date_of_birth" value={formData.date_of_birth} onChange={handleInputChange} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" /></div>
+                <div className="sm:col-span-2"><label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Date of Birth <span className="text-red-500">*</span></label><input ref={dateOfBirthRef} type="date" name="date_of_birth" value={formData.date_of_birth} onChange={handleInputChange} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" /></div>
                 <div className="sm:col-span-2">
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Sex*</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Sex <span className="text-red-500">*</span></label>
                   <SearchableDropdown id="sex" options={sexOptions} value={formData.sex} onChange={(value) => handleInputChange({ target: { name: 'sex', value } })} placeholder="Select Sex" required />
                 </div>
                 <div className="sm:col-span-2"><label className="block text-sm font-medium text-gray-700 dark:text-gray-300">TIN (e.g. 123-456-789)</label><input type="text" name="tin_no" value={formData.tin_no} onChange={handleInputChange} className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" /></div>
                 <div className="sm:col-span-3">
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">City/Municipality*</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">City/Municipality <span className="text-red-500">*</span></label>
                   <SearchableDropdown id="city" options={municipalityOptions} value={formData.city} onChange={(value) => handleInputChange({ target: { name: 'city', value } })} placeholder="Select City/Municipality" required />
                 </div>
                 <div className="sm:col-span-3">
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Barangay*</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Barangay <span className="text-red-500">*</span></label>
                   <SearchableDropdown id="barangay" options={barangayOptions} value={formData.barangay} onChange={(value) => handleInputChange({ target: { name: 'barangay', value } })} placeholder="Select Barangay" required disabled={!formData.city} />
                 </div>
-                <div className="sm:col-span-6"><label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Highest Grade Completed (Specify Course if College Graduate)*</label><input ref={highestGradeRef} type="text" name="highest_grade_completed" value={formData.highest_grade_completed} onChange={handleInputChange} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" /></div>
+                <div className="sm:col-span-6"><label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Highest Grade Completed (Specify Course if College Graduate) <span className="text-red-500">*</span></label><input ref={highestGradeRef} type="text" name="highest_grade_completed" value={formData.highest_grade_completed} onChange={handleInputChange} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" /></div>
               </div>
             </form>
             <div className="flex-shrink-0 flex justify-end px-6 py-4 space-x-2 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-200 dark:border-gray-700 rounded-b-lg">
@@ -1727,13 +1987,14 @@ const Employees = () => {
                   </button>
                   <button
                     type="button" onClick={handleProceedFromFilter}
-                    disabled={!syncSelectedSurveyName || !syncSelectedPosition || syncFilteredCount === 0 || isSyncLoading || isTrainingNotStarted}
+                    disabled={!syncSelectedSurveyName || !syncSelectedPosition || syncFilteredCount === 0 || isSyncLoading || isTrainingNotStarted || isHiringOngoing}
                     title={
                       isSyncLoading ? 'Loading...' : 
                       !syncSelectedSurveyName ? 'Select a survey' : 
                       !syncSelectedPosition ? 'Select a position' : 
                       syncFilteredCount === 0 ? 'No applicants match the selected criteria' : 
                       isTrainingNotStarted ? 'Cannot sync: The training for these applicants has not yet started.' : 
+                      isHiringOngoing ? 'Cannot sync: Hiring process is still ongoing for this survey.' :
                       'Proceed to next step'
                     }
                     className="flex items-center gap-2 rounded-lg bg-purple-600 px-4 py-2 font-semibold text-white hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -1755,8 +2016,8 @@ const Employees = () => {
                       <tr>
                         <th className="p-3 text-center font-semibold w-12">Include</th>
                         <th className="p-3 text-left font-semibold">Name</th>
-                        <th className="p-3 text-left font-semibold">Position</th>
-                        <th className="p-3 text-left font-semibold">Survey</th>
+                        <th className="p-3 text-left font-semibold">Phone no.</th>
+                        <th className="p-3 text-left font-semibold">Educational Attainment</th>
                         <th className="p-3 text-center font-semibold">Status</th>
                       </tr>
                     </thead>
@@ -1790,8 +2051,8 @@ const Employees = () => {
                                   )}
                                 </div>
                               </td>
-                              <td className="p-3">{app.position || 'N/A'}</td>
-                              <td className="p-3">{app.survey_name || 'N/A'}</td>
+                              <td className="p-3">{app.phone_number || 'N/A'}</td>
+                              <td className="p-3">{app.highest_grade_completed || 'N/A'}</td>
                               <td className="p-3 text-center">
                                 {isExcluded && duplicate ? (
                                   <span className="inline-block px-2 py-1 text-xs font-semibold rounded bg-gray-200 text-gray-800 dark:bg-gray-600 dark:text-gray-200">Excluded</span>

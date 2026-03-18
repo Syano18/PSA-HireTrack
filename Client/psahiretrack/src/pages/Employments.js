@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { FaSort, FaSortUp, FaSortDown, FaEye, FaPencilAlt, FaStar, FaTrash, FaArrowRight, FaCheck, FaArrowLeft, FaSync } from 'react-icons/fa';
-import { FiPlus, FiDownload, FiX, FiSave } from 'react-icons/fi';
+import { FaSort, FaSortUp, FaSortDown, FaEye, FaPencilAlt, FaStar, FaTrash, FaArrowRight, FaCheck, FaArrowLeft } from 'react-icons/fa';
+import { FiPlus, FiDownload, FiX, FiSave, FiUpload } from 'react-icons/fi';
 import { parseISO, format } from 'date-fns';
 import ProgressModal from '../components/Progress';
 import ToastContainer from '../components/ToastContainer';
@@ -214,9 +214,6 @@ const Employments = () => {
   const employeeDropdownRef = useRef(null);
   const positionDropdownRef = useRef(null);
   const surveyDropdownRef = useRef(null);
-  const focalPersonDropdownRef = useRef(null);
-  const startDateRef = useRef(null);
-  const endDateRef = useRef(null);
 
   const computedAverage = useMemo(() => {
     const scores = Object.values(ratingCriteria).map(v => parseInt(v)).filter(v => !isNaN(v));
@@ -251,21 +248,28 @@ const Employments = () => {
     return computedRating ? map[computedRating] : 'text-gray-400 bg-gray-50 dark:bg-gray-900/30 border-gray-200 dark:border-gray-700';
   }, [computedRating]);
 
-  const isSyncSurveyContractInFuture = useMemo(() => {
+  const isSyncSurveyContractEnded = useMemo(() => {
     if (!syncSelectedSurveyName || !surveys.length) {
-        return false;
+        return true;
     }
     const selectedSurvey = surveys.find(s => s.name === syncSelectedSurveyName);
     if (!selectedSurvey || !selectedSurvey.contract_end_date) {
-        return false; // If no end date, assume it's not in the future.
+        return true;
     }
-    const today = new Date();
-    today.setHours(0, 0, 0, 0); // Normalize to start of day for comparison
-    
-    const [year, month, day] = selectedSurvey.contract_end_date.split('-').map(Number);
-    const localContractEndDate = new Date(year, month - 1, day);
-    
-    return localContractEndDate > today;
+    try {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        
+        let dateStr = selectedSurvey.contract_end_date;
+        if (typeof dateStr === 'string' && dateStr.includes('T')) {
+            dateStr = dateStr.split('T')[0];
+        }
+        const [year, month, day] = dateStr.split('-').map(Number);
+        const localContractEndDate = new Date(year, month - 1, day);
+        return localContractEndDate <= today;
+    } catch (e) {
+        return false;
+    }
   }, [syncSelectedSurveyName, surveys]);
 
   useClickOutside(viewModalRef, () => {
@@ -281,11 +285,6 @@ const Employments = () => {
   const handleCloseViewModal = useCallback(() => {
       setViewingRecord(null);
   }, []);
-
-  const handleInputChange = (e) => {
-    const { name, value } = e.target;
-    setFormData(prev => ({ ...prev, [name]: value }));
-  };
 
   const handleCloseBatchEditModal = useCallback(() => {
       setIsBatchEditModalOpen(false);
@@ -438,12 +437,6 @@ const Employments = () => {
     })).sort((a, b) => a.label.localeCompare(b.label)),
   [surveys]);
 
-  const focalPersonOptions = useMemo(() =>
-    focalPersons.map(fp => ({
-      value: fp.id,
-      label: `${fp.first_name} ${fp.middle_initial || ''} ${fp.last_name} ${fp.suffix || ''}`.replace(/\s+/g, ' ').trim()
-    })).sort((a, b) => a.label.localeCompare(b.label)),
-  [focalPersons]);
   // --- END OF MEMOIZED OPTIONS ---
 
 
@@ -572,6 +565,7 @@ const Employments = () => {
         survey_id: ratingRecord.survey_id,
         contract_start_date: ratingRecord.contract_start_date,
         contract_end_date: ratingRecord.contract_end_date,
+        focal_person_id: ratingRecord.focal_person_id,
       };
 
       await apiFetch(`employments/${ratingRecord.id}`, serverIp, {
@@ -602,8 +596,8 @@ const Employments = () => {
         position_id: record.position_id ?? '',
         survey_id: record.survey_id ?? '',
         focal_person_id: record.focal_person_id ?? '',
-        contract_start_date: record.contract_start_date ?? '',
-        contract_end_date: record.contract_end_date ?? ''
+        contract_start_date: formatDateForInput(record.contract_start_date),
+        contract_end_date: formatDateForInput(record.contract_end_date)
       };
       setFormData(formValues);
       setOriginalFormData(formValues);
@@ -641,17 +635,7 @@ const Employments = () => {
       surveyDropdownRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       return;
     }
-    if (!formData.contract_start_date) {
-      startDateRef.current?.focus();
-      startDateRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      return;
-    }
-    if (!formData.contract_end_date) {
-      endDateRef.current?.focus();
-      endDateRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      return;
-    }
-    if (new Date(formData.contract_end_date) < new Date(formData.contract_start_date)) {
+    if (formData.contract_start_date && formData.contract_end_date && new Date(formData.contract_end_date) < new Date(formData.contract_start_date)) {
       showToast('End date cannot be earlier than the start date.', 'error');
       return;
     }
@@ -888,7 +872,18 @@ const Employments = () => {
         <div className="flex-grow" />
         {(userPermissions.canManage || userPermissions.isHrDesignate) && (
           <>
-            <button onClick={handleSyncClick} disabled={isSyncLoading || syncPendingCount === 0} title={syncPendingCount === 0 ? 'No applicants ready for employment sync' : `${syncPendingCount} applicants ready for employment sync`} className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-white bg-purple-600 rounded-lg hover:bg-purple-700 dark:bg-purple-700 dark:hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed"><FiDownload className="w-4 h-4" />{isSyncLoading ? 'Loading...' : `Assign Employment to Hired (${syncPendingCount})`}</button>
+            <button
+              onClick={handleSyncClick}
+              disabled={isSyncLoading || syncPendingCount === 0}
+              title={
+                syncPendingCount === 0
+                  ? 'No applicants ready for employment sync'
+                  : `${syncPendingCount} applicants ready for employment sync`
+              }
+              className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-white bg-purple-600 rounded-lg hover:bg-purple-700 dark:bg-purple-700 dark:hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <FiDownload className="w-4 h-4" />{isSyncLoading ? 'Loading...' : `Assign Employment to Hired (${syncPendingCount})`}
+            </button>
             <button onClick={handleBatchEditClick} disabled={selectedRecords.size <= 1} title={selectedRecords.size <= 1 ? 'Select at least 2 records to batch edit' : `Batch edit ${selectedRecords.size} records`} className="px-3 py-2 text-xs font-semibold text-white bg-purple-600 rounded-lg hover:bg-purple-700 dark:bg-purple-700 dark:hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed">Batch Edit ({selectedRecords.size})</button>
           </>
         )}
@@ -926,9 +921,27 @@ const Employments = () => {
                   <td className="px-5 py-4">
                     <div className="flex items-center justify-center space-x-1">
                       <button onClick={() => handleViewClick(rec)} title="View Employment Record" className="p-1 rounded-lg transition-colors text-gray-500 hover:text-gray-800 hover:bg-gray-100 dark:text-gray-400 dark:hover:text-white dark:hover:bg-gray-700"><FaEye className="w-4 h-4" /></button>
-                      {(userPermissions.canManage || userPermissions.isHrDesignate) && <button onClick={() => handleEditClick(rec)} title="Edit Employment Record" className="p-1 rounded-lg transition-colors text-indigo-600 hover:text-indigo-900 hover:bg-indigo-50 dark:hover:text-indigo-300 dark:hover:bg-indigo-900/20"><FaPencilAlt className="w-4 h-4" /></button>}                      
+                      {(userPermissions.canManage || userPermissions.isHrDesignate) && (
+                        <button
+                          onClick={() => handleEditClick(rec)}
+                          disabled={!!rec.rating}
+                          title={!!rec.rating ? "Cannot edit: Record has a rating" : "Edit Employment Record"}
+                          className={`p-1 rounded-lg transition-colors ${!!rec.rating ? 'text-gray-400 cursor-not-allowed opacity-50' : 'text-indigo-600 hover:text-indigo-900 hover:bg-indigo-50 dark:hover:text-indigo-300 dark:hover:bg-indigo-900/20'}`}
+                        >
+                          <FaPencilAlt className="w-4 h-4" />
+                        </button>
+                      )}
                       {(userPermissions.isSuperAdmin || (userPermissions.isFocalPerson && rec.focal_person_id === sessionState?.user?.id)) && !rec.rating && (!rec.remarks || !rec.remarks.startsWith('REPLACED')) && <button onClick={() => handleProvideRatingClick(rec)} title="Provide Rating" className="p-1 rounded-lg transition-colors text-green-600 hover:text-green-800 hover:bg-green-50 dark:text-green-400 dark:hover:text-green-200 dark:hover:bg-green-900/20"><FaStar className="w-4 h-4" /></button>}
-                      {userPermissions.canDelete && <button onClick={() => handleDeleteClick(rec)} title="Delete Employment Record" className="p-1 rounded-lg transition-colors text-red-600 hover:text-red-900 hover:bg-red-50 dark:text-red-500 dark:hover:text-red-300 dark:hover:bg-red-900/20"><FaTrash className="w-4 h-4" /></button>}
+                      {userPermissions.canDelete && (
+                        <button
+                          onClick={() => handleDeleteClick(rec)}
+                          disabled={!!rec.rating}
+                          title={!!rec.rating ? "Cannot delete: Record has a rating" : "Delete Employment Record"}
+                          className={`p-1 rounded-lg transition-colors ${!!rec.rating ? 'text-gray-400 cursor-not-allowed opacity-50' : 'text-red-600 hover:text-red-900 hover:bg-red-50 dark:text-red-500 dark:hover:text-red-300 dark:hover:bg-red-900/20'}`}
+                        >
+                          <FaTrash className="w-4 h-4" />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -958,9 +971,9 @@ const Employments = () => {
               <h2 className="text-xl font-semibold text-gray-900 dark:text-white">{editingRecord ? 'Edit' : 'Add New'} Employment Record</h2>
             </div>
             <form onSubmit={handleFormSubmit} id="employmentForm" className="flex-auto p-6">
-              <div className="grid grid-cols-1 gap-x-6 gap-y-4 md:grid-cols-2">
-                <div ref={employeeDropdownRef}>
-                  <label htmlFor="employee_id" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Employee*</label>
+              <div className="grid grid-cols-1 gap-y-4">
+                <div>
+                  <label htmlFor="employee_id" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Employee <span className="text-red-500">*</span></label>
                   <SearchableDropdown
                     id="employee_id"
                     options={employeeOptions}
@@ -970,8 +983,8 @@ const Employments = () => {
                     required
                   />
                 </div>
-                <div ref={positionDropdownRef}>
-                  <label htmlFor="position_id" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Position Title*</label>
+                <div>
+                  <label htmlFor="position_id" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Position Title <span className="text-red-500">*</span></label>
                   <SearchableDropdown
                     id="position_id"
                     options={positionOptions}
@@ -982,8 +995,8 @@ const Employments = () => {
                   />
                 </div>
 
-                <div ref={surveyDropdownRef} className="md:col-span-2">
-                  <label htmlFor="survey_id" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Name of Census/Survey*</label>
+                <div>
+                  <label htmlFor="survey_id" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Name of Census/Survey <span className="text-red-500">*</span></label>
                   <SearchableDropdown
                     id="survey_id"
                     options={surveyOptions}
@@ -1012,46 +1025,6 @@ const Employments = () => {
                   />
                 </div>
 
-                <div className="grid grid-cols-2 gap-4 md:col-span-2">
-                  <div>
-                    <label htmlFor="contract_start_date" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Contract Start Date*</label>
-                    <input
-                      ref={startDateRef}
-                      type="date"
-                      id="contract_start_date"
-                      name="contract_start_date"
-                      value={formData.contract_start_date}
-                      onChange={handleInputChange}
-                      required
-                      className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="contract_end_date" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Contract End Date*</label>
-                    <input
-                      ref={endDateRef}
-                      type="date"
-                      id="contract_end_date"
-                      name="contract_end_date"
-                      value={formData.contract_end_date}
-                      onChange={handleInputChange}
-                      required
-                      className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
-                    />
-                  </div>
-                </div>
-
-                <div ref={focalPersonDropdownRef} className="md:col-span-2">
-                  <label htmlFor="focal_person_id" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Focal Person*</label>
-                  <SearchableDropdown
-                    id="focal_person_id"
-                    options={focalPersonOptions}
-                    value={formData.focal_person_id}
-                    onChange={(value) => setFormData(prev => ({ ...prev, focal_person_id: value }))}
-                    placeholder="Search or Select Focal Person"
-                    required
-                  />
-                </div>
               </div>
             </form>
             <div className="flex-shrink-0 flex justify-end px-6 py-4 space-x-2 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-200 dark:border-gray-700">
@@ -1130,12 +1103,12 @@ const Employments = () => {
                             <button type="button" onClick={handleCloseSyncModal} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors duration-200"><FiX className="w-4 h-4" />Cancel</button>
                             <button
                                 type="submit" 
-                                disabled={!syncSelectedSurveyName || !syncSelectedPosition || isSyncLoading || isSyncSurveyContractInFuture}
+                                disabled={!syncSelectedSurveyName || !syncSelectedPosition || isSyncLoading || !isSyncSurveyContractEnded}
                                 className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 shadow-sm hover:shadow"
                                 title={
                                     !syncSelectedSurveyName ? 'Please select a survey' :
                                     !syncSelectedPosition ? 'Please select a position' :
-                                    isSyncSurveyContractInFuture ? 'Cannot sync: The contract for this survey has not yet ended.' :
+                                    !isSyncSurveyContractEnded ? 'Cannot sync: The contract for this survey has not yet ended.' :
                                     isSyncLoading ? 'Processing...' :
                                     'Proceed to sync applicants'
                                 }
@@ -1194,7 +1167,7 @@ const Employments = () => {
                         </div>
                         <div className="flex-shrink-0 flex justify-end px-6 py-4 space-x-2 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-200 dark:border-gray-700">
                             <button type="button" onClick={handleCloseSyncModal} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600"><FiX className="w-4 h-4" />Cancel</button>
-                            <button type="button" onClick={handleConfirmSync} disabled={isSyncLoading} className="flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 font-semibold text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed">{isSyncLoading ? 'Syncing...' : <><FaSync className="w-4 h-4" />Confirm Sync</>}</button>
+                            <button type="button" onClick={handleConfirmSync} disabled={isSyncLoading} className="flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 font-semibold text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed">{isSyncLoading ? 'Syncing...' : <><FiUpload className="w-4 h-4" />Import Records</>}</button>
                         </div>
                     </div>
                 )}
@@ -1254,7 +1227,7 @@ const Employments = () => {
 
               <div>
                 <label htmlFor="batch_contract_start_date" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                  New Contract Start Date*
+                  New Contract Start Date <span className="text-red-500">*</span>
                 </label>
                 <input
                   id="batch_contract_start_date"
@@ -1268,7 +1241,7 @@ const Employments = () => {
 
               <div>
                 <label htmlFor="batch_contract_end_date" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                  New Contract End Date*
+                  New Contract End Date <span className="text-red-500">*</span>
                 </label>
                 <input
                   id="batch_contract_end_date"

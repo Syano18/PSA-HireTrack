@@ -177,7 +177,7 @@ const Assessment = () => {
   const transmittedApplicants = useMemo(() => {
     return applicants.filter(app => 
       app.focal_id != null && 
-      (app.interview_status === 'Transmitted to Focal Person' || app.interview_status === 'Assessed')
+      ['Transmitted to Focal Person', 'Assessed', 'Synced Employees', 'Synced Trainings'].includes(app.interview_status)
     );
   }, [applicants]);
 
@@ -335,7 +335,7 @@ const Assessment = () => {
     // Check if all filtered applicants have been transmitted to Focal
     // This requires both focal_id to be set AND interview_status to be "Transmitted to Focal Person" or "Assessed"
     return filtered.length > 0 && filtered.every(app => 
-      app.focal_id != null && app.focal_id !== '' && (app.interview_status === 'Transmitted to Focal Person' || app.interview_status === 'Assessed')
+      app.focal_id != null && app.focal_id !== '' && ['Transmitted to Focal Person', 'Assessed', 'Synced Employees', 'Synced Trainings'].includes(app.interview_status)
     );
   }, [filterSurvey, filterPosition, applicants]);
 
@@ -347,14 +347,14 @@ const Assessment = () => {
       if (filterPosition && app.position !== filterPosition) return false;
       return true;
     });
-    return filtered.length > 0 && filtered.every(app => app.interview_status === 'Assessed');
+    return filtered.length > 0 && filtered.every(app => ['Assessed', 'Synced Employees', 'Synced Trainings'].includes(app.interview_status));
   }, [filterSurvey, filterPosition, applicants]);
 
   // Applicants who are already transmitted to focal or already assessed
   const dropdownFiltered = useMemo(() => {
     return applicants.filter(app => {
       // Show applicants transmitted to focal or those already assessed
-      if (app.focal_id == null || (app.interview_status !== 'Transmitted to Focal Person' && app.interview_status !== 'Assessed')) return false; 
+      if (app.focal_id == null || !['Transmitted to Focal Person', 'Assessed', 'Synced Employees', 'Synced Trainings'].includes(app.interview_status)) return false; 
       
       if (filterSurvey   && app.survey_name !== filterSurvey)   return false;
       if (filterPosition && app.position    !== filterPosition) return false;
@@ -808,7 +808,7 @@ const Assessment = () => {
         `Written Examination\n(${weights.written_examination !== '' ? weights.written_examination + '%' : 'N/A'})`,
         `Personal Interview\n(${weights.interview_average !== '' ? weights.interview_average + '%' : 'N/A'})`,
         'Total Rating\n(100%)',
-        'Interviewers Remarks'
+        'Interviewer\'s Remarks'
       ];
       const tableData = filtered.map(app => {
         const weightedScores = parseWeightedScores(app);
@@ -1480,13 +1480,15 @@ const Assessment = () => {
           }),
         });
 
-        // Set interview_status to "Assessed" for ALL applicants in the filtered set
-        await apiFetch(`applicants/${app.id}/interview-status`, serverIp, {
-          method: 'PUT',
-          body: JSON.stringify({
-            interview_status: 'Assessed',
-          }),
-        });
+        // Set interview_status to "Assessed" only if they haven't proceeded to syncing yet
+        if (app.interview_status === 'Transmitted to Focal Person') {
+          await apiFetch(`applicants/${app.id}/interview-status`, serverIp, {
+            method: 'PUT',
+            body: JSON.stringify({
+              interview_status: 'Assessed',
+            }),
+          });
+        }
       }
     } catch (err) {
       showToast('Error saving assessment data: ' + err.message, 'error');
@@ -1519,7 +1521,7 @@ const Assessment = () => {
             {filterSurvey !== '' && filterPosition !== '' && (
               <>
                 <div className="text-right">
-                  <h3 className="text-xs font-semibold text-gray-600 dark:text-gray-400">Hiring Progress</h3>
+                  <h3 className="text-xs font-semibold text-gray-600 dark:text-gray-400">Target Hires</h3>
                   <p className={`text-sm font-semibold ${currentHiredCount === targetHiringCount && targetHiringCount > 0 ? 'text-green-600 dark:text-green-400' : 'text-gray-700 dark:text-gray-300'}`}>
                     {currentHiredCount} of {targetHiringCount}
                   </p>
@@ -2001,7 +2003,7 @@ const Assessment = () => {
                             </div>
                             {interviewRemarks && (
                               <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 hidden group-hover:block z-50 bg-gray-900 dark:bg-gray-200 text-white dark:text-gray-900 text-xs rounded-lg px-3 py-2 whitespace-normal break-words w-64 shadow-lg">
-                                <div className="font-semibold mb-1">Interview Remarks:</div>
+                                <div className="font-semibold mb-1">Interviewer's Remarks:</div>
                                 <div>{interviewRemarks}</div>
                                 <div className="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-gray-900 dark:border-t-gray-200"></div>
                               </div>
@@ -2019,7 +2021,7 @@ const Assessment = () => {
                     {/* Status - Text or Checkbox display */}
                     <td className="px-4 py-3 text-center break-words">
                       <div className="flex items-center justify-center">
-                        {app.interview_status === 'Assessed' ? (
+                        {['Assessed', 'Synced Employees', 'Synced Trainings'].includes(app.interview_status) ? (
                           <div className="flex flex-col items-center gap-1">
                             <span className={`text-xs font-bold uppercase px-2 py-1 rounded ${
                               app.assessment_remarks === 'Hired'
