@@ -2,9 +2,6 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
-// Make a synchronous call to the main process to get the theme setting
-const initialDarkMode = ipcRenderer.sendSync('get-dark-mode-sync');
-
 contextBridge.exposeInMainWorld('electronAPI', {
   // Login-related handlers
   getLoginState: () => ipcRenderer.invoke('get-login-state'),
@@ -25,9 +22,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Dark mode handlers
   getDarkMode: () => ipcRenderer.invoke('get-dark-mode'),
   setDarkMode: (value) => ipcRenderer.invoke('set-dark-mode', value),
-
-  // Expose initial dark mode state
-  initialDarkMode,
   
   // Download handlers for certificate generation
   prepareDownload: (payload) => ipcRenderer.invoke('prepare-download', payload),

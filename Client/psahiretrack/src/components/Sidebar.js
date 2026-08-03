@@ -34,11 +34,8 @@ const Sidebar = ({ onLogout, user }) => {
         if (['Account', 'Utilities', 'Certificate', 'External Partners'].includes(link.name)) {
             return ['Super_Admin', 'Admin', 'PACD'].includes(user.role);
         }
-        if (['Assessment' , 'Applicants'].includes(link.name)) {
+        if (['Applicants', 'Assessment', 'Interview'].includes(link.name)) {
             return ['Super_Admin'].includes(user.role);
-        }
-        if (['Interview'].includes(link.name)) {
-            return ['Super_Admin', 'Admin'].includes(user.role);
         }
         return true;
     });

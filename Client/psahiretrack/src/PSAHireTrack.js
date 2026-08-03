@@ -64,7 +64,6 @@ const App = () => {
                 <Route path="dashboard" element={<Dashboard />} />
                 <Route path="employees" element={<Employees />} />
                 <Route path="employments" element={<Employments />} />
-                <Route path="interview" element={<Interview />} />
                 <Route path="trainings" element={<Trainings />} />
                 <Route path="temp-certificates" element={<TempTrainingCertificates />} />
                 <Route path="certificates" element={<Certificates />} />
@@ -73,11 +72,12 @@ const App = () => {
             <Route element={<ProtectedRoute allowedRoles={ADMIN_ROLES} />}>
                 <Route path="accounts" element={<Accounts />} />
                 <Route path="utilities" element={<Utilities />} />
-                <Route path="applicants" element={<Applicants />} />
             </Route>
 
-            <Route element={<ProtectedRoute allowedRoles={['Super_Admin', 'Focal Person', 'Admin', 'PACD']} />}>
+            <Route element={<ProtectedRoute allowedRoles={['Super_Admin']} />}>
                 <Route path="assessment" element={<Assessment />} />
+                <Route path="interview" element={<Interview />} />
+                <Route path="applicants" element={<Applicants />} />
             </Route>
 
             <Route path="*" element={<Navigate to="/" replace />} />

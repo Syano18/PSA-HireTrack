@@ -436,28 +436,6 @@ router.post('/generate-batch-training-certificate', async (req, res) => {
        return res.status(400).json({ error: "Invalid request: 'trainings' array is required for single-employee batch generation." });
     }
 
-    // --- Turso Logging + get formatted REFERENCE_NUMBER as certificate number ---
-    const refNumber = await getTursoRefNumber('Training Certificate', name, req.body.transmitterName, req.body.encodedBy);
-
-    // --- Local DB Logging (certificate_registry) ---
-    try {
-        const trainingTitles = trainings.map(t => t.trainingTitle).join(', ');
-        const trainingDates = trainings.map(t => {
-             const s = formatDate(t.startDate);
-             const e = formatDate(t.endDate);
-             return s === e ? s : `${s} - ${e}`;
-        }).join(', ');
-        const trainingHours = trainings.map(t => t.hours || t.thours).join(', ');
-        const recipientNameLocal = `${first_name} ${middle_initial || ''} ${last_name} ${suffix || ''}`.replace(/\s+/g, ' ').trim();
-
-        await dbPool.query(
-            "INSERT IGNORE INTO certificate_registry (reference_number, certificate_type, recipient_name, details, issued_at) VALUES (?, ?, ?, ?, ?)",
-            [refNumber, 'training', recipientNameLocal, JSON.stringify({ training_title: trainingTitles, training_dates: trainingDates, training_hours: trainingHours, source: 'employee' }), new Date().toISOString()]
-        );
-    } catch (localDbErr) {
-        console.error("Failed to log generated batch training certificate locally:", localDbErr.message);
-    }
-
     if (!trainings || !Array.isArray(trainings) || trainings.length === 0) {
       return res.status(400).send('No training data provided for batch generation.');
     }
@@ -493,12 +471,27 @@ router.post('/generate-batch-training-certificate', async (req, res) => {
       const endFmt = formatDate(training.endDate);
       const dateString = (startFmt === endFmt) ? startFmt : `${startFmt} - ${endFmt}`;
 
+      // --- Turso Logging + get formatted REFERENCE_NUMBER as certificate number ---
+      const refNumber = await getTursoRefNumber('Training Certificate', name, req.body.transmitterName, req.body.encodedBy);
+
       // Generate encrypted QR verification URL
       const qrUrl = buildVerifyURL(refNumber, 'training', name);
+      const qrToken = qrUrl.split('?t=')[1];
       const qrCodeDataUrl = await QRCode.toDataURL(qrUrl, {
         errorCorrectionLevel: 'M',
         width: 512
       });
+
+      // --- Local DB Logging (certificate_registry) ---
+      try {
+          const recipientNameLocal = `${first_name} ${middle_initial || ''} ${last_name} ${suffix || ''}`.replace(/\s+/g, ' ').trim();
+          await dbPool.query(
+              "INSERT IGNORE INTO certificate_registry (reference_number, certificate_type, recipient_name, details, issued_at) VALUES (?, ?, ?, ?, ?)",
+              [refNumber, 'training', recipientNameLocal, JSON.stringify({ training_title: training.trainingTitle, training_dates: dateString, training_hours: training.hours || training.thours, source: 'employee', qr_token: qrToken }), new Date().toISOString()]
+          );
+      } catch (localDbErr) {
+          console.error("Failed to log generated batch training certificate locally:", localDbErr.message);
+      }
 
       // Turso Certificate Registry (for online validation)
       await registerCertificateInTurso(executeTurso, {

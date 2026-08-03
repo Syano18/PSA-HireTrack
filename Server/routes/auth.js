@@ -4,19 +4,30 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const dbPool = require('../db');
 const logError = require('../utils/logger');
-const admin = require('../firebaseAdmin');
+const { createClerkClient, verifyToken } = require('@clerk/clerk-sdk-node');
+const { OAuth2Client } = require('google-auth-library');
 require('dotenv').config();
+
+const clerkClient = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY });
 
 const router = express.Router();
 
 router.post('/login', async (req, res) => {
-    const { idToken } = req.body;
+    const authHeader = req.headers.authorization;
+    const idToken = authHeader ? authHeader.split('Bearer ')[1] : req.body.idToken;
     if (!idToken) return res.status(400).json({ message: 'ID Token is required.' });
 
     try {
-        // --- 1. VERIFY FIREBASE TOKEN ---
-        const decodedToken = await admin.auth().verifyIdToken(idToken);
-        const email = decodedToken.email;
+        // --- 1. VERIFY CLERK TOKEN ---
+        let decodedToken;
+        try {
+            decodedToken = await verifyToken(idToken, { secretKey: process.env.CLERK_SECRET_KEY });
+        } catch (error) {
+            return res.status(401).json({ message: 'Invalid Clerk token.' });
+        }
+        
+        const clerkUser = await clerkClient.users.getUser(decodedToken.sub);
+        const email = clerkUser.emailAddresses[0].emailAddress;
 
         // --- 2. CHECK LOCAL USER EXISTENCE ---
         // We assume the local 'email_address' field matches the Firebase email
@@ -111,6 +122,42 @@ router.get('/session/validate', async (req, res) => {
         }
         console.error(`Session validation error: ${err.message}`);
         res.status(401).json({ message: 'Session validation failed.' });
+    }
+});
+
+router.post('/login/google-ticket', async (req, res) => {
+    const { idToken, clientId } = req.body;
+    if (!idToken || !clientId) return res.status(400).json({ message: 'Google ID Token and Client ID are required.' });
+
+    try {
+        const client = new OAuth2Client(clientId);
+        const ticket = await client.verifyIdToken({
+            idToken,
+            audience: clientId,
+        });
+        const payload = ticket.getPayload();
+        const email = payload.email;
+
+        if (!email) return res.status(400).json({ message: 'Invalid Google token: No email found.' });
+
+        // Find user in Clerk
+        const fbUsers = await clerkClient.users.getUserList({ emailAddress: [email] });
+        if (fbUsers.length === 0) {
+            return res.status(404).json({ message: 'User not found in authentication system.' });
+        }
+
+        const clerkUser = fbUsers[0];
+
+        // Create sign-in ticket for the user
+        const signInToken = await clerkClient.signInTokens.createSignInToken({
+            userId: clerkUser.id,
+            expiresInSeconds: 300 // 5 minutes validity
+        });
+
+        res.json({ ticket: signInToken.token });
+    } catch (error) {
+        logError(error);
+        res.status(401).json({ message: 'Failed to verify Google token or generate Clerk ticket.', error: error.message });
     }
 });
 

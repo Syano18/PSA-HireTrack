@@ -4,12 +4,12 @@ import DemographicsRechart from '../components/DemographicsRechart';
 import { motion } from 'framer-motion';
 import MunicipalityBarChart from '../components/MunicipalityBarChart';
 import PerformanceRatingsChart from '../components/PerformanceRatingsChart';
-const Cover = require('../assets/cover.jpg');
 import { apiFetch } from '../components/API';
 import ToastContainer from '../components/ToastContainer';
 import useToast from '../hooks/useToast';
 import { useSettings } from '../context/SettingsContext';
 
+const Cover = require('../assets/cover.jpg');
 
 const Dashboard = ({ user, isDarkMode }) => {
     const { serverIp, isLoading: isSettingsLoading } = useSettings();

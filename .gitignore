@@ -29,6 +29,7 @@ Server/server.exe
 .env.production.local
 
 # --- Secret / credential files ---
+push.txt
 Client/client_secret.json
 client_secret.json
 *.pem

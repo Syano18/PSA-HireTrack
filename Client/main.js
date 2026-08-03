@@ -6,7 +6,6 @@ const fs = require('fs');
 const { exec } = require('child_process');
 const os = require('os');
 const http = require('http');
-const { autoUpdater } = require('electron-updater');
 require('dotenv').config();
 
 // Declare variables outside the async function
@@ -14,11 +13,15 @@ let store;
 let nodeFetch;
 let mainWindow;
 let uuidv4;
+let autoUpdater;
 
 async function initializeDependencies() {
   const { default: Store } = await import('electron-store');
   const { default: fetch } = await import('node-fetch');
   const { v4 } = await import('uuid');
+  
+  // Lazy load electron-updater to speed up initial script execution
+  autoUpdater = require('electron-updater').autoUpdater;
   
   store = new Store();
   nodeFetch = fetch;
@@ -38,9 +41,12 @@ function getLocalIP() {
 }
 
 async function startApp() {
-  await initializeDependencies();
+  // Start loading dependencies in parallel with app startup
+  const initPromise = initializeDependencies();
 
-  function createWindow() {
+  async function createWindow() {
+    await initPromise; // Wait for dependencies to be ready
+
     const isDev = !app.isPackaged;
     const isDark = store.get('isDarkMode');
     mainWindow = new BrowserWindow({
@@ -58,22 +64,37 @@ async function startApp() {
     });
 
     mainWindow.removeMenu();
-    mainWindow.maximize();
-    mainWindow.show();
+    
+    // Enable Ctrl+R to refresh the page (works for login and all other pages)
+    mainWindow.webContents.on('before-input-event', (event, input) => {
+      if (input.control && input.key.toLowerCase() === 'r' && input.type === 'keyDown') {
+        event.preventDefault();
+        mainWindow.reload();
+      }
+    });
 
-    // Allow Firebase/Google API certificate errors (handles corporate SSL inspection proxies)
+    mainWindow.once('ready-to-show', () => {
+      mainWindow.maximize();
+      mainWindow.show();
+    });
+
+    // Allow Firebase/Google API & Clerk certificate errors (handles corporate SSL inspection proxies)
     mainWindow.webContents.session.setCertificateVerifyProc((request, callback) => {
-      const googleHosts = [
+      const trustedHosts = [
         'identitytoolkit.googleapis.com',
         'securetoken.googleapis.com',
         'www.googleapis.com',
         'firebaseio.com',
         'firebaseapp.com',
         'googleapis.com',
+        'clerk.accounts.dev',
+        'clerk.dev',
+        'clerk.com',
+        'clerk-telemetry.com'
       ];
-      const isGoogle = googleHosts.some(h => request.hostname === h || request.hostname.endsWith('.' + h));
+      const isTrusted = trustedHosts.some(h => request.hostname === h || request.hostname.endsWith('.' + h));
       // 0 = success (trust), -2 = use default verification
-      callback(isGoogle ? 0 : -2);
+      callback(isTrusted ? 0 : -2);
     });
 
     // Set Content Security Policy (CSP) to fix security warning
@@ -85,7 +106,7 @@ async function startApp() {
         responseHeaders: {
           ...details.responseHeaders,
           'Content-Security-Policy': [
-            `default-src 'self' 'unsafe-inline' data:; script-src 'self' 'unsafe-inline' ${isDev ? "'unsafe-eval'" : ""}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' http://localhost:${serverPort} http://127.0.0.1:${serverPort} http://${serverIp}:${serverPort} https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.googleapis.com https://*.firebaseio.com https://*.firebaseapp.com`
+            `default-src 'self' 'unsafe-inline' data:; script-src 'self' 'unsafe-inline' ${isDev ? "'unsafe-eval'" : ""} https://*.clerk.accounts.dev; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://images.clerk.dev https://img.clerk.com; font-src 'self' data:; connect-src 'self' http://localhost:${serverPort} http://127.0.0.1:${serverPort} http://${serverIp}:${serverPort} https://*.clerk.accounts.dev wss://*.clerk.accounts.dev https://clerk-telemetry.com; worker-src 'self' blob:;`
           ]
         }
       });
@@ -105,7 +126,6 @@ async function startApp() {
       try { ipcMain.removeHandler(ch); } catch (e) { /* ignore if none */ }
     });
     // remove any plain listeners added with ipcMain.on
-    try { ipcMain.removeAllListeners('get-dark-mode-sync'); } catch (e) { /* ignore */ }
     try { ipcMain.removeAllListeners('check-for-updates'); } catch (e) { /* ignore */ }
     try { ipcMain.removeAllListeners('quit-and-install'); } catch (e) { /* ignore */ }
 
@@ -273,9 +293,6 @@ async function startApp() {
             mainWindow.webContents.send('onDarkModeChange', value);
         }
     });
-    ipcMain.on('get-dark-mode-sync', (event) => {
-        event.returnValue = store.get('isDarkMode');
-    });
 
     // --- IP address handlers ---
     ipcMain.handle('get-server-ip', () => {
@@ -364,7 +381,7 @@ async function startApp() {
                 if (tokens.refresh_token) {
                   store.set('googleRefreshToken', tokens.refresh_token);
                 }
-                resolve({ idToken: tokens.id_token, accessToken: tokens.access_token });
+                resolve({ idToken: tokens.id_token, accessToken: tokens.access_token, clientId: client_id });
               } else {
                 resolve({ error: tokens.error_description || 'Failed to retrieve ID token from Google.' });
               }
@@ -424,7 +441,7 @@ async function startApp() {
           if (tokens.refresh_token) {
             store.set('googleRefreshToken', tokens.refresh_token);
           }
-          return { idToken: tokens.id_token, accessToken: tokens.access_token };
+          return { idToken: tokens.id_token, accessToken: tokens.access_token, clientId: client_id };
         } else {
           // If refresh fails (e.g. revoked), clear the stored token so we force a new login next time
           store.delete('googleRefreshToken');
@@ -776,7 +793,6 @@ async function startApp() {
 
     // --- Auto Updater Logic ---
     function setupAutoUpdater() {
-      // Explicitly configure for private repository to avoid 404 on releases.atom
       autoUpdater.autoDownload = true;
       autoUpdater.autoInstallOnAppQuit = true;
       autoUpdater.allowPrerelease = false;
@@ -785,7 +801,6 @@ async function startApp() {
         provider: 'github',
         owner: 'Syano18',
         repo: 'PSA-HireTrack',
-        private: true
       });
 
       // Logging for troubleshooting
@@ -794,25 +809,21 @@ async function startApp() {
       // Clean up previous listeners and add new ones once
       autoUpdater.removeAllListeners();
       
-      autoUpdater.on('update-available', (info) => {
-        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-available', info);
-      });
-      autoUpdater.on('update-not-available', () => {
-        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-not-available');
-      });
-      autoUpdater.on('error', (err) => {
-        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-error', err.toString());
-      });
-      autoUpdater.on('download-progress', (progressObj) => {
-        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-progress', progressObj);
-      });
-      autoUpdater.on('update-downloaded', (info) => {
-        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-downloaded', info);
+      // Forward all auto-updater events to the renderer process
+      const events = ['update-available', 'update-not-available', 'update-error', 'download-progress', 'update-downloaded'];
+      events.forEach(eventName => {
+        autoUpdater.on(eventName, (...args) => {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send(eventName, ...args);
+          }
+        });
       });
 
       // Perform a silent background check 5 seconds after launch
       setTimeout(() => {
-        autoUpdater.checkForUpdates().catch(err => console.log('Silent background update check failed (this is normal if offline)'));
+        if (!isDev) {
+          autoUpdater.checkForUpdates().catch(err => console.log('Silent background update check failed:', err.message));
+        }
       }, 5000);
     }
 

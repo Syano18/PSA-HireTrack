@@ -5,8 +5,7 @@ import ToastContainer from '../components/ToastContainer';
 import useToast from '../hooks/useToast';
 import PSALogo from '../assets/logo.png';
 import { FaSun, FaMoon, FaEye, FaEyeSlash, FaCog, FaInfoCircle, FaGoogle, FaPaperPlane, FaUnlink, FaRedo, FaSync } from 'react-icons/fa';
-import { signInWithEmailAndPassword, GoogleAuthProvider, signInWithCredential, sendPasswordResetEmail } from "firebase/auth";
-import { auth } from "../firebase";
+import { useSignIn, useAuth } from '@clerk/clerk-react';
 import { FiX, FiSave, FiDownload } from 'react-icons/fi';
 
 // const appVersion = "v1.0.0"; // This will now be fetched from the main process
@@ -15,6 +14,9 @@ const LoginPage = () => {
     const { isDarkMode, setIsDarkMode } = useTheme();
     const { serverIp, updateServerIp } = useSettings();
     const { toasts, showToast, removeToast } = useToast();
+    
+    const { isLoaded, signIn, setActive } = useSignIn();
+    const { getToken } = useAuth();
 
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
@@ -42,10 +44,10 @@ const LoginPage = () => {
     const ThemeIcon = isDarkMode ? FaSun : FaMoon;
     const PasswordIcon = showPassword ? FaEyeSlash : FaEye;
 
-    useEffect(() => {
-        setEmail("officialchano18@gmail.com");
-        setPassword("admin123");
-    }, []);
+    // useEffect(() => {
+    //     setEmail("officialchano18@gmail.com");
+    //     setPassword("admin123");
+    // }, []);
 
     useEffect(() => {
         const checkGoogleConnection = async () => {
@@ -158,10 +160,28 @@ const LoginPage = () => {
             return;
         }
 
+        if (!isLoaded) {
+            setIsLoading(false);
+            return;
+        }
+
         try {
-            // 1. Authenticate with Firebase
-            const userCredential = await signInWithEmailAndPassword(auth, email, password);
-            const idToken = await userCredential.user.getIdToken();
+            // 1. Authenticate with Clerk
+            const result = await signIn.create({
+                identifier: email,
+                password,
+            });
+
+            if (result.status !== "complete") {
+                throw new Error("Additional authentication steps are required.");
+            }
+            
+            await setActive({ session: result.createdSessionId });
+            
+            // Wait for Clerk to make the session active and token available
+            // Let's use window.Clerk.session to get the token directly if useAuth is stale.
+            const activeSession = window.Clerk?.session;
+            const idToken = activeSession ? await activeSession.getToken() : await getToken();
 
             // 2. Send token to backend to get app session
             const controller = new AbortController();
@@ -169,8 +189,7 @@ const LoginPage = () => {
             
             const response = await fetch(`http://${serverIp}:3001/api/login`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ idToken }),
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
                 signal: controller.signal
             });
 
@@ -186,17 +205,15 @@ const LoginPage = () => {
         } catch (err) {
             console.error("Login Error:", err);
             
-            // Map Firebase error codes to user-friendly messages
             let userFriendlyError = 'An unexpected error occurred. Please try again.';
             
-            if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
-                userFriendlyError = 'Incorrect email or password. Please try again.';
-            } else if (err.code === 'auth/invalid-email') {
-                userFriendlyError = 'Invalid email address';
-            } else if (err.code === 'auth/user-disabled') {
-                userFriendlyError = 'This account has been disabled';
-            } else if (err.code === 'auth/too-many-requests') {
-                userFriendlyError = 'Too many login attempts. Please try again later.';
+            if (err.errors && err.errors.length > 0) {
+                const clerkError = err.errors[0].code;
+                if (clerkError === 'form_password_incorrect' || clerkError === 'form_identifier_not_found') {
+                    userFriendlyError = 'Incorrect email or password. Please try again.';
+                } else {
+                    userFriendlyError = err.errors[0].longMessage || err.message;
+                }
             } else if (err.name === 'AbortError') {
                 userFriendlyError = `Connection timeout to server at ${serverIp}:3001. Server may be offline or unreachable.`;
             } else if (err.message?.includes('Failed to fetch')) {
@@ -220,6 +237,11 @@ const LoginPage = () => {
             return;
         }
 
+        if (!isLoaded) {
+            setIsLoading(false);
+            return;
+        }
+
         try {
             // 1. Try Silent Login first (using stored Refresh Token)
             let result = await window.electronAPI.loginGoogleSilent();
@@ -231,30 +253,67 @@ const LoginPage = () => {
 
             if (result.error) throw new Error(result.error);
 
-            // 2. Use the returned Google ID Token to sign in to Firebase
-            const credential = GoogleAuthProvider.credential(result.idToken);
-            const userCredential = await signInWithCredential(auth, credential);
-            const idToken = await userCredential.user.getIdToken();
-
-            // Send token to backend to get app session
+            // 3. Exchange Google ID Token for Clerk Ticket via our Backend
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 5000);
             
-            const response = await fetch(`http://${serverIp}:3001/api/login`, {
+            const ticketResponse = await fetch(`http://${serverIp}:3001/api/login/google-ticket`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ idToken }),
+                body: JSON.stringify({ idToken: result.idToken, clientId: result.clientId }),
                 signal: controller.signal
             });
-
             clearTimeout(timeoutId);
-            const data = await response.json();
 
-            if (!response.ok) {
-                throw new Error(data.message || 'Google Login failed.');
+            const ticketData = await ticketResponse.json();
+
+            if (!ticketResponse.ok) {
+                throw new Error(ticketData.message + (ticketData.error ? ` (${ticketData.error})` : '') || 'Google Login failed to get ticket.');
             }
 
-            // Save session state via Electron bridge
+            const { ticket } = ticketData;
+
+            // 4. Use Ticket to Sign In to Clerk
+            if (window.Clerk?.session) {
+                await window.Clerk.signOut();
+            }
+
+            const signInAttempt = await signIn.create({
+                strategy: 'ticket',
+                ticket: ticket
+            });
+
+            if (signInAttempt.status !== "complete") {
+                throw new Error("Additional authentication steps are required.");
+            }
+            
+            await setActive({ session: signInAttempt.createdSessionId });
+            
+            // 5. Get Clerk Session Token directly from the created session
+            const sessionToUse = window.Clerk.client.sessions.find(s => s.id === signInAttempt.createdSessionId);
+            if (!sessionToUse) {
+                throw new Error("Failed to activate Clerk session.");
+            }
+            const clerkToken = await sessionToUse.getToken();
+
+            // 6. Send Clerk token to backend to get app session
+            const appController = new AbortController();
+            const appTimeoutId = setTimeout(() => appController.abort(), 5000);
+            
+            const appResponse = await fetch(`http://${serverIp}:3001/api/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${clerkToken}` },
+                signal: appController.signal
+            });
+            clearTimeout(appTimeoutId);
+
+            const data = await appResponse.json();
+
+            if (!appResponse.ok) {
+                throw new Error(data.message || 'Google Login failed to establish app session.');
+            }
+
+            // 7. Save session state via Electron bridge
             await window.electronAPI.setLoginState(data);
         } catch (err) {
             console.error("Google Login Error:", err);
@@ -269,6 +328,7 @@ const LoginPage = () => {
             }
             
             showToast(errorMessage, 'error');
+            alert("DEBUG ERROR: " + errorMessage);
         } finally {
             setIsLoading(false);
         }
@@ -285,13 +345,25 @@ const LoginPage = () => {
             return;
         }
 
+        if (!isLoaded) return;
+
         try {
-            await sendPasswordResetEmail(auth, resetEmail);
-            setResetMessage({ type: 'success', text: 'Password reset link sent! Please check your email.' });
+            await signIn.create({
+                strategy: "reset_password_email_code",
+                identifier: resetEmail
+            });
+            setResetMessage({ type: 'success', text: 'Password reset instructions sent! Please check your email for a code.' });
+            // Note: Clerk uses codes for password resets natively in this flow,
+            // but we'd need another form to input the code.
+            // If the user expects a link, it might be better handled by the backend 
+            // but since we want to keep it simple, we'll indicate an email was sent.
+            // Ideally we could use a custom backend route to generate a reset link using clerkClient on the server.
+            showToast('To complete reset, please check your email.', 'success');
         } catch (err) {
+            console.error("Password reset error:", err);
             let errorMessage = 'Failed to send reset email. Please check the address and try again.';
-            if (err.code === 'auth/user-not-found') {
-                errorMessage = 'No user found with this email address.';
+            if (err.errors && err.errors.length > 0) {
+                errorMessage = err.errors[0].longMessage || err.errors[0].message;
             }
             setResetMessage({ type: 'error', text: errorMessage });
         } finally {

@@ -100,6 +100,53 @@ const levenshtein = (a, b) => {
     return matrix[b.length][a.length];
 };
 
+// --- Helper: Fetch existing employees and build lookup maps for matching ---
+const fetchExistingEmployeesAndMaps = async (connection) => {
+    const [dbEmployees] = await connection.query("SELECT id, employee_id, first_name, last_name, DATE_FORMAT(date_of_birth, '%Y-%m-%d') as dob FROM employees");
+    
+    const existingEmployeeMap = new Map();
+    dbEmployees.forEach(emp => {
+        const key = `${(emp.first_name || '').trim().toLowerCase()}-${(emp.last_name || '').trim().toLowerCase()}-${emp.dob}`;
+        existingEmployeeMap.set(key, emp);
+    });
+    
+    const dbNames = dbEmployees.map(emp => ({
+        first: (emp.first_name || '').trim().toLowerCase(),
+        last: (emp.last_name || '').trim().toLowerCase(),
+        fullName: `${emp.first_name} ${emp.last_name}`,
+        employee_id: emp.employee_id,
+        id: emp.id
+    }));
+
+    return { existingEmployeeMap, dbNames };
+};
+
+// --- Helper: Generate unique key for exact matching ---
+const generateUniqueKey = (firstName, lastName, dob) => {
+    return `${(firstName || '').trim().toLowerCase()}-${(lastName || '').trim().toLowerCase()}-${dob}`;
+};
+
+// --- Helper: Find fuzzy match ---
+const findFuzzyMatch = (firstName, lastName, dbNames) => {
+    if (!firstName || !lastName) return null;
+    const currentFirst = firstName.trim().toLowerCase();
+    const currentLast = lastName.trim().toLowerCase();
+
+    for (const dbEmp of dbNames) {
+        if (Math.abs(currentFirst.length - dbEmp.first.length) > 2 || Math.abs(currentLast.length - dbEmp.last.length) > 2) continue;
+
+        const distFirst = levenshtein(currentFirst, dbEmp.first);
+        const distLast = levenshtein(currentLast, dbEmp.last);
+        const threshold = (currentFirst.length > 3 && currentLast.length > 3) ? 1 : 0;
+
+        if (distFirst <= threshold && distLast <= threshold) {
+            return dbEmp;
+        }
+    }
+    return null;
+};
+
+
 // GET /api/employees (No changes needed)
 router.get('/', verifyToken, checkRole(['Super_Admin', 'Admin', 'PACD', 'Focal Person', 'User']), async (req, res) => {
   try {
@@ -339,20 +386,7 @@ router.post('/import', async (req, res) => {
         });
 
         // --- ✅ STEP 1: PRE-FETCH EXISTING EMPLOYEES FOR DUPLICATE CHECK ---
-        const [dbEmployees] = await connection.query("SELECT id, employee_id, first_name, last_name, DATE_FORMAT(date_of_birth, '%Y-%m-%d') as dob FROM employees");
-        const existingEmployeeMap = new Map();
-        dbEmployees.forEach(emp => {
-            const key = `${(emp.first_name || '').trim().toLowerCase()}-${(emp.last_name || '').trim().toLowerCase()}-${emp.dob}`;
-            existingEmployeeMap.set(key, emp);
-        });
-        
-        // Prepare DB names for fuzzy matching
-        const dbNames = dbEmployees.map(emp => ({
-            first: (emp.first_name || '').trim().toLowerCase(),
-            last: (emp.last_name || '').trim().toLowerCase(),
-            fullName: `${emp.first_name} ${emp.last_name}`,
-            employee_id: emp.employee_id
-        }));
+        const { existingEmployeeMap, dbNames } = await fetchExistingEmployeesAndMaps(connection);
         
         const errors = [];
         const warnings = [];
@@ -376,7 +410,7 @@ router.post('/import', async (req, res) => {
             if (!parsedDob) {
                 errors.push(`Row ${rowNum}: Invalid date format for date_of_birth. Expected:MM/DD/YYYY`);
             } else {
-                 const uniqueKey = `${(employeeData.first_name || '').trim().toLowerCase()}-${(employeeData.last_name || '').trim().toLowerCase()}-${parsedDob}`;
+                 const uniqueKey = generateUniqueKey(employeeData.first_name, employeeData.last_name, parsedDob);
                 if (existingEmployeeMap.has(uniqueKey)) {
                     // ✅ Exact duplicate found in DB: Skip insertion, add to duplicates list
                     const existing = existingEmployeeMap.get(uniqueKey);
@@ -396,32 +430,15 @@ router.post('/import', async (req, res) => {
             }
 
             // --- ✅ STEP 3: FUZZY MATCHING (If not an exact duplicate) ---
-            if (!isExactDuplicate && employeeData.first_name && employeeData.last_name) {
-                const currentFirst = employeeData.first_name.trim().toLowerCase();
-                const currentLast = employeeData.last_name.trim().toLowerCase();
-
-                for (const dbEmp of dbNames) {
-                    // Optimization: Skip if length difference is too big
-                    if (Math.abs(currentFirst.length - dbEmp.first.length) > 2 || Math.abs(currentLast.length - dbEmp.last.length) > 2) continue;
-
-                    const distFirst = levenshtein(currentFirst, dbEmp.first);
-                    const distLast = levenshtein(currentLast, dbEmp.last);
-
-                    // Threshold: Distance of 1 allowed for names > 3 chars. 
-                    // If names are very short (<=3), require exact match (dist 0).
-                    const threshold = (currentFirst.length > 3 && currentLast.length > 3) ? 1 : 0;
-
-                    if (distFirst <= threshold && distLast <= threshold) {
-                        // If distance is 0, it's an exact name match but different DOB (since exact check passed)
-                        // If distance > 0, it's a fuzzy match
-                        warnings.push({
-                            index: i,
-                            row: rowNum,
-                            message: `Row ${rowNum}: Input "${employeeData.first_name} ${employeeData.last_name}" is a possible duplicate of "${dbEmp.fullName}" (similar name found in database).`,
-                            existingEmployeeId: dbEmp.employee_id
-                        });
-                        break; // Stop checking DB for this row once a match is found
-                    }
+            if (!isExactDuplicate) {
+                const fuzzyMatch = findFuzzyMatch(employeeData.first_name, employeeData.last_name, dbNames);
+                if (fuzzyMatch) {
+                    warnings.push({
+                        index: i,
+                        row: rowNum,
+                        message: `Row ${rowNum}: Input "${employeeData.first_name} ${employeeData.last_name}" is a possible duplicate of "${fuzzyMatch.fullName}" (similar name found in database).`,
+                        existingEmployeeId: fuzzyMatch.employee_id
+                    });
                 }
             }
 
@@ -538,20 +555,7 @@ router.post('/validate-import', async (req, res) => {
         });
 
         // --- STEP 1: PRE-FETCH EXISTING EMPLOYEES FOR DUPLICATE CHECK ---
-        const [dbEmployees] = await connection.query("SELECT id, employee_id, first_name, last_name, DATE_FORMAT(date_of_birth, '%Y-%m-%d') as dob FROM employees");
-        const existingEmployeeMap = new Map();
-        dbEmployees.forEach(emp => {
-            const key = `${(emp.first_name || '').trim().toLowerCase()}-${(emp.last_name || '').trim().toLowerCase()}-${emp.dob}`;
-            existingEmployeeMap.set(key, emp);
-        });
-        
-        // Prepare DB names for fuzzy matching
-        const dbNames = dbEmployees.map(emp => ({
-            first: (emp.first_name || '').trim().toLowerCase(),
-            last: (emp.last_name || '').trim().toLowerCase(),
-            fullName: `${emp.first_name} ${emp.last_name}`,
-            employee_id: emp.employee_id
-        }));
+        const { existingEmployeeMap, dbNames } = await fetchExistingEmployeesAndMaps(connection);
         
         const errors = [];
         const warnings = [];
@@ -573,7 +577,7 @@ router.post('/validate-import', async (req, res) => {
             if (!parsedDob) {
                 errors.push(`Row ${rowNum}: Invalid or missing date_of_birth.Expected: MM/DD/YYYY`);
             } else {
-                 const uniqueKey = `${(employeeData.first_name || '').trim().toLowerCase()}-${(employeeData.last_name || '').trim().toLowerCase()}-${parsedDob}`;
+                 const uniqueKey = generateUniqueKey(employeeData.first_name, employeeData.last_name, parsedDob);
                 if (existingEmployeeMap.has(uniqueKey)) {
                     // Existing exact duplicate - skipped in validation logic
                 } else if (seenInCsvKeys.has(uniqueKey)) {
@@ -583,27 +587,14 @@ router.post('/validate-import', async (req, res) => {
                 }
             }
 
-            if (employeeData.first_name && employeeData.last_name) {
-                const currentFirst = employeeData.first_name.trim().toLowerCase();
-                const currentLast = employeeData.last_name.trim().toLowerCase();
-
-                for (const dbEmp of dbNames) {
-                    if (Math.abs(currentFirst.length - dbEmp.first.length) > 2 || Math.abs(currentLast.length - dbEmp.last.length) > 2) continue;
-
-                    const distFirst = levenshtein(currentFirst, dbEmp.first);
-                    const distLast = levenshtein(currentLast, dbEmp.last);
-                    const threshold = (currentFirst.length > 3 && currentLast.length > 3) ? 1 : 0;
-
-                    if (distFirst <= threshold && distLast <= threshold) {
-                        warnings.push({
-                            index: i,
-                            row: rowNum,
-                            message: `Row ${rowNum}: Input "${employeeData.first_name} ${employeeData.last_name}" is a possible duplicate of "${dbEmp.fullName}" (similar name found in database).`,
-                            existingEmployeeId: dbEmp.employee_id
-                        });
-                        break; 
-                    }
-                }
+            const fuzzyMatch = findFuzzyMatch(employeeData.first_name, employeeData.last_name, dbNames);
+            if (fuzzyMatch) {
+                warnings.push({
+                    index: i,
+                    row: rowNum,
+                    message: `Row ${rowNum}: Input "${employeeData.first_name} ${employeeData.last_name}" is a possible duplicate of "${fuzzyMatch.fullName}" (similar name found in database).`,
+                    existingEmployeeId: fuzzyMatch.employee_id
+                });
             }
 
             if (employeeData.city) {
@@ -677,24 +668,7 @@ router.post('/check-duplicates', async (req, res) => {
         }));
 
         // --- STEP 2: PRE-FETCH EXISTING EMPLOYEES FOR DUPLICATE CHECK ---
-        const [dbEmployees] = await connection.query(
-            "SELECT id, employee_id, first_name, last_name, DATE_FORMAT(date_of_birth, '%Y-%m-%d') as dob FROM employees"
-        );
-        
-        const existingEmployeeMap = new Map();
-        dbEmployees.forEach(emp => {
-            const key = `${(emp.first_name || '').trim().toLowerCase()}-${(emp.last_name || '').trim().toLowerCase()}-${emp.dob}`;
-            existingEmployeeMap.set(key, emp);
-        });
-        
-        // Prepare DB names for fuzzy matching
-        const dbNames = dbEmployees.map(emp => ({
-            first: (emp.first_name || '').trim().toLowerCase(),
-            last: (emp.last_name || '').trim().toLowerCase(),
-            fullName: `${emp.first_name} ${emp.last_name}`,
-            employee_id: emp.employee_id,
-            id: emp.id
-        }));
+        const { existingEmployeeMap, dbNames } = await fetchExistingEmployeesAndMaps(connection);
 
         // --- STEP 3: CHECK FOR DUPLICATES ---
         const duplicateChecks = [];
@@ -705,7 +679,7 @@ router.post('/check-duplicates', async (req, res) => {
             let duplicateMatch = null;
 
             // Check 1: Exact duplicate in existing employees
-            const uniqueKey = `${(appData.first_name || '').trim().toLowerCase()}-${(appData.last_name || '').trim().toLowerCase()}-${appData.date_of_birth}`;
+            const uniqueKey = generateUniqueKey(appData.first_name, appData.last_name, appData.date_of_birth);
 
             if (existingEmployeeMap.has(uniqueKey)) {
                 const existing = existingEmployeeMap.get(uniqueKey);
@@ -716,29 +690,18 @@ router.post('/check-duplicates', async (req, res) => {
                     existingId: existing.id,
                     message: `Match found: ${existing.employee_id}`
                 };
-            } else if (appData.first_name && appData.last_name) {
+            } else {
                 // Check 2: Fuzzy matching for similar names
-                const currentFirst = appData.first_name.trim().toLowerCase();
-                const currentLast = appData.last_name.trim().toLowerCase();
-
-                for (const dbEmp of dbNames) {
-                    if (Math.abs(currentFirst.length - dbEmp.first.length) > 2 || Math.abs(currentLast.length - dbEmp.last.length) > 2) continue;
-
-                    const distFirst = levenshtein(currentFirst, dbEmp.first);
-                    const distLast = levenshtein(currentLast, dbEmp.last);
-                    const threshold = (currentFirst.length > 3 && currentLast.length > 3) ? 1 : 0;
-
-                    if (distFirst <= threshold && distLast <= threshold) {
-                        duplicateStatus = 'Possible Duplicate';
-                        duplicateMatch = {
-                            type: 'fuzzy',
-                            existingEmployeeId: dbEmp.employee_id,
-                            existingId: dbEmp.id,
-                            similarName: dbEmp.fullName,
-                            message: `Similar to: ${dbEmp.fullName} (${dbEmp.employee_id})`
-                        };
-                        break;
-                    }
+                const fuzzyMatch = findFuzzyMatch(appData.first_name, appData.last_name, dbNames);
+                if (fuzzyMatch) {
+                    duplicateStatus = 'Possible Duplicate';
+                    duplicateMatch = {
+                        type: 'fuzzy',
+                        existingEmployeeId: fuzzyMatch.employee_id,
+                        existingId: fuzzyMatch.id,
+                        similarName: fuzzyMatch.fullName,
+                        message: `Similar to: ${fuzzyMatch.fullName} (${fuzzyMatch.employee_id})`
+                    };
                 }
             }
 
@@ -817,22 +780,7 @@ router.post('/sync-hired-applicants', async (req, res) => {
         applicantsForImport = applicantsForImport.map(app => normalizeName(app));
 
         // --- STEP 2: PRE-FETCH EXISTING EMPLOYEES FOR DUPLICATE CHECK ---
-        const [dbEmployees] = await connection.query(
-            "SELECT id, employee_id, first_name, last_name, DATE_FORMAT(date_of_birth, '%Y-%m-%d') as dob FROM employees"
-        );
-        const existingEmployeeMap = new Map();
-        dbEmployees.forEach(emp => {
-            const key = `${(emp.first_name || '').trim().toLowerCase()}-${(emp.last_name || '').trim().toLowerCase()}-${emp.dob}`;
-            existingEmployeeMap.set(key, emp);
-        });
-        
-        // Prepare DB names for fuzzy matching
-        const dbNames = dbEmployees.map(emp => ({
-            first: (emp.first_name || '').trim().toLowerCase(),
-            last: (emp.last_name || '').trim().toLowerCase(),
-            fullName: `${emp.first_name} ${emp.last_name}`,
-            employee_id: emp.employee_id
-        }));
+        const { existingEmployeeMap, dbNames } = await fetchExistingEmployeesAndMaps(connection);
 
         const errors = [];
         const warnings = [];
@@ -858,7 +806,7 @@ router.post('/sync-hired-applicants', async (req, res) => {
             }
 
             // Check 1: Exact duplicate in existing employees
-            const uniqueKey = `${(appData.first_name || '').trim().toLowerCase()}-${(appData.last_name || '').trim().toLowerCase()}-${appData.date_of_birth}`;
+            const uniqueKey = generateUniqueKey(appData.first_name, appData.last_name, appData.date_of_birth);
             let isExactDuplicate = false;
 
             if (existingEmployeeMap.has(uniqueKey)) {
@@ -877,26 +825,15 @@ router.post('/sync-hired-applicants', async (req, res) => {
             }
 
             // Check 2: Fuzzy matching for similar names
-            if (!isExactDuplicate && appData.first_name && appData.last_name) {
-                const currentFirst = appData.first_name.trim().toLowerCase();
-                const currentLast = appData.last_name.trim().toLowerCase();
-
-                for (const dbEmp of dbNames) {
-                    if (Math.abs(currentFirst.length - dbEmp.first.length) > 2 || Math.abs(currentLast.length - dbEmp.last.length) > 2) continue;
-
-                    const distFirst = levenshtein(currentFirst, dbEmp.first);
-                    const distLast = levenshtein(currentLast, dbEmp.last);
-                    const threshold = (currentFirst.length > 3 && currentLast.length > 3) ? 1 : 0;
-
-                    if (distFirst <= threshold && distLast <= threshold) {
-                        warnings.push({
-                            index: i,
-                            row: rowNum,
-                            message: `Applicant ${rowNum}: "${appData.first_name} ${appData.last_name}" is a possible duplicate of "${dbEmp.fullName}" (similar name found).`,
-                            existingEmployeeId: dbEmp.employee_id
-                        });
-                        break;
-                    }
+            if (!isExactDuplicate) {
+                const fuzzyMatch = findFuzzyMatch(appData.first_name, appData.last_name, dbNames);
+                if (fuzzyMatch) {
+                    warnings.push({
+                        index: i,
+                        row: rowNum,
+                        message: `Applicant ${rowNum}: "${appData.first_name} ${appData.last_name}" is a possible duplicate of "${fuzzyMatch.fullName}" (similar name found).`,
+                        existingEmployeeId: fuzzyMatch.employee_id
+                    });
                 }
             }
 

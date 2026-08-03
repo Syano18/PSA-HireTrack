@@ -6,9 +6,7 @@ import ToastContainer from '../components/ToastContainer';
 import useToast from '../hooks/useToast';
 import { apiFetch } from '../components/API';
 import { useSettings } from '../context/SettingsContext';
-import { auth } from '../firebase';
-import { sendPasswordResetEmail } from 'firebase/auth';
-
+// Removed Firebase imports
 const initialFormState = {
   first_name: '',
   middle_initial: '',
@@ -350,13 +348,10 @@ const Accounts = () => {
               setTempPassword(data.temporaryPassword || '');
               setResetLink(data.resetLink || '');
               
-              // --- SEND FIREBASE EMAIL ---
-              try {
-                  await sendPasswordResetEmail(auth, formData.email);
-                  setTempPasswordModalTitle('Account Created & Email Sent');
-              } catch (emailErr) {
-                  setTempPasswordModalTitle('Account Created (Email Failed)');
-              }
+              // --- CLERK EMAIL NOTIFICATION ---
+              // With Clerk, emails are either sent automatically on user creation or via a backend-generated link.
+              // For now, we rely on the backend passing back the reset link if needed.
+              setTempPasswordModalTitle('Account Created Successfully');
               setShowTempPasswordModal(true);
           } else {
               showToast('User updated successfully.', 'success');

@@ -17,5 +17,4 @@ publish:
   provider: github
   owner: Syano18
   repo: PSA-HireTrack
-  private: true
 electronVersion: 28.3.3

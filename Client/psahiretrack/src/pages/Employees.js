@@ -878,6 +878,47 @@ const Employees = () => {
         setExcludedImportRows(new Set(Object.keys(finalMarkers).map(Number)));
         setIsImportModalOpen(true);
 
+        // Helper to process server validation errors
+        const processServerErrors = (errorsList, currentErrors) => {
+          const newErrors = { ...currentErrors };
+          errorsList.forEach(errStr => {
+            const m = errStr.match(/^Row\s+(\d+):\s*(.*)$/);
+            if (m) {
+              const serverIndex = parseInt(m[1], 10) - 2;
+              if (!newErrors[serverIndex]) newErrors[serverIndex] = [];
+              
+              const serverMsg = m[2];
+              const existingErrors = newErrors[serverIndex];
+              const isDateRedundant = existingErrors.some(e => e.includes('Invalid date format')) && serverMsg.includes('Invalid or missing date_of_birth');
+              const isLocationRedundant = existingErrors.some(e => e.includes('does not exist in') || e.includes('not found in database')) && (serverMsg.includes('not found in') || serverMsg.includes('not found.'));
+
+              if (!isDateRedundant && !isLocationRedundant) {
+                newErrors[serverIndex].push(serverMsg);
+              }
+            }
+          });
+          return newErrors;
+        };
+
+        // Helper to process server validation warnings
+        const processServerWarnings = (warningsList, currentMarkers, currentExcluded) => {
+          const newMarkers = { ...currentMarkers };
+          const newExcluded = new Set(currentExcluded);
+          warningsList.forEach(warn => {
+            const originalIndex = warn.index;
+            newMarkers[originalIndex] = {
+              duplicateStatus: 'Potential Database Match',
+              duplicateMatch: {
+                type: 'similar',
+                similarName: warn.message,
+                existingEmployeeId: warn.existingEmployeeId
+              }
+            };
+            newExcluded.add(originalIndex);
+          });
+          return { newMarkers, newExcluded };
+        };
+
         // Run server-side validation in background and merge results into the review table
         (async () => {
           if (!(sessionState && sessionState.user && sessionState.user.id)) return;
@@ -889,43 +930,13 @@ const Employees = () => {
 
             // Map server errors to the importErrors state (successful response with status field)
             if (validateResult.status === 'error' && validateResult.errors) {
-              const newImportErrors = { ...rowErrors };
-              validateResult.errors.forEach(errStr => {
-                const m = errStr.match(/^Row\s+(\d+):\s*(.*)$/);
-                if (m) {
-                  const serverIndex = parseInt(m[1], 10) - 2; // server row numbering
-                  if (!newImportErrors[serverIndex]) newImportErrors[serverIndex] = [];
-                  
-                  const serverMsg = m[2];
-                  const existingErrors = newImportErrors[serverIndex];
-                  const isDateRedundant = existingErrors.some(e => e.includes('Invalid date format')) && serverMsg.includes('Invalid or missing date_of_birth');
-                  const isLocationRedundant = existingErrors.some(e => e.includes('does not exist in') || e.includes('not found in database')) && (serverMsg.includes('not found in') || serverMsg.includes('not found.'));
-
-                  if (!isDateRedundant && !isLocationRedundant) {
-                    newImportErrors[serverIndex].push(`${serverMsg}`);
-                  }
-                }
-              });
-              setImportErrors(newImportErrors);
+              setImportErrors(processServerErrors(validateResult.errors, rowErrors));
             }
 
             // Map server warnings to duplicate markers
             if (validateResult.status === 'warning' && validateResult.warnings) {
-              const newDuplicateMarkers = { ...finalMarkers };
-              const newExcluded = new Set(Object.keys(finalMarkers).map(Number));
-              validateResult.warnings.forEach(warn => {
-                const originalIndex = warn.index;
-                newDuplicateMarkers[originalIndex] = {
-                  duplicateStatus: 'Potential Database Match',
-                  duplicateMatch: {
-                    type: 'similar',
-                    similarName: warn.message,
-                    existingEmployeeId: warn.existingEmployeeId
-                  }
-                };
-                newExcluded.add(originalIndex);
-              });
-              setImportDuplicateMarkers(newDuplicateMarkers);
+              const { newMarkers, newExcluded } = processServerWarnings(validateResult.warnings, finalMarkers, Object.keys(finalMarkers).map(Number));
+              setImportDuplicateMarkers(newMarkers);
               setExcludedImportRows(newExcluded);
             }
           } catch (e) {
@@ -935,43 +946,13 @@ const Employees = () => {
             if (e && e.data) {
               // Map errors
               if (Array.isArray(e.data.errors) && e.data.errors.length > 0) {
-                const newImportErrors = { ...rowErrors };
-                e.data.errors.forEach(errStr => {
-                  const m = errStr.match(/^Row\s+(\d+):\s*(.*)$/);
-                  if (m) {
-                    const serverIndex = parseInt(m[1], 10) - 2;
-                    if (!newImportErrors[serverIndex]) newImportErrors[serverIndex] = [];
-
-                    const serverMsg = m[2];
-                    const existingErrors = newImportErrors[serverIndex];
-                    const isDateRedundant = existingErrors.some(e => e.includes('Invalid date format')) && serverMsg.includes('Invalid or missing date_of_birth');
-                    const isLocationRedundant = existingErrors.some(e => e.includes('does not exist in') || e.includes('not found in database')) && (serverMsg.includes('not found in') || serverMsg.includes('not found.'));
-
-                    if (!isDateRedundant && !isLocationRedundant) {
-                      newImportErrors[serverIndex].push(`${serverMsg}`);
-                    }
-                  }
-                });
-                setImportErrors(newImportErrors);
+                setImportErrors(processServerErrors(e.data.errors, rowErrors));
               }
 
               // Map warnings
               if (Array.isArray(e.data.warnings) && e.data.warnings.length > 0) {
-                const newDuplicateMarkers = { ...finalMarkers };
-                const newExcluded = new Set(Object.keys(finalMarkers).map(Number));
-                e.data.warnings.forEach(warn => {
-                  const originalIndex = warn.index;
-                  newDuplicateMarkers[originalIndex] = {
-                    duplicateStatus: 'Potential Database Match',
-                    duplicateMatch: {
-                      type: 'similar',
-                      similarName: warn.message,
-                      existingEmployeeId: warn.existingEmployeeId
-                    }
-                  };
-                  newExcluded.add(originalIndex);
-                });
-                setImportDuplicateMarkers(newDuplicateMarkers);
+                const { newMarkers, newExcluded } = processServerWarnings(e.data.warnings, finalMarkers, Object.keys(finalMarkers).map(Number));
+                setImportDuplicateMarkers(newMarkers);
                 setExcludedImportRows(newExcluded);
               }
             } else if (e && typeof e.message === 'string') {
@@ -980,41 +961,11 @@ const Employees = () => {
                 const parsed = JSON.parse(e.message);
                 console.debug('Parsed error.message JSON:', parsed);
                 if (parsed.errors && Array.isArray(parsed.errors)) {
-                  const newImportErrors = { ...rowErrors };
-                  parsed.errors.forEach(errStr => {
-                    const m = errStr.match(/^Row\s+(\d+):\s*(.*)$/);
-                    if (m) {
-                      const serverIndex = parseInt(m[1], 10) - 2;
-                      if (!newImportErrors[serverIndex]) newImportErrors[serverIndex] = [];
-
-                      const serverMsg = m[2];
-                      const existingErrors = newImportErrors[serverIndex];
-                      const isDateRedundant = existingErrors.some(e => e.includes('Invalid date format')) && serverMsg.includes('Invalid or missing date_of_birth');
-                      const isLocationRedundant = existingErrors.some(e => e.includes('does not exist in') || e.includes('not found in database')) && (serverMsg.includes('not found in') || serverMsg.includes('not found.'));
-
-                      if (!isDateRedundant && !isLocationRedundant) {
-                        newImportErrors[serverIndex].push(`${serverMsg}`);
-                      }
-                    }
-                  });
-                  setImportErrors(newImportErrors);
+                  setImportErrors(processServerErrors(parsed.errors, rowErrors));
                 }
                 if (parsed.warnings && Array.isArray(parsed.warnings)) {
-                  const newDuplicateMarkers = { ...finalMarkers };
-                  const newExcluded = new Set(Object.keys(finalMarkers).map(Number));
-                  parsed.warnings.forEach(warn => {
-                    const originalIndex = warn.index;
-                    newDuplicateMarkers[originalIndex] = {
-                      duplicateStatus: 'Potential Database Match',
-                      duplicateMatch: {
-                        type: 'similar',
-                        similarName: warn.message,
-                        existingEmployeeId: warn.existingEmployeeId
-                      }
-                    };
-                    newExcluded.add(originalIndex);
-                  });
-                  setImportDuplicateMarkers(newDuplicateMarkers);
+                  const { newMarkers, newExcluded } = processServerWarnings(parsed.warnings, finalMarkers, Object.keys(finalMarkers).map(Number));
+                  setImportDuplicateMarkers(newMarkers);
                   setExcludedImportRows(newExcluded);
                 }
               } catch (parseErr) {

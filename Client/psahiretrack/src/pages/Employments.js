@@ -931,7 +931,7 @@ const Employments = () => {
                           <FaPencilAlt className="w-4 h-4" />
                         </button>
                       )}
-                      {(userPermissions.isSuperAdmin || (userPermissions.isFocalPerson && rec.focal_person_id === sessionState?.user?.id)) && !rec.rating && (!rec.remarks || !rec.remarks.startsWith('REPLACED')) && <button onClick={() => handleProvideRatingClick(rec)} title="Provide Rating" className="p-1 rounded-lg transition-colors text-green-600 hover:text-green-800 hover:bg-green-50 dark:text-green-400 dark:hover:text-green-200 dark:hover:bg-green-900/20"><FaStar className="w-4 h-4" /></button>}
+                      {((userPermissions.canManage) || (userPermissions.isFocalPerson && rec.focal_person_id === sessionState?.user?.id && !rec.rating)) && (!rec.remarks || !rec.remarks.startsWith('REPLACED')) && <button onClick={() => handleProvideRatingClick(rec)} title={rec.rating ? "Edit Rating" : "Provide Rating"} className="p-1 rounded-lg transition-colors text-green-600 hover:text-green-800 hover:bg-green-50 dark:text-green-400 dark:hover:text-green-200 dark:hover:bg-green-900/20"><FaStar className="w-4 h-4" /></button>}
                       {userPermissions.canDelete && (
                         <button
                           onClick={() => handleDeleteClick(rec)}

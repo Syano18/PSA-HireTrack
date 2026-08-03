@@ -1,8 +1,8 @@
-version: 0.1.8
+version: 0.2.6
 files:
-  - url: PSA-Kalinga-HireTrack-Setup-0.1.8.exe
-    sha512: lJTpdQjMtpFjWD+ZmYePnRCNDJpu3VdMqRJ8LDBB63JnehQXIy06q28X8BhfYwIDVm8XCoL91Us80pyyQM/oBQ==
-    size: 84118121
-path: PSA-Kalinga-HireTrack-Setup-0.1.8.exe
-sha512: lJTpdQjMtpFjWD+ZmYePnRCNDJpu3VdMqRJ8LDBB63JnehQXIy06q28X8BhfYwIDVm8XCoL91Us80pyyQM/oBQ==
-releaseDate: '2026-03-06T14:31:03.804Z'
+  - url: PSA-Kalinga-HireTrack-Setup-0.2.6.exe
+    sha512: n09x2l8a0jGOBdxaiLs+AQ5/N5+bp5s+AIWdJ6AvxptXCnaHNTSpe88wJz6VlpXdoV+cS8nx+RUM4yvgWYmL4A==
+    size: 84091267
+path: PSA-Kalinga-HireTrack-Setup-0.2.6.exe
+sha512: n09x2l8a0jGOBdxaiLs+AQ5/N5+bp5s+AIWdJ6AvxptXCnaHNTSpe88wJz6VlpXdoV+cS8nx+RUM4yvgWYmL4A==
+releaseDate: '2026-06-20T07:53:29.401Z'
