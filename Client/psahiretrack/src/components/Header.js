@@ -1,8 +1,17 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useUser } from '@clerk/clerk-react';
 
 const Header = ({ onLogout, user }) => {
     const { user: clerkUser } = useUser();
+    const [localProfilePic, setLocalProfilePic] = useState(null);
+
+    useEffect(() => {
+        if (user?.id && window.electronAPI?.getProfilePicture) {
+            window.electronAPI.getProfilePicture(user.id).then(pic => {
+                if (pic) setLocalProfilePic(pic);
+            }).catch(console.error);
+        }
+    }, [user?.id]);
 
     return (
         <header className="bg-white dark:bg-gray-800 sticky top-0 z-10 border-b border-gray-200 dark:border-gray-700">
@@ -12,9 +21,9 @@ const Header = ({ onLogout, user }) => {
                         <h2 className="text-lg font-semibold text-gray-700 dark:text-gray-200">
                             Hello, {user?.first_name || 'User'}
                         </h2>
-                        {clerkUser?.imageUrl ? (
+                        {localProfilePic || clerkUser?.imageUrl ? (
                             <img 
-                                src={clerkUser.imageUrl} 
+                                src={localProfilePic || clerkUser.imageUrl} 
                                 alt="Profile" 
                                 className="w-8 h-8 rounded-full object-cover border border-gray-300 dark:border-gray-600 shadow-sm"
                             />

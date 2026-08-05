@@ -226,11 +226,20 @@ async function updateCertificateInTurso(executeTursoFn, {
  * @param {function} executeTursoFn
  * @param {{ refNumber: string, editorName: string, remarks: string }} opts
  */
-async function updateTursoLogbookEntry(executeTursoFn, { refNumber, editorName, remarks }) {
+async function updateTursoLogbookEntry(executeTursoFn, { refNumber, editorName, remarks, recipientName }) {
   try {
     await executeTursoFn(
-      `UPDATE Digital_Logbook SET TRANSMITTER = ?, REMARKS = ? WHERE REFERENCE_NUMBER = ?`,
-      [editorName, remarks, refNumber]
+      `INSERT INTO Digital_Logbook (
+         REFERENCE_NUMBER, DOCUMENT, NAME, PURPOSE, 
+         OR_NO, AMOUNT, TRANSMITTER, SECTION, MODE_OF_TRANSMITTAL, REMARKS
+       )
+       SELECT 
+         REFERENCE_NUMBER, DOCUMENT, COALESCE(?, NAME), 'REGENERATED',
+         OR_NO, AMOUNT, ?, SECTION, MODE_OF_TRANSMITTAL, ?
+       FROM Digital_Logbook 
+       WHERE REFERENCE_NUMBER = ? 
+       ORDER BY id ASC LIMIT 1`,
+      [recipientName || null, editorName, remarks, refNumber]
     );
   } catch (err) {
     console.error('[certEncryption] Failed to update Digital_Logbook in Turso:', err.message);

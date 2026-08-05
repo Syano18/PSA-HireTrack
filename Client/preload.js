@@ -19,6 +19,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setServerIp: (ip) => ipcRenderer.invoke('set-server-ip', ip),
   getLocalIP: () => ipcRenderer.invoke('get-local-ip'), 
   
+  // Profile Picture handlers
+  saveProfilePicture: (userId, base64Data) => ipcRenderer.invoke('save-profile-picture', userId, base64Data),
+  getProfilePicture: (userId) => ipcRenderer.invoke('get-profile-picture', userId),
+  
   // Dark mode handlers
   getDarkMode: () => ipcRenderer.invoke('get-dark-mode'),
   setDarkMode: (value) => ipcRenderer.invoke('set-dark-mode', value),

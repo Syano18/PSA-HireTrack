@@ -841,6 +841,43 @@ async function startApp() {
     // Call setup once
     setupAutoUpdater();
 
+    // --- Profile Picture Handlers ---
+    ipcMain.handle('save-profile-picture', async (event, userId, base64Data) => {
+        try {
+            const userDataPath = app.getPath('userData');
+            const profilePicsDir = path.join(userDataPath, 'profile_pictures');
+            if (!fs.existsSync(profilePicsDir)) {
+                fs.mkdirSync(profilePicsDir, { recursive: true });
+            }
+            
+            const base64Image = base64Data.replace(/^data:image\/\w+;base64,/, '');
+            const imageBuffer = Buffer.from(base64Image, 'base64');
+            const filePath = path.join(profilePicsDir, `${userId}.jpg`);
+            
+            fs.writeFileSync(filePath, imageBuffer);
+            return { success: true };
+        } catch (err) {
+            console.error('Failed to save profile picture:', err);
+            return { success: false, error: err.message };
+        }
+    });
+
+    ipcMain.handle('get-profile-picture', async (event, userId) => {
+        try {
+            const userDataPath = app.getPath('userData');
+            const filePath = path.join(userDataPath, 'profile_pictures', `${userId}.jpg`);
+            
+            if (fs.existsSync(filePath)) {
+                const imageBuffer = fs.readFileSync(filePath);
+                return `data:image/jpeg;base64,${imageBuffer.toString('base64')}`;
+            }
+            return null;
+        } catch (err) {
+            console.error('Failed to get profile picture:', err);
+            return null;
+        }
+    });
+
     // --- Auto Updater Handlers ---
     ipcMain.handle('get-app-version', () => app.getVersion());
 

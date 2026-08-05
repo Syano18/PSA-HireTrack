@@ -156996,7 +156996,7 @@ router.post('/regenerate-employment-certificate', async (req, res) => {
       const remarkText = changes.length
         ? `${editDate}: ${changes.join(', ')} corrected.`
         : `Re-printed on ${editDate} (no data changes).`;
-      await updateTursoLogbookEntry(executeTurso, { refNumber, editorName, remarks: remarkText });
+      await updateTursoLogbookEntry(executeTurso, { refNumber, editorName, remarks: remarkText, recipientName });
     }
 
     // --- Reuse the original QR token so the QR image is identical to the first-issued cert ---
@@ -158982,7 +158982,7 @@ router.post('/regenerate-training-certificate', async (req, res) => {
       const remarkText  = changes.length
         ? `${editDate}: ${changes.join(', ')} corrected.`
         : `Re-printed on ${editDate} (no data changes).`;
-      await updateTursoLogbookEntry(executeTurso, { refNumber, editorName, remarks: remarkText });
+      await updateTursoLogbookEntry(executeTurso, { refNumber, editorName, remarks: remarkText, recipientName });
     }
 
     // --- Reuse the original QR token so the QR image is identical to the first-issued cert ---
@@ -160095,6 +160095,7 @@ router.put('/:id', verifyToken, checkRole(['Super_Admin', 'Admin', 'PACD']), asy
 
     const targetUser = targetUserRows[0];
     const oldEmail = targetUser.email_address;
+    const oldStatus = targetUser.status;
 
     const [existingUsers] = await connection.query(
       'SELECT id FROM users WHERE (email_address = ? OR (first_name <=> ? AND middle_initial <=> ? AND last_name <=> ? AND suffix <=> ?)) AND id != ?',
@@ -160530,11 +160531,20 @@ async function updateCertificateInTurso(executeTursoFn, {
  * @param {function} executeTursoFn
  * @param {{ refNumber: string, editorName: string, remarks: string }} opts
  */
-async function updateTursoLogbookEntry(executeTursoFn, { refNumber, editorName, remarks }) {
+async function updateTursoLogbookEntry(executeTursoFn, { refNumber, editorName, remarks, recipientName }) {
   try {
     await executeTursoFn(
-      `UPDATE Digital_Logbook SET TRANSMITTER = ?, REMARKS = ? WHERE REFERENCE_NUMBER = ?`,
-      [editorName, remarks, refNumber]
+      `INSERT INTO Digital_Logbook (
+         REFERENCE_NUMBER, DOCUMENT, NAME, PURPOSE, 
+         OR_NO, AMOUNT, TRANSMITTER, SECTION, MODE_OF_TRANSMITTAL, REMARKS
+       )
+       SELECT 
+         REFERENCE_NUMBER, DOCUMENT, COALESCE(?, NAME), 'REGENERATED',
+         OR_NO, AMOUNT, ?, SECTION, MODE_OF_TRANSMITTAL, ?
+       FROM Digital_Logbook 
+       WHERE REFERENCE_NUMBER = ? 
+       ORDER BY id ASC LIMIT 1`,
+      [recipientName || null, editorName, remarks, refNumber]
     );
   } catch (err) {
     console.error('[certEncryption] Failed to update Digital_Logbook in Turso:', err.message);

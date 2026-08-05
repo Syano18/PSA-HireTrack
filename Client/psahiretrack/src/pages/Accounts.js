@@ -89,9 +89,18 @@ const ProfileView = ({ sessionState, serverIp }) => {
     const [confirmPassword, setConfirmPassword] = useState('');
     const [isChanging, setIsChanging] = useState(false);
     const [isUploadingImage, setIsUploadingImage] = useState(false);
+    const [localProfilePic, setLocalProfilePic] = useState(null);
     const fileInputRef = useRef(null);
     
     const user = sessionState?.user;
+
+    useEffect(() => {
+        if (user?.id && window.electronAPI?.getProfilePicture) {
+            window.electronAPI.getProfilePicture(user.id).then(pic => {
+                if (pic) setLocalProfilePic(pic);
+            }).catch(console.error);
+        }
+    }, [user?.id]);
 
     const handlePasswordChange = async (e) => {
         e.preventDefault();
@@ -127,16 +136,37 @@ const ProfileView = ({ sessionState, serverIp }) => {
 
         setIsUploadingImage(true);
         try {
-            await clerkUser.setProfileImage({ file });
-            showToast("Profile picture updated successfully.", 'success');
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = async () => {
+                try {
+                    const base64Data = reader.result;
+                    const response = await window.electronAPI.saveProfilePicture(user.id, base64Data);
+                    if (response.success) {
+                        setLocalProfilePic(base64Data);
+                        showToast("Profile picture updated successfully.", 'success');
+                    } else {
+                        throw new Error(response.error || 'Failed to save');
+                    }
+                } catch (saveErr) {
+                    console.error('Failed to update profile picture', saveErr);
+                    showToast("Failed to update profile picture.", 'error');
+                } finally {
+                    setIsUploadingImage(false);
+                    if (fileInputRef.current) fileInputRef.current.value = '';
+                }
+            };
+            reader.onerror = (error) => {
+                console.error('Failed to read file', error);
+                showToast("Failed to read profile picture file.", 'error');
+                setIsUploadingImage(false);
+                if (fileInputRef.current) fileInputRef.current.value = '';
+            };
         } catch (err) {
             console.error('Failed to update profile picture', err);
             showToast("Failed to update profile picture.", 'error');
-        } finally {
             setIsUploadingImage(false);
-            if (fileInputRef.current) {
-                fileInputRef.current.value = '';
-            }
+            if (fileInputRef.current) fileInputRef.current.value = '';
         }
     };
 
@@ -167,8 +197,8 @@ const ProfileView = ({ sessionState, serverIp }) => {
                                 onClick={() => fileInputRef.current?.click()}
                                 title="Change Profile Picture"
                             >
-                                {clerkUser?.imageUrl ? (
-                                    <img src={clerkUser.imageUrl} className="w-full h-full rounded-lg object-cover group-hover:opacity-75 transition-opacity" alt="Profile" />
+                                {localProfilePic || clerkUser?.imageUrl ? (
+                                    <img src={localProfilePic || clerkUser.imageUrl} className="w-full h-full rounded-lg object-cover group-hover:opacity-75 transition-opacity" alt="Profile" />
                                 ) : (
                                     <div className="w-full h-full rounded-lg bg-gray-100 flex items-center justify-center text-gray-800 text-3xl sm:text-5xl font-bold group-hover:opacity-75 transition-opacity">
                                         {user.first_name?.charAt(0)}{user.last_name?.charAt(0)}
@@ -289,7 +319,7 @@ const Accounts = () => {
         const state = await window.electronAPI.getLoginState();
         if (state?.token) {
           setSessionState(state);
-          setCanManage(['Super_Admin', 'Admin', 'PACD'].includes(state.user.role));
+          setCanManage(['Super_Admin', 'Admin'].includes(state.user.role));
         } else {
           showToast("Authentication failed. Please log in again.", 'error');
           setIsLoading(false);
@@ -320,7 +350,7 @@ const Accounts = () => {
   useEffect(() => {
     if (sessionState && !isSettingsLoading) {
       fetchUsers();
-      if (['Super_Admin', 'Admin', 'PACD'].includes(sessionState.user.role)) {
+      if (['Super_Admin', 'Admin'].includes(sessionState.user.role)) {
         fetchUsers();
       }
     }

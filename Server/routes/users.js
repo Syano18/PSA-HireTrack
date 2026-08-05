@@ -50,7 +50,7 @@ const executeTurso = async (sql, args) => {
 };
 
 // GET /api/users
-router.get('/', verifyToken, checkRole(['Super_Admin', 'Admin', 'PACD']), async (req, res) => {
+router.get('/', verifyToken, checkRole(['Super_Admin', 'Admin']), async (req, res) => {
   try {
     const [results] = await dbPool.query(
       "SELECT id, first_name, middle_initial, suffix, last_name, email_address AS email, hiretrack_role AS role, status, created_at FROM users ORDER BY last_name, first_name"
@@ -63,7 +63,7 @@ router.get('/', verifyToken, checkRole(['Super_Admin', 'Admin', 'PACD']), async 
 });
 
 // POST /api/users (Create user)
-router.post('/', verifyToken, checkRole(['Super_Admin', 'Admin', 'PACD']), async (req, res) => {
+router.post('/', verifyToken, checkRole(['Super_Admin', 'Admin']), async (req, res) => {
   const actingUserId = req.user?.id;
   const { first_name, middle_initial, last_name, suffix, email, role, status } = req.body;
 
@@ -215,7 +215,7 @@ router.post('/', verifyToken, checkRole(['Super_Admin', 'Admin', 'PACD']), async
 });
 
 // PUT /api/users/:id (Update user)
-router.put('/:id', verifyToken, checkRole(['Super_Admin', 'Admin', 'PACD']), async (req, res) => {
+router.put('/:id', verifyToken, checkRole(['Super_Admin', 'Admin']), async (req, res) => {
   const { id } = req.params;
   const actingUserId = req.user?.id;
   const { first_name, middle_initial, last_name, suffix, email, role, status } = req.body;
@@ -241,6 +241,7 @@ router.put('/:id', verifyToken, checkRole(['Super_Admin', 'Admin', 'PACD']), asy
 
     const targetUser = targetUserRows[0];
     const oldEmail = targetUser.email_address;
+    const oldStatus = targetUser.status;
 
     const [existingUsers] = await connection.query(
       'SELECT id FROM users WHERE (email_address = ? OR (first_name <=> ? AND middle_initial <=> ? AND last_name <=> ? AND suffix <=> ?)) AND id != ?',
@@ -331,7 +332,7 @@ router.put('/:id', verifyToken, checkRole(['Super_Admin', 'Admin', 'PACD']), asy
 });
 
 // DELETE /api/users/:id
-router.delete('/:id', verifyToken, checkRole(['Super_Admin', 'Admin', 'PACD']), async (req, res) => {
+router.delete('/:id', verifyToken, checkRole(['Super_Admin', 'Admin']), async (req, res) => {
   const { id } = req.params;
   const actingUserId = req.user?.id;
 

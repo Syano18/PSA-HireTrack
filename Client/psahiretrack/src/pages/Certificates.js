@@ -1005,7 +1005,7 @@ const Certificates = () => {
 
                   {/* Footer */}
                   <div className="px-5 py-3 bg-gray-50 dark:bg-gray-700/50 border-t border-gray-100 dark:border-gray-700 flex justify-between items-center flex-shrink-0">
-                    {validationResult?.valid && validationResult.data?.source === 'external_partner' ? (
+                    {validationResult?.valid && sessionState?.user?.role && ['Super_Admin', 'Admin'].includes(sessionState.user.role) ? (
                       <button onClick={handleOpenEdit} className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-amber-500 rounded-lg hover:bg-amber-600 focus:outline-none focus:ring-2 focus:ring-amber-400 shadow-sm">
                         ✏️ Edit &amp; Regenerate
                       </button>

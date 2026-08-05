@@ -1016,7 +1016,7 @@ router.post('/regenerate-employment-certificate', async (req, res) => {
       const remarkText = changes.length
         ? `${editDate}: ${changes.join(', ')} corrected.`
         : `Re-printed on ${editDate} (no data changes).`;
-      await updateTursoLogbookEntry(executeTurso, { refNumber, editorName, remarks: remarkText });
+      await updateTursoLogbookEntry(executeTurso, { refNumber, editorName, remarks: remarkText, recipientName });
     }
 
     // --- Reuse the original QR token so the QR image is identical to the first-issued cert ---
