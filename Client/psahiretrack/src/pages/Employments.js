@@ -161,7 +161,7 @@ const Employments = () => {
   const [focalPersons, setFocalPersons] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [filters, setFilters] = useState({ query: '' });
-  const [currentPage, setCurrentPage] = useState(1);
+
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [formData, setFormData] = useState(INITIAL_FORM_STATE);
   const [editingRecord, setEditingRecord] = useState(null);
@@ -440,17 +440,7 @@ const Employments = () => {
   // --- END OF MEMOIZED OPTIONS ---
 
 
-  const rowsPerPage = 9;
-  const totalItems = spreadsheetList.length;
-  const totalPages = Math.ceil(totalItems / rowsPerPage);
-  const paginatedSpreadsheetList = spreadsheetList.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage);
 
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [focalPersonView, filters.query]);
-
-  const handleNextPage = () => setCurrentPage(prev => Math.min(prev + 1, totalPages));
-  const handlePreviousPage = () => setCurrentPage(prev => Math.max(prev - 1, 1));
     
   // THIS FUNCTION IS NO LONGER NEEDED, LOGIC WILL BE MOVED INLINE
   // const handleSurveyChange = (e) => { ... };
@@ -606,7 +596,7 @@ const Employments = () => {
 
   const handleViewClick = (record) => setViewingRecord(record);
   const handleDeleteClick = (record) => setRecordToDelete(record);
-  const handleClearSearch = () => { setFilters(prevFilters => ({ ...prevFilters, query: '' })); setCurrentPage(1); };
+  const handleClearSearch = () => { setFilters(prevFilters => ({ ...prevFilters, query: '' })); };
   const handleSelectAll = (event) => {
     if (event.target.checked) {
       const allRecordIds = spreadsheetList.map(rec => rec.id);
@@ -837,7 +827,7 @@ const Employments = () => {
   }
 
   return (
-    <div>
+    <div className="flex-1 w-full flex flex-col min-h-0">
       <ToastContainer toasts={toasts} onClose={removeToast} />
       <div className="flex flex-col md:flex-row items-center justify-between mb-4 gap-4">
         <h1 className="text-3xl font-bold text-gray-800 dark:text-white">Employment Records</h1>
@@ -866,7 +856,7 @@ const Employments = () => {
       <div className="flex flex-wrap items-center gap-2 mb-4">
         {(userPermissions.canManage || userPermissions.isHrDesignate) && (
           <>
-            <button onClick={handleAddClick} className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600"><FiPlus className="w-4 h-4" />Add Employment Record</button>
+            <button onClick={handleAddClick} className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600"><FiPlus className="w-5 h-5" />Add Employment Record</button>
           </>
         )}
         <div className="flex-grow" />
@@ -880,19 +870,19 @@ const Employments = () => {
                   ? 'No applicants ready for employment sync'
                   : `${syncPendingCount} applicants ready for employment sync`
               }
-              className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-white bg-purple-600 rounded-lg hover:bg-purple-700 dark:bg-purple-700 dark:hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-purple-600 rounded-lg hover:bg-purple-700 dark:bg-purple-700 dark:hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <FiDownload className="w-4 h-4" />{isSyncLoading ? 'Loading...' : `Assign Employment to Hired (${syncPendingCount})`}
+              <FiDownload className="w-5 h-5" />{isSyncLoading ? 'Loading...' : `Assign Employment to Hired (${syncPendingCount})`}
             </button>
-            <button onClick={handleBatchEditClick} disabled={selectedRecords.size <= 1} title={selectedRecords.size <= 1 ? 'Select at least 2 records to batch edit' : `Batch edit ${selectedRecords.size} records`} className="px-3 py-2 text-xs font-semibold text-white bg-purple-600 rounded-lg hover:bg-purple-700 dark:bg-purple-700 dark:hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed">Batch Edit ({selectedRecords.size})</button>
+            <button onClick={handleBatchEditClick} disabled={selectedRecords.size <= 1} title={selectedRecords.size <= 1 ? 'Select at least 2 records to batch edit' : `Batch edit ${selectedRecords.size} records`} className="px-4 py-2.5 text-sm font-semibold text-white bg-purple-600 rounded-lg hover:bg-purple-700 dark:bg-purple-700 dark:hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed">Batch Edit ({selectedRecords.size})</button>
           </>
         )}
         {userPermissions.canManage && (
-            <button onClick={handleExportAll} className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-gray-900 dark:text-gray-100 bg-yellow-400 rounded-lg hover:bg-yellow-500 dark:bg-yellow-600 dark:hover:bg-yellow-700"><FiDownload className="w-4 h-4" />Export All</button>
+            <button onClick={handleExportAll} className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-gray-900 dark:text-gray-100 bg-yellow-400 rounded-lg hover:bg-yellow-500 dark:bg-yellow-600 dark:hover:bg-yellow-700"><FiDownload className="w-5 h-5" />Export All</button>
         )}
       </div>
 
-      <div className="overflow-x-auto bg-white h-[760px] rounded-lg shadow dark:bg-gray-800">
+      <div className="overflow-auto bg-white rounded-lg shadow flex-1 min-h-0 dark:bg-gray-800">
         <table className="min-w-full text-sm leading-normal">
           <thead>
             <tr className="sticky top-0 border-b-2 border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-900/50">
@@ -907,7 +897,7 @@ const Employments = () => {
             </tr>
           </thead>
           <tbody>
-            {paginatedSpreadsheetList.length > 0 ? paginatedSpreadsheetList.map(rec => {
+            {spreadsheetList.length > 0 ? spreadsheetList.map(rec => {
               const fullName = [rec.first_name, rec.middle_initial, rec.last_name, rec.suffix].filter(Boolean).join(' ');
               return (
                 <tr key={rec.id} className="transition-colors duration-200 ease-in-out border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50">
@@ -953,15 +943,10 @@ const Employments = () => {
         </table>
       </div>
 
-      <div className="flex justify-between items-center mt-1">
-        <span className="text-sm text-gray-700 dark:text-gray-300">
-          Showing {totalItems > 0 ? (currentPage - 1) * rowsPerPage + 1 : 0} to {Math.min(currentPage * rowsPerPage, totalItems)} of {totalItems} records
+      <div className="flex justify-end items-center mt-2 px-2 flex-shrink-0">
+        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          Total Records: {spreadsheetList.length}
         </span>
-        <div className="flex items-center space-x-2">
-          <button onClick={handlePreviousPage} disabled={currentPage === 1} title={currentPage === 1 ? 'Already on first page' : 'Go to previous page'} className="px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed">Previous</button>
-          <span className="text-gray-700 dark:text-gray-300 px-2">{currentPage}</span>
-          <button onClick={handleNextPage} disabled={currentPage >= totalPages} title={currentPage >= totalPages ? 'Already on last page' : 'Go to next page'} className="px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed">Next</button>
-        </div>
       </div>
 
       {isModalOpen && (

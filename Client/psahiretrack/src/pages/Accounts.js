@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { FiPlus, FiX, FiSave } from 'react-icons/fi';
+import { FiPlus, FiX, FiSave, FiLock, FiUser, FiUsers } from 'react-icons/fi';
 import { parseISO, format } from 'date-fns';
-import { FaSort, FaSortUp, FaSortDown, FaTrash, FaPencilAlt } from 'react-icons/fa';
+import { FaSort, FaSortUp, FaSortDown, FaPencilAlt } from 'react-icons/fa';
+import { useUser } from '@clerk/clerk-react';
 import ToastContainer from '../components/ToastContainer';
 import useToast from '../hooks/useToast';
 import { apiFetch } from '../components/API';
@@ -13,12 +14,8 @@ const initialFormState = {
   last_name: '',
   suffix: '',
   email: '',
-  role: 'User',
-  opshub_role: 'Staff',
-  position: '',
-  salary: '',
-  salary_grade: '',
-  status: 'Active'
+  role: '',
+  status: ''
 };
 
 const useClickOutside = (ref, handler) => {
@@ -85,6 +82,167 @@ const SearchableDropdown = ({ options, value, onChange, placeholder, id, require
     );
 };
 
+const ProfileView = ({ sessionState, serverIp }) => {
+    const { toasts, showToast, removeToast } = useToast();
+    const { user: clerkUser } = useUser();
+    const [newPassword, setNewPassword] = useState('');
+    const [confirmPassword, setConfirmPassword] = useState('');
+    const [isChanging, setIsChanging] = useState(false);
+    const [isUploadingImage, setIsUploadingImage] = useState(false);
+    const fileInputRef = useRef(null);
+    
+    const user = sessionState?.user;
+
+    const handlePasswordChange = async (e) => {
+        e.preventDefault();
+        if (newPassword !== confirmPassword) {
+            showToast("Passwords do not match.", 'error');
+            return;
+        }
+        setIsChanging(true);
+        try {
+            await apiFetch(`users/${user.id}/change-password`, serverIp, {
+                method: 'PUT',
+                body: JSON.stringify({ newPassword })
+            });
+            showToast("Password changed successfully.", 'success');
+            setNewPassword('');
+            setConfirmPassword('');
+        } catch (err) {
+            let errorMessage = "An unknown error occurred.";
+            try {
+                const parsedError = JSON.parse(err.message);
+                errorMessage = parsedError.error || parsedError.message || errorMessage;
+            } catch (parseErr) {
+                errorMessage = err.message || errorMessage;
+            }
+            showToast(errorMessage, 'error');
+        }
+        setIsChanging(false);
+    };
+
+    const handleProfileImageChange = async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        setIsUploadingImage(true);
+        try {
+            await clerkUser.setProfileImage({ file });
+            showToast("Profile picture updated successfully.", 'success');
+        } catch (err) {
+            console.error('Failed to update profile picture', err);
+            showToast("Failed to update profile picture.", 'error');
+        } finally {
+            setIsUploadingImage(false);
+            if (fileInputRef.current) {
+                fileInputRef.current.value = '';
+            }
+        }
+    };
+
+    if (!user) return null;
+
+    return (
+        <div className="animate-fadeIn w-full space-y-6 pb-12">
+            <ToastContainer toasts={toasts} onClose={removeToast} />
+            
+            {/* Header / Banner Area */}
+            <div className="relative bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
+                {/* Blue Banner */}
+                <div className="h-32 bg-blue-600 w-full relative">
+                    <div className="absolute bottom-1 left-[140px] sm:left-[172px]">
+                        <h2 className="text-2xl sm:text-[1.7rem] font-extrabold text-white drop-shadow-md tracking-wide">
+                            {user.first_name} {user.middle_initial ? user.middle_initial + '.' : ''} {user.last_name}
+                        </h2>
+                    </div>
+                </div>
+                
+                {/* Content over banner */}
+                <div className="relative px-6 pb-6">
+                    {/* Profile Picture & Info */}
+                    <div className="flex flex-col sm:flex-row sm:items-start justify-between">
+                        <div className="flex items-start gap-5">
+                            <div 
+                                className="-mt-12 sm:-mt-16 w-24 h-24 sm:w-32 sm:h-32 rounded-xl bg-white p-1 shadow border border-gray-200 relative z-10 overflow-hidden shrink-0 cursor-pointer group"
+                                onClick={() => fileInputRef.current?.click()}
+                                title="Change Profile Picture"
+                            >
+                                {clerkUser?.imageUrl ? (
+                                    <img src={clerkUser.imageUrl} className="w-full h-full rounded-lg object-cover group-hover:opacity-75 transition-opacity" alt="Profile" />
+                                ) : (
+                                    <div className="w-full h-full rounded-lg bg-gray-100 flex items-center justify-center text-gray-800 text-3xl sm:text-5xl font-bold group-hover:opacity-75 transition-opacity">
+                                        {user.first_name?.charAt(0)}{user.last_name?.charAt(0)}
+                                    </div>
+                                )}
+                                <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 opacity-0 group-hover:opacity-100 transition-opacity rounded-lg m-1">
+                                    <span className="text-white text-xs sm:text-sm font-semibold">{isUploadingImage ? 'Uploading...' : 'Change'}</span>
+                                </div>
+                                <input 
+                                    type="file" 
+                                    accept="image/*" 
+                                    ref={fileInputRef} 
+                                    className="hidden" 
+                                    onChange={handleProfileImageChange} 
+                                    disabled={isUploadingImage}
+                                />
+                            </div>
+                            <div className="pt-0.5 sm:pt-1">
+                                {user.email_address ? (
+                                    <p className="text-base sm:text-[1.05rem] font-medium text-gray-600 dark:text-gray-400 tracking-wide">
+                                        {user.email_address}
+                                    </p>
+                                ) : (
+                                    <p className="text-sm italic text-gray-400">No email provided</p>
+                                )}
+                            </div>
+                        </div>
+                        
+                        {/* Badge */}
+                        <div className="pt-4 sm:pt-2">
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-xs font-semibold whitespace-nowrap dark:bg-blue-900/30 dark:border-blue-800 dark:text-blue-300">
+                                <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
+                                {user.role} Access
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {/* Security Settings */}
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+                <div className="flex items-center gap-2 mb-6">
+                    <FiLock className="text-gray-400 w-4 h-4" />
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-gray-400">Security Settings</h3>
+                </div>
+                
+                <form onSubmit={handlePasswordChange} className="max-w-md space-y-4">
+                    <div>
+                        <label className="block text-xs text-gray-400 mb-1">Current Password</label>
+                        <input type="password" required className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-600 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-sm" />
+                    </div>
+                    <div>
+                        <label className="block text-xs text-gray-400 mb-1">New Password</label>
+                        <input type="password" required value={newPassword} onChange={e => setNewPassword(e.target.value)} className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-600 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-sm" />
+                    </div>
+                    <div>
+                        <label className="block text-xs text-gray-400 mb-1">Confirm New Password</label>
+                        <input type="password" required value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-600 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-sm" />
+                    </div>
+                    
+                    <div className="flex items-center gap-3 pt-2">
+                        <button type="button" onClick={() => { setNewPassword(''); setConfirmPassword(''); }} className="px-4 py-2 text-sm font-semibold text-gray-600 dark:text-gray-200 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors">
+                            Cancel
+                        </button>
+                        <button type="submit" disabled={isChanging} className="px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50">
+                            {isChanging ? 'Updating...' : 'Update Password'}
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    );
+};
+
 const Accounts = () => {
   const { serverIp, isLoading: isSettingsLoading } = useSettings();
   const { toasts, showToast, removeToast } = useToast();
@@ -94,25 +252,23 @@ const Accounts = () => {
   const [formData, setFormData] = useState(initialFormState);
   const [editingUser, setEditingUser] = useState(null);
   const [originalFormData, setOriginalFormData] = useState(null);
-  const [userToDelete, setUserToDelete] = useState(null);
-  const [assignedFocalPersonIds, setAssignedFocalPersonIds] = useState(new Set());
+
+
   const [tempPassword, setTempPassword] = useState('');
   const [resetLink, setResetLink] = useState('');
   const [showTempPasswordModal, setShowTempPasswordModal] = useState(false);
+  const [activeTab, setActiveTab] = useState('profile');
   const [copySuccess, setCopySuccess] = useState('');
   const [tempPasswordModalTitle, setTempPasswordModalTitle] = useState(''); // <-- 1. ADDED STATE
   const [sessionState, setSessionState] = useState(null);
   const [canManage, setCanManage] = useState(false);
   const [sortConfig, setSortConfig] = useState({ key: 'last_name', direction: 'ascending' });
   const [filters, setFilters] = useState({ query: '' });
-  const [currentPage, setCurrentPage] = useState(1);
-  const rowsPerPage = 12;
   const firstNameRef = useRef(null);
   const middleInitialRef = useRef(null);
   const lastNameRef = useRef(null);
   const emailRef = useRef(null);
   const roleRef = useRef(null);
-  const opshubRoleRef = useRef(null);
 
   const handleCloseModal = useCallback(() => {
       setIsModalOpen(false);
@@ -159,26 +315,16 @@ const Accounts = () => {
     }
   }, [serverIp, showToast]);
 
-  const fetchAssignedFocalPersons = useCallback(async () => {
-    if (!serverIp) return;
-    try {
-      const data = await apiFetch('employments', serverIp);
-      const ids = new Set(data.map(rec => rec.focal_person_id).filter(Boolean));
-      setAssignedFocalPersonIds(ids);
-    } catch (err) {
-      console.error("Failed to fetch assigned focal persons:", err);
-    }
-  }, [serverIp]);
+
 
   useEffect(() => {
     if (sessionState && !isSettingsLoading) {
       fetchUsers();
-      fetchAssignedFocalPersons();
       if (['Super_Admin', 'Admin', 'PACD'].includes(sessionState.user.role)) {
         fetchUsers();
       }
     }
-  }, [sessionState, isSettingsLoading, fetchUsers, fetchAssignedFocalPersons]);
+  }, [sessionState, isSettingsLoading, fetchUsers]);
 
   const getAssignableRoles = useCallback(() => {
     if (!sessionState) return [];
@@ -193,10 +339,6 @@ const Accounts = () => {
     getAssignableRoles().map(role => ({ value: role, label: role })),
   [getAssignableRoles]);
 
-  const opshubRoleOptions = useMemo(() => [
-    { value: 'Staff', label: 'Staff' },
-    { value: 'Admin', label: 'Admin' }
-  ], []);
 
   const statusOptions = useMemo(() => [
     { value: 'Active', label: 'Active' },
@@ -210,10 +352,6 @@ const Accounts = () => {
       return filters.query === '' || fullName.includes(searchLower) || (user.email && user.email.toLowerCase().includes(searchLower));
     });
   }, [users, filters.query]);
-
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [filters.query]);
 
   const sortedUsers = useMemo(() => {
     let sortableUsers = [...filteredUsers];
@@ -229,13 +367,6 @@ const Accounts = () => {
     return sortableUsers;
   }, [filteredUsers, sortConfig]);
 
-  const paginatedUsers = useMemo(() => {
-    const startIndex = (currentPage - 1) * rowsPerPage;
-    return sortedUsers.slice(startIndex, startIndex + rowsPerPage);
-  }, [sortedUsers, currentPage]);
-
-  const totalPages = Math.ceil(sortedUsers.length / rowsPerPage);
-
   const handleInputChange = (e) => {
     const { name, value } = e.target;
     setFormData(prevState => ({ ...prevState, [name]: value }));
@@ -243,7 +374,7 @@ const Accounts = () => {
 
   const handleAddClick = () => {
     setEditingUser(null);
-    setFormData({ ...initialFormState, role: getAssignableRoles()[0] || 'User' });
+    setFormData(initialFormState);
     setOriginalFormData(null);
     setIsModalOpen(true);
   };
@@ -256,28 +387,9 @@ const Accounts = () => {
     setIsModalOpen(true);
   };
 
-  const handleDeleteClick = (user) => {
-    setUserToDelete(user);
-  };
-
-  const confirmDelete = async () => {
-    if (!userToDelete || !sessionState) return;
-    try {
-      await apiFetch(`users/${userToDelete.id}`, serverIp, {
-        method: 'DELETE',
-        body: JSON.stringify({ actingUserId: sessionState.user.id })
-      });
-      setUserToDelete(null);
-      fetchUsers();
-      showToast('User deleted successfully.', 'success');
-    } catch (err) {
-      showToast(err.message, 'error');
-      setUserToDelete(null);
-    }
-  };
 
   const isFormValid = useMemo(() => {
-    const requiredFields = ['first_name', 'middle_initial', 'last_name', 'email', 'role', 'opshub_role', 'status'];
+    const requiredFields = ['first_name', 'middle_initial', 'last_name', 'email', 'role', 'status'];
     return requiredFields.every(field => formData[field] && String(formData[field]).trim() !== '');
   }, [formData]);
 
@@ -326,11 +438,6 @@ const Accounts = () => {
       if (!formData.role) {
         roleRef.current?.focus();
         roleRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        return;
-      }
-      if (!formData.opshub_role) {
-        opshubRoleRef.current?.focus();
-        opshubRoleRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
         return;
       }
       
@@ -384,12 +491,7 @@ const Accounts = () => {
 
   const handleClearSearch = () => setFilters(prev => ({ ...prev, query: '' }));
 
-  const handleNextPage = () => setCurrentPage(prev => Math.min(prev + 1, totalPages));
-
-  const handlePreviousPage = () => setCurrentPage(prev => Math.max(prev - 1, 1));
-
   const requestSort = (key) => {
-    setCurrentPage(1);
     const direction = (sortConfig.key === key && sortConfig.direction === 'ascending') ? 'descending' : 'ascending';
     setSortConfig({ key, direction });
   };
@@ -401,7 +503,7 @@ const Accounts = () => {
 
   if (!sessionState || isLoading || isSettingsLoading) {
     return (
-      <div className="p-4 sm:p-6 lg:p-8">
+      <div>
         <h1 className="mb-6 text-3xl font-bold tracking-tight text-gray-900 dark:text-white">User Accounts</h1>
         <div className="w-full p-4 space-y-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow animate-pulse">
           {[...Array(8)].map((_, i) => (
@@ -424,31 +526,64 @@ const Accounts = () => {
     );
   }
 
-  return (
-    <div>
 
+  return (
+    <div className="animate-fadeIn flex-1 flex flex-col min-h-0 w-full">
       <ToastContainer toasts={toasts} onClose={removeToast} />
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">User Accounts</h1>
-        <div className="relative">
-          <input type="text" value={filters.query} onChange={handleFilterChange} placeholder="Search..." className="w-64 py-2 pl-4 pr-10 border rounded dark:bg-gray-900 dark:border-gray-600 focus:ring-blue-500 focus:border-blue-500" />
-          {filters.query && (
-            <button onClick={handleClearSearch} aria-label="Clear search" className="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-500 transition-colors hover:text-gray-800 dark:hover:text-gray-200">
-              <FiX className="w-5 h-5" />
-            </button>
-          )}
-        </div>
-      </div>
-      <div className="flex flex-wrap items-center gap-2 mb-4">
+      
+      {/* Header and Tabs */}
+      <div className="mb-6 flex flex-col gap-4 flex-shrink-0">
+        <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">Accounts</h1>
         {canManage && (
-          <button onClick={handleAddClick} className="flex items-center gap-2 px-4 py-2 font-semibold text-white bg-blue-600 rounded-lg shadow-md hover:bg-blue-700 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
-            <FiPlus />Add New User
-          </button>
+          <div className="inline-flex bg-gray-100 border border-gray-200 dark:bg-gray-800 dark:border-gray-700 rounded-lg p-1 self-start">
+            <button
+              onClick={() => setActiveTab('profile')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                activeTab === 'profile'
+                  ? 'bg-white dark:bg-gray-700 text-blue-600 dark:text-blue-400 shadow-sm'
+                  : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+              }`}
+            >
+              <FiUser className="w-4 h-4" />
+              My Profile
+            </button>
+            <button
+              onClick={() => setActiveTab('manage')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                activeTab === 'manage'
+                  ? 'bg-white dark:bg-gray-700 text-blue-600 dark:text-blue-400 shadow-sm'
+                  : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+              }`}
+            >
+              <FiUsers className="w-4 h-4" />
+              Manage Users
+            </button>
+          </div>
         )}
       </div>
-      
-      <div className="overflow-x-auto bg-white rounded-lg shadow h-[760px] dark:bg-gray-800">
-        <table className="min-w-full text-sm leading-normal">
+
+      {activeTab === 'profile' ? (
+        <ProfileView sessionState={sessionState} serverIp={serverIp} />
+      ) : (
+        <div className="flex-1 flex flex-col min-h-0 w-full">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-4 flex-shrink-0">
+            <div className="relative">
+              <input type="text" value={filters.query} onChange={handleFilterChange} placeholder="Search users..." className="w-full sm:w-80 py-2 pl-4 pr-10 border rounded-lg dark:bg-gray-900 dark:border-gray-600 focus:ring-blue-500 focus:border-blue-500" />
+              {filters.query && (
+                <button onClick={handleClearSearch} aria-label="Clear search" className="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-500 transition-colors hover:text-gray-800 dark:hover:text-gray-200">
+                  <FiX className="w-5 h-5" />
+                </button>
+              )}
+            </div>
+            {canManage && (
+              <button onClick={handleAddClick} className="flex items-center gap-2 px-4 py-2 font-semibold text-white bg-blue-600 rounded-lg shadow-md hover:bg-blue-700 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
+                <FiPlus />Add New User
+              </button>
+            )}
+          </div>
+          
+          <div className="overflow-auto bg-white rounded-lg shadow flex-1 min-h-0 dark:bg-gray-800">
+            <table className="min-w-full text-sm leading-normal">
           <thead>
             <tr className="sticky top-0 border-b-2 border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-900/50">
               <th className="px-5 py-3.5 font-semibold tracking-wider">
@@ -463,15 +598,14 @@ const Accounts = () => {
               <th className="px-5 py-3.5 font-semibold tracking-wider">
                 <button onClick={() => requestSort('created_at')} className="flex items-center w-full uppercase">Date Registered {getSortIcon('created_at')}</button>
               </th>
-              <th className="px-5 py-3.5 text-left font-semibold tracking-wider uppercase">Actions</th>
+              <th className="px-5 py-3.5 text-center font-semibold tracking-wider uppercase">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {paginatedUsers.length > 0 ? (
-              paginatedUsers.map((user) => {
+            {sortedUsers.length > 0 ? (
+              sortedUsers.map((user) => {
                 const isCurrentUser = sessionState.user.id === user.id;
                 const canEdit = sessionState.user.id !== user.id && ((sessionState.user.role === 'Super_Admin') || (sessionState.user.role === 'Admin' && user.role !== 'Super_Admin') || (sessionState.user.role === 'PACD' && (user.role === 'User')));
-                const canDelete = sessionState.user.id !== user.id && canEdit;
 
                   return (
                   <tr key={user.id} className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors duration-200">
@@ -480,7 +614,7 @@ const Accounts = () => {
                     <td className="px-5 py-4"><span className="relative inline-block px-3 py-1 font-semibold text-green-900 dark:text-green-200 leading-tight"><span aria-hidden className="absolute inset-0 bg-green-200 dark:bg-green-800 opacity-50 rounded-full"></span><span className="relative">{user.role}</span></span></td>
                     <td className="px-5 py-4 text-gray-700 dark:text-gray-300">{user.created_at ? format(parseISO(user.created_at), 'MMMM d, yyyy') : 'N/A'}</td>
                    <td className="px-5 py-4">
-                      <div className="flex items-center space-x-4">
+                      <div className="flex items-center justify-center space-x-4">
                           <button
                             onClick={() => handleEditClick(user)}
                             disabled={!canEdit}
@@ -489,22 +623,6 @@ const Accounts = () => {
                           >
                             <FaPencilAlt className="w-4 h-4" />
                           </button>
-                            
-                              {canDelete ? (
-                          <button 
-                            onClick={() => handleDeleteClick(user)} 
-                            disabled={assignedFocalPersonIds.has(user.id)}
-                            title={assignedFocalPersonIds.has(user.id) ? "Cannot delete: Focal Person of an existing survey" : "Delete User"}
-                            className={`font-medium transition-colors ${assignedFocalPersonIds.has(user.id) ? 'text-gray-400 cursor-not-allowed' : 'text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300'}`}
-                          >
-                            <FaTrash className="w-4 h-4" />
-                          </button>
-                      ) : (
-                          <button title="You cannot delete your own account." className="font-medium transition-colors text-gray-400 cursor-not-allowed">
-                              <FaTrash className="w-4 h-4" />
-                          </button>
-                      )}
-                          
                       </div>
                     </td>
                   </tr>
@@ -522,72 +640,53 @@ const Accounts = () => {
         
       </div>
 
-      <div className="flex justify-between items-center mt-1">
-        <span className="text-sm text-gray-700 dark:text-gray-300">
-          Showing {Math.min((currentPage - 1) * rowsPerPage + 1, sortedUsers.length)} to {Math.min(currentPage * rowsPerPage, sortedUsers.length)} of {sortedUsers.length} Users
+      <div className="flex justify-end items-center mt-2 px-2 flex-shrink-0">
+        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          Total Records: {sortedUsers.length}
         </span>
-        <div className="flex items-center space-x-2">
-          <button onClick={handlePreviousPage} disabled={currentPage === 1} title={currentPage === 1 ? 'Already on first page' : 'Go to previous page'} className="px-4 py-2 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md disabled:opacity-50 transition-colors hover:bg-gray-50 dark:hover:bg-gray-600">Previous</button>
-          <span className="text-gray-700 dark:text-gray-300 px-2">{currentPage}</span>
-          <button onClick={handleNextPage} disabled={currentPage >= totalPages} title={currentPage >= totalPages ? 'Already on last page' : 'Go to next page'} className="px-4 py-2 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md disabled:opacity-50 transition-colors hover:bg-gray-50 dark:hover:bg-gray-600">Next</button>
-        </div>
       </div>
+      </div>
+      )}
 
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
-          <div ref={addEditModalRef} className="flex flex-col w-full max-w-lg max-h-[90vh] bg-white dark:bg-gray-800 rounded-lg shadow-xl overflow-hidden">
+        <div className="fixed inset-0 z-50 p-4 bg-black/60 overflow-y-auto flex items-start justify-center">
+          <div ref={addEditModalRef} className="flex flex-col w-full max-w-3xl bg-white dark:bg-gray-800 rounded-lg shadow-xl relative my-auto">
                 <div className="flex-shrink-0 px-6 py-4 border-b border-gray-200 dark:border-gray-700 rounded-t-lg">
                     <h2 className="text-xl font-semibold text-gray-900 dark:text-white">{editingUser ? 'Edit User' : 'Add a New User'}</h2>
                 </div>
-                <form id="userForm" onSubmit={handleFormSubmit} className="flex-auto p-6 overflow-y-auto">
+                <form id="userForm" onSubmit={handleFormSubmit} className="flex-auto p-6 overflow-visible">
                     
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-5">
-                        <div>
+                    <div className="grid grid-cols-1 md:grid-cols-12 gap-x-4 gap-y-5">
+                        <div className="md:col-span-4">
                             <label htmlFor="first_name" className="block text-sm font-medium text-gray-700 dark:text-gray-300">First Name*</label>
                             <input ref={firstNameRef} type="text" id="first_name" name="first_name" value={formData.first_name} onChange={handleInputChange} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
                         </div>
-                        <div>
+                        <div className="md:col-span-2">
                             <label htmlFor="middle_initial" className="block text-sm font-medium text-gray-700 dark:text-gray-300">M.I.*</label>
                             <input ref={middleInitialRef} type="text" id="middle_initial" name="middle_initial" value={formData.middle_initial} onChange={handleInputChange} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
                         </div>
-                        <div>
+                        <div className="md:col-span-4">
                             <label htmlFor="last_name" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Last Name*</label>
                             <input ref={lastNameRef} type="text" id="last_name" name="last_name" value={formData.last_name} onChange={handleInputChange} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
                         </div>
-                        <div>
+                        <div className="md:col-span-2">
                             <label htmlFor="suffix" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Suffix</label>
                             <input type="text" id="suffix" name="suffix" value={formData.suffix || ''} onChange={handleInputChange} className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
                         </div>
-                        <div className="md:col-span-2">
+                        <div className="md:col-span-12">
                             <label htmlFor="email" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Email Address*</label>
                             <input ref={emailRef} type="email" id="email" name="email" value={formData.email} onChange={handleInputChange} required className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
                         </div>
-                        <div className="md:col-span-2">
-                            <label htmlFor="position" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Position</label>
-                            <input type="text" id="position" name="position" value={formData.position || ''} onChange={handleInputChange} className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
-                        </div>
-                        <div>
-                            <label htmlFor="salary" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Salary</label>
-                            <input type="number" id="salary" name="salary" value={formData.salary || ''} onChange={handleInputChange} className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
-                        </div>
-                        <div>
-                            <label htmlFor="salary_grade" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Salary Grade</label>
-                            <input type="text" id="salary_grade" name="salary_grade" value={formData.salary_grade || ''} onChange={handleInputChange} className="mt-1 block w-full p-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" />
-                        </div>
-                        <div className="md:col-span-2">
+                        <div className="md:col-span-6">
                             <label htmlFor="role" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Role*</label>
                             <SearchableDropdown id="role" options={roleOptions} value={formData.role} onChange={(value) => handleInputChange({ target: { name: 'role', value } })} placeholder="Select Role" required />
                         </div>
-                        <div className="md:col-span-2">
-                            <label htmlFor="opshub_role" className="block text-sm font-medium text-gray-700 dark:text-gray-300">OpsHub Role*</label>
-                            <SearchableDropdown id="opshub_role" options={opshubRoleOptions} value={formData.opshub_role} onChange={(value) => handleInputChange({ target: { name: 'opshub_role', value } })} placeholder="Select OpsHub Role" required />
-                        </div>
-                        <div className="md:col-span-2">
+                        <div className="md:col-span-6">
                             <label htmlFor="status" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Status*</label>
                             <SearchableDropdown
                               id="status"
                               options={statusOptions}
-                              value={formData.status || 'Active'}
+                              value={formData.status || ''}
                               onChange={(value) => handleInputChange({ target: { name: 'status', value } })}
                               placeholder="Select Status"
                               required
@@ -613,19 +712,7 @@ const Accounts = () => {
                 </div>
             </div>
         </div>
-      )}
 
-      {userToDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
-          <div className="w-full max-w-md p-6 bg-white dark:bg-gray-800 rounded-lg shadow-xl">
-            <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Confirm Deletion</h2>
-            <p className="mt-2 text-gray-600 dark:text-gray-300">Are you sure you want to delete user "{userToDelete.email}"? This cannot be undone.</p>
-            <div className="flex justify-end mt-6 space-x-2">
-              <button onClick={() => setUserToDelete(null)} className="flex items-center gap-2 px-4 py-2 font-semibold text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 transition-colors"><FiX className="w-4 h-4" />Cancel</button>
-              <button onClick={confirmDelete} className="flex items-center gap-2 px-4 py-2 font-semibold text-white bg-red-600 rounded-md shadow-sm hover:bg-red-700 transition-colors"><FaTrash className="w-4 h-4" />Delete</button>
-            </div>
-          </div>
-        </div>
       )}
 
       {showTempPasswordModal && (

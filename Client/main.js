@@ -8,6 +8,14 @@ const os = require('os');
 const http = require('http');
 require('dotenv').config();
 
+// Disable Hardware Acceleration to prevent 0x80000003 crash on Windows 11
+app.disableHardwareAcceleration();
+
+// Disable Chromium Sandbox to prevent 0x80000003 Breakpoint crashes on Windows 11
+app.commandLine.appendSwitch('no-sandbox');
+app.commandLine.appendSwitch('disable-gpu');
+app.commandLine.appendSwitch('disable-software-rasterizer');
+
 // Declare variables outside the async function
 let store;
 let nodeFetch;
@@ -41,11 +49,14 @@ function getLocalIP() {
 }
 
 async function startApp() {
-  // Start loading dependencies in parallel with app startup
-  const initPromise = initializeDependencies();
-
   async function createWindow() {
-    await initPromise; // Wait for dependencies to be ready
+    try {
+      await initializeDependencies(); // Wait for dependencies to be ready safely
+    } catch (err) {
+      dialog.showErrorBox("Startup Error", "Failed to load dependencies: " + (err.stack || err.message));
+      app.exit(1);
+      return;
+    }
 
     const isDev = !app.isPackaged;
     const isDark = store.get('isDarkMode');

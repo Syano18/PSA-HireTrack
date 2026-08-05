@@ -822,4 +822,68 @@ router.get('/validate-training-certificate/:refNumber', async (req, res) => {
   }
 });
 
+
+router.post('/send-email-training-certificate', async (req, res) => {
+  const data = req.body;
+  const { refNumber, emailAddress, name } = data;
+  if (!refNumber || !emailAddress) return res.status(400).json({ message: 'Reference number and email address are required.' });
+
+  try {
+    let storedQrToken = null;
+    let qrCodeDataUrl = null;
+    try {
+      const [existingRows] = await dbPool.query(
+        'SELECT details FROM certificate_registry WHERE reference_number = ?',
+        [refNumber]
+      );
+      if (existingRows.length > 0) {
+        const existingDetails = JSON.parse(existingRows[0].details || '{}');
+        storedQrToken = existingDetails.qr_token || null;
+      }
+    } catch (lookupErr) {
+      console.error('[send-email-training] Could not fetch existing row:', lookupErr.message);
+    }
+    
+    if (storedQrToken) {
+      const verifyURL = buildVerifyURL(storedQrToken);
+      qrCodeDataUrl = await QRCode.toDataURL(verifyURL, { errorCorrectionLevel: 'M', margin: 2, width: 90 });
+    } else {
+      return res.status(400).json({ message: 'QR Token not found for this certificate.' });
+    }
+
+    const doc = new PDFDocument({
+      size: 'A4',
+      layout: 'landscape',
+      margin: 0,
+      info: { Title: 'Training Certificate', Author: 'Philippine Statistics Authority Kalinga' },
+      userPassword: process.env.PDF_OWNER_PASSWORD,
+      ownerPassword: process.env.PDF_OWNER_PASSWORD,
+      pdfVersion: '1.7ext3',
+      encryption: { v: 4, r: 4, length: 128 },
+      permissions: { printing: 'highResolution', modifying: false, copying: false, annotating: false, fillingForms: false, contentAccessibility: false, documentAssembly: false }
+    });
+
+    let buffers = [];
+    doc.on('data', buffers.push.bind(buffers));
+    doc.on('end', async () => {
+      let pdfBuffer = Buffer.concat(buffers);
+      const { sendCertificateEmail } = require('../utils/emailService');
+      try {
+        await sendCertificateEmail(emailAddress, name || 'Employee', pdfBuffer, 'Certificate.pdf');
+        res.json({ message: 'Email sent successfully!' });
+      } catch (emailErr) {
+        console.error('Failed to send email:', emailErr);
+        res.status(500).json({ message: 'Failed to send email' });
+      }
+    });
+
+    drawCertificate(doc, { ...data, qrCodeDataUrl, refNumber });
+    doc.end();
+
+  } catch (error) {
+    console.error('Error in send-email-certificate:', error);
+    res.status(500).json({ message: 'Internal Server Error' });
+  }
+});
+
 module.exports = router;

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
-import { FaSort, FaSortUp, FaSortDown, FaSearch, FaCertificate, FaFilePdf, FaDownload, FaTimes, FaArrowLeft, FaArrowRight } from 'react-icons/fa';
+import { FaSort, FaSortUp, FaSortDown, FaSearch, FaCertificate, FaFilePdf, FaDownload, FaTimes, FaEnvelope, FaQrcode } from 'react-icons/fa';
 import { FiX, FiSave } from 'react-icons/fi';
+import { Scanner } from '@yudiel/react-qr-scanner';
 import ToastContainer from '../components/ToastContainer';
 import useToast from '../hooks/useToast';
 import ProgressModal from '../components/Progress';
@@ -37,11 +38,14 @@ const Certificates = () => {
   const [selectedTrainings, setSelectedTrainings] = useState([]);
   const [modalSearchTerm, setModalSearchTerm] = useState("");
   const [isProgressModalOpen, setIsProgressModalOpen] = useState(false);
+  const [isEmailModalOpen, setIsEmailModalOpen] = useState(false);
+  const [emailAddress, setEmailAddress] = useState("");
+  const [emailAttachment, setEmailAttachment] = useState(null);
+  const [isSendingEmail, setIsSendingEmail] = useState(false);
+
   const [progress, setProgress] = useState(0);
   const [progressMessage, setProgressMessage] = useState('');
   const [isProgressComplete, setIsProgressComplete] = useState(false);
-  const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 10;
   const [sortConfig, setSortConfig] = useState({ key: 'id', direction: 'ascending' });
   const [globalSearchTerm, setGlobalSearchTerm] = useState("");
   const [sessionState, setSessionState] = useState(null);
@@ -50,6 +54,7 @@ const Certificates = () => {
   const [validationInput, setValidationInput] = useState('');
   const [validationResult, setValidationResult] = useState(null);
   const [isValidating, setIsValidating] = useState(false);
+  const [isScanning, setIsScanning] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editFormData, setEditFormData] = useState({});
   const [generatedCerts, setGeneratedCerts] = useState([]);
@@ -113,7 +118,7 @@ const Certificates = () => {
     employees.forEach(emp => {
       employeeMap.set(emp.employee_id, {
         id: emp.employee_id, firstName: emp.first_name, lastName: emp.last_name, middleInitial: emp.middle_initial, suffix: emp.suffix,
-        sex: emp.sex, barangay: emp.barangay, municipality: emp.city,
+        sex: emp.sex, barangay: emp.barangay, municipality: emp.city, email: emp.email || emp.email_address,
         trainings: [], employments: [],
       });
     });
@@ -197,13 +202,8 @@ const Certificates = () => {
 
 
   const totalItems = viewMode === 'employee' ? sortedData.length : searchedTrainingTitles.length;
-  const totalPages = Math.ceil(totalItems / itemsPerPage);
-  const currentEmployeeItems = sortedData.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
-  const currentTrainingItems = searchedTrainingTitles.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
-
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [globalSearchTerm, viewMode]);
+  const currentEmployeeItems = sortedData;
+  const currentTrainingItems = searchedTrainingTitles;
 
   const requestSort = (key) => {
     let direction = 'ascending';
@@ -216,8 +216,52 @@ const Certificates = () => {
     return sortConfig.direction === 'ascending' ? <FaSortUp className="inline-block ml-1" /> : <FaSortDown className="inline-block ml-1" />;
   };
 
-  const handleNextPage = () => setCurrentPage(prev => Math.min(prev + 1, totalPages));
-  const handlePreviousPage = () => setCurrentPage(prev => Math.max(prev - 1, 1));
+  
+  const handleOpenEmailModal = (employee) => {
+    setSelectedEmployee(employee);
+    setEmailAddress(employee.email || "");
+    setEmailAttachment(null);
+    setIsEmailModalOpen(true);
+  };
+
+  const handleSendEmail = async () => {
+    if (!emailAddress) {
+      showToast('Please provide an email address.', 'error');
+      return;
+    }
+    if (!emailAttachment) {
+      showToast('Please upload a certificate to send.', 'error');
+      return;
+    }
+    
+    setIsSendingEmail(true);
+    
+    try {
+      const formData = new FormData();
+      formData.append('emailAddress', emailAddress);
+      formData.append('name', `${selectedEmployee.firstName} ${selectedEmployee.lastName}`);
+      formData.append('certificate', emailAttachment);
+      
+      const res = await fetch(`http://${serverIp}:3001/api/send-email-upload`, {
+        method: 'POST',
+        body: formData,
+      });
+      
+      const data = await res.json();
+      
+      if (res.ok) {
+        showToast('Successfully sent certificate via email.', 'success');
+        setIsEmailModalOpen(false);
+      } else {
+        showToast(data.message || 'Failed to send certificate via email.', 'error');
+      }
+    } catch (err) {
+      console.error('Failed to send email:', err);
+      showToast('An error occurred while sending the email.', 'error');
+    } finally {
+      setIsSendingEmail(false);
+    }
+  };
 
   const handleOpenModal = async (employee, mode) => {
     setSelectedEmployee(employee);
@@ -660,20 +704,41 @@ const Certificates = () => {
     setIsValidationModalOpen(true);
     setValidationInput('');
     setValidationResult(null);
+    setIsScanning(false);
   };
 
-  const handleValidate = async (e) => {
-    e.preventDefault();
-    if (!validationInput.trim()) return;
+  const handleValidate = async (e, scannedText = null) => {
+    if (e) e.preventDefault();
+    const input = scannedText || validationInput;
+    if (!input.trim()) return;
     setIsValidating(true);
     setValidationResult(null);
     try {
-      const data = await apiFetch(`validate-certificate/${encodeURIComponent(validationInput.trim())}`, serverIp);
+      const data = await apiFetch(`validate-certificate/${encodeURIComponent(input.trim())}`, serverIp);
       setValidationResult(data);
     } catch (err) {
       setValidationResult({ valid: false, message: "Error connecting to server." });
     } finally {
       setIsValidating(false);
+    }
+  };
+
+  const handleScan = (result) => {
+    if (result) {
+      const text = result[0]?.rawValue || result?.rawValue || result;
+      if (text && typeof text === 'string') {
+        setValidationInput(text);
+        setIsScanning(false);
+        handleValidate(null, text);
+      }
+    }
+  };
+
+  const handleScanError = (error) => {
+    if (error) {
+      console.error('QR Scanner error:', error);
+      setIsScanning(false);
+      showToast("Camera not found or permission denied.", "error");
     }
   };
 
@@ -778,7 +843,7 @@ const Certificates = () => {
   }
 
   return (
-    <div>
+    <div className="flex-1 w-full flex flex-col min-h-0">
       <div className="flex flex-col items-start justify-between gap-4 mb-6 md:flex-row md:items-center">
         <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">Generate Certificates</h1>
         <div className="flex items-center gap-4 w-full md:w-auto">
@@ -789,7 +854,7 @@ const Certificates = () => {
             {isValidationModalOpen && (
               <>
                 {/* Backdrop — click outside to close */}
-                <div className="fixed inset-0 z-[69]" onClick={() => setIsValidationModalOpen(false)} />
+                <div className="fixed inset-0 z-[69]" onClick={() => { setIsValidationModalOpen(false); setIsScanning(false); }} />
                 {/* Dropdown panel */}
                 <div className="fixed top-16 left-1/2 -translate-x-1/2 z-[70] w-[500px] max-h-[calc(100vh-80px)] bg-white rounded-xl shadow-2xl dark:bg-gray-800 flex flex-col border border-gray-200 dark:border-gray-700">
 
@@ -803,13 +868,27 @@ const Certificates = () => {
 
                   {/* Search bar */}
                   <div className="px-5 pt-4 pb-2 flex-shrink-0">
-                    <form onSubmit={handleValidate} className="relative">
-                      <input type="text" value={validationInput} onChange={(e) => setValidationInput(e.target.value)} placeholder="Enter Reference Number (e.g., 26CAR32-001)" className="w-full pl-3 pr-10 py-2.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white" />
-                      <button type="submit" disabled={isValidating || !validationInput.trim()} title={isValidating ? 'Validating...' : !validationInput.trim() ? 'Enter employee name to validate' : 'Validate'} className="absolute right-2 top-2 p-1 text-white bg-indigo-600 rounded-md hover:bg-indigo-700 disabled:opacity-50">
-                        {isValidating ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : <FaSearch className="w-3.5 h-3.5" />}
+                    <form onSubmit={handleValidate} className="relative flex gap-2">
+                      <div className="relative flex-1">
+                        <input type="text" value={validationInput} onChange={(e) => setValidationInput(e.target.value)} placeholder="Enter Reference Number (e.g., 26CAR32-001)" className="w-full pl-3 pr-10 py-2.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white" />
+                        <button type="submit" disabled={isValidating || !validationInput.trim()} title={isValidating ? 'Validating...' : !validationInput.trim() ? 'Enter reference number to validate' : 'Validate'} className="absolute right-2 top-2 p-1 text-white bg-indigo-600 rounded-md hover:bg-indigo-700 disabled:opacity-50">
+                          {isValidating ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : <FaSearch className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                      <button type="button" onClick={() => setIsScanning(!isScanning)} className={`flex items-center justify-center p-2 rounded-lg border transition-colors ${isScanning ? 'bg-indigo-100 text-indigo-700 border-indigo-300 dark:bg-indigo-900/30 dark:text-indigo-400 dark:border-indigo-700' : 'bg-gray-50 text-gray-700 border-gray-300 hover:bg-gray-100 dark:bg-gray-700 dark:text-gray-300 dark:border-gray-600 dark:hover:bg-gray-600'}`} title={isScanning ? 'Close Scanner' : 'Scan QR Code'}>
+                        <FaQrcode className="w-5 h-5" />
                       </button>
                     </form>
                   </div>
+
+                  {/* Scanner area */}
+                  {isScanning && (
+                    <div className="px-5 py-2 flex justify-center">
+                      <div className="w-64 h-64 rounded-lg overflow-hidden border border-gray-300 dark:border-gray-600 relative bg-black shadow-inner flex items-center justify-center">
+                        <Scanner onScan={handleScan} onError={handleScanError} />
+                      </div>
+                    </div>
+                  )}
 
                   {/* Result area */}
                   <div className="px-5 pb-3 space-y-3 flex-1 overflow-y-auto">
@@ -954,7 +1033,7 @@ const Certificates = () => {
       </div>
 
       {viewMode === 'employee' ? (
-        <div className="overflow-x-auto bg-white h-[800px] rounded-lg shadow dark:bg-gray-800">
+        <div className="overflow-auto bg-white rounded-lg shadow flex-1 min-h-0 dark:bg-gray-800">
           <table className="min-w-full leading-normal">
             <thead>
               <tr className="sticky top-0 border-b-2 border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-900/50">
@@ -980,6 +1059,7 @@ const Certificates = () => {
                       <div className="flex justify-center space-x-2">
                         <button onClick={() => handleOpenModal(employee, 'Training')} className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed" disabled={employee.trainings.length === 0} title={employee.trainings.length === 0 ? 'No training records available' : 'Generate training certificate'}><FaFilePdf className="w-4 h-4" />Training</button>
                         <button onClick={() => handleOpenModal(employee, 'Employment')} className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-white bg-orange-600 rounded-lg hover:bg-orange-700 dark:bg-orange-700 dark:hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed" disabled={employee.employments.length === 0} title={employee.employments.length === 0 ? 'No employment records available' : 'Generate employment certificate'}><FaFilePdf className="w-4 h-4" />Employment</button>
+                        <button onClick={() => handleOpenEmailModal(employee)} className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 dark:bg-indigo-700 dark:hover:bg-indigo-600 transition-colors" title="Send certificate via email"><FaEnvelope className="w-5 h-5" />Send Email</button>
                       </div>
                     </td>
                   </tr>
@@ -994,7 +1074,7 @@ const Certificates = () => {
           </table>
         </div>
       ) : (
-        <div className="overflow-x-auto bg-white h-[800px] rounded-lg shadow dark:bg-gray-800">
+        <div className="overflow-auto bg-white rounded-lg shadow flex-1 min-h-0 dark:bg-gray-800">
           <table className="min-w-full leading-normal">
             <thead>
               <tr className="sticky top-0 border-b-2 border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-900/50">
@@ -1028,19 +1108,10 @@ const Certificates = () => {
         </div>
       )}
 
-      <div className="flex justify-between items-center mt-1">
-        <span className="text-sm text-gray-700 dark:text-gray-300">
-          Showing {totalItems > 0 ? (currentPage - 1) * itemsPerPage + 1 : 0} to {Math.min(currentPage * itemsPerPage, totalItems)} of {totalItems} records
+      <div className="flex justify-end items-center mt-2 px-2 flex-shrink-0">
+        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          Total Records: {totalItems}
         </span>
-        <div className="flex items-center space-x-2">
-          <button onClick={handlePreviousPage} disabled={currentPage === 1} title={currentPage === 1 ? 'Already on first page' : 'Go to previous page'} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed">
-            <FaArrowLeft className="w-4 h-4" />Previous
-          </button>
-          <span className="text-gray-700 dark:text-gray-300 px-2">{currentPage}</span>
-          <button onClick={handleNextPage} disabled={currentPage >= totalPages} title={currentPage >= totalPages ? 'Already on last page' : 'Go to next page'} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed">
-            Next<FaArrowRight className="w-4 h-4" />
-          </button>
-        </div>
       </div>
 
       {isModalOpen && selectedEmployee && (
@@ -1239,6 +1310,69 @@ const Certificates = () => {
       />
 
       <ToastContainer toasts={toasts} onClose={removeToast} />
+    
+
+      {isEmailModalOpen && selectedEmployee && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-60">
+          <div className="flex flex-col w-full max-w-md bg-white rounded-lg shadow-xl dark:bg-gray-800">
+            <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
+              <h3 className="text-lg font-medium text-gray-900 dark:text-white">Send Certificate via Email</h3>
+              <button onClick={() => setIsEmailModalOpen(false)} className="text-gray-400 hover:text-gray-500 dark:hover:text-gray-300">
+                <FaTimes className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="p-4 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Employee Email Address</label>
+                <input 
+                  type="email" 
+                  value={emailAddress} 
+                  onChange={(e) => setEmailAddress(e.target.value)} 
+                  onClick={() => setEmailAddress('')}
+                  placeholder="name@example.com"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Upload Certificate (PDF)</label>
+                <input 
+                  type="file" 
+                  accept=".pdf,application/pdf"
+                  onChange={(e) => setEmailAttachment(e.target.files[0])}
+                  className="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 dark:file:bg-indigo-900/50 dark:file:text-indigo-300 dark:text-gray-300"
+                />
+              </div>
+            </div>
+            
+            <div className="flex justify-end gap-3 p-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 rounded-b-lg">
+              <button 
+                onClick={() => setIsEmailModalOpen(false)} 
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 dark:hover:bg-gray-600"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={handleSendEmail} 
+                disabled={isSendingEmail || !emailAttachment}
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-indigo-600 border border-transparent rounded-md shadow-sm hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isSendingEmail ? (
+                  <>
+                    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                    Sending...
+                  </>
+                ) : (
+                  <>
+                    <FaEnvelope className="w-4 h-4" /> Send Email
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

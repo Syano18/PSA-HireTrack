@@ -17,8 +17,7 @@ const ManagePositions = ({ session }) => {
     const [currentPosition, setCurrentPosition] = useState({ id: null, position_title: '' });
     const [searchQuery, setSearchQuery] = useState('');
     const [originalPositionData, setOriginalPositionData] = useState(null);
-    const [currentPage, setCurrentPage] = useState(1);
-    const rowsPerPage = 10;
+
     const [sortConfig, setSortConfig] = useState({ key: 'position_title', direction: 'ascending' });
     
     const [positionToDelete, setPositionToDelete] = useState(null);
@@ -69,10 +68,6 @@ const ManagePositions = ({ session }) => {
         );
     }, [positions, searchQuery]);
 
-    useEffect(() => {
-        setCurrentPage(1);
-    }, [searchQuery, sortConfig]);
-
     const sortedPositions = useMemo(() => {
         let sortableItems = [...filteredPositions];
         if (sortConfig.key) {
@@ -89,11 +84,7 @@ const ManagePositions = ({ session }) => {
         return sortableItems;
     }, [filteredPositions, sortConfig]);
 
-    const totalPages = Math.ceil(sortedPositions.length / rowsPerPage);
-    const paginatedPositions = useMemo(() => {
-        const startIndex = (currentPage - 1) * rowsPerPage;
-        return sortedPositions.slice(startIndex, startIndex + rowsPerPage);
-    }, [sortedPositions, currentPage]);
+
 
     const requestSort = (key) => {
         const direction = (sortConfig.key === key && sortConfig.direction === 'ascending') ? 'descending' : 'ascending';
@@ -105,8 +96,7 @@ const ManagePositions = ({ session }) => {
         return sortConfig.direction === 'ascending' ? <FaSortUp className="inline-block ml-1 text-blue-500" /> : <FaSortDown className="inline-block ml-1 text-blue-500" />;
     };
 
-    const handleNextPage = () => setCurrentPage(prev => Math.min(prev + 1, totalPages));
-    const handlePreviousPage = () => setCurrentPage(prev => Math.max(prev - 1, 1));
+
 
     const handleOpenModal = (position = { id: null, position_title: '' }) => {
         setCurrentPosition(position);
@@ -208,7 +198,7 @@ const ManagePositions = ({ session }) => {
     }
 
     return (
-        <div>
+        <div className="flex-1 w-full flex flex-col min-h-0">
             <div className="flex justify-between items-center mb-4">
                 <h1 className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white">Manage Positions</h1>
                 <div className="flex items-center gap-4">
@@ -224,15 +214,15 @@ const ManagePositions = ({ session }) => {
                         )}
                     </div>
                     {canManage && (
-                        <button onClick={() => handleOpenModal()} className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600">
-                            <FiPlus className="w-4 h-4" />
+                        <button onClick={() => handleOpenModal()} className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600">
+                            <FiPlus className="w-5 h-5" />
                             Add Position Title
                         </button>
                     )}
                 </div>
             </div>
 
-            <div className="overflow-x-auto bg-white h-[680px] rounded-lg shadow dark:bg-gray-800">
+            <div className="overflow-auto bg-white rounded-lg shadow flex-1 min-h-0 dark:bg-gray-800">
                 <table className="min-w-full text-sm leading-normal">
                     <thead>
                         <tr className="sticky top-0 border-b-2 border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-900/50">
@@ -247,7 +237,7 @@ const ManagePositions = ({ session }) => {
                         </tr>
                     </thead>
                     <tbody>
-                        {paginatedPositions.length > 0 ? paginatedPositions.map(pos => (
+                        {sortedPositions.length > 0 ? sortedPositions.map(pos => (
                             <tr key={pos.id} className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors duration-200">
                                 <td className="px-6 py-4 font-medium text-gray-800 whitespace-nowrap dark:text-gray-200">{pos.position_title}</td>
                                 {canManage && (
@@ -274,18 +264,11 @@ const ManagePositions = ({ session }) => {
                 </table>
             </div>
 
-            {totalPages > 1 && (
-                <div className="flex justify-between items-center mt-1">
-                    <span className="text-sm text-gray-700 dark:text-gray-300">
-                        Showing {Math.min((currentPage - 1) * rowsPerPage + 1, sortedPositions.length)} to {Math.min(currentPage * rowsPerPage, sortedPositions.length)} of {sortedPositions.length} records
-                    </span>
-                    <div className="flex items-center space-x-2">
-                        <button onClick={handlePreviousPage} disabled={currentPage === 1} className="px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed">Previous</button>
-                        <span className="text-gray-700 dark:text-gray-300 px-2">{currentPage}</span>
-                        <button onClick={handleNextPage} disabled={currentPage >= totalPages} className="px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed">Next</button>
-                    </div>
-                </div>
-            )}
+            <div className="flex justify-end items-center mt-2 px-2 flex-shrink-0">
+                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Total Records: {sortedPositions.length}
+                </span>
+            </div>
 
             {isModalOpen && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">

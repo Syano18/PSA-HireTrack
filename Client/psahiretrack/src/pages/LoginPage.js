@@ -4,7 +4,7 @@ import { useSettings } from '../context/SettingsContext';
 import ToastContainer from '../components/ToastContainer';
 import useToast from '../hooks/useToast';
 import PSALogo from '../assets/logo.png';
-import { FaSun, FaMoon, FaEye, FaEyeSlash, FaCog, FaInfoCircle, FaGoogle, FaPaperPlane, FaUnlink, FaRedo, FaSync } from 'react-icons/fa';
+import { FaSun, FaMoon, FaEye, FaEyeSlash, FaCog, FaInfoCircle, FaGoogle, FaUnlink, FaRedo, FaSync } from 'react-icons/fa';
 import { useSignIn, useAuth } from '@clerk/clerk-react';
 import { FiX, FiSave, FiDownload } from 'react-icons/fi';
 
@@ -14,10 +14,11 @@ const LoginPage = () => {
     const { isDarkMode, setIsDarkMode } = useTheme();
     const { serverIp, updateServerIp } = useSettings();
     const { toasts, showToast, removeToast } = useToast();
-    
+
     const { isLoaded, signIn, setActive } = useSignIn();
     const { getToken } = useAuth();
 
+    // Removed window.Clerk.signOut() here because it does a hard reload and bypasses React Router, causing the white screen of death in Electron.
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [showPassword, setShowPassword] = useState(false);
@@ -32,11 +33,7 @@ const LoginPage = () => {
     const [downloadProgress, setDownloadProgress] = useState(0);
     const [isDownloading, setIsDownloading] = useState(false);
 
-    const [showResetModal, setShowResetModal] = useState(false);
-    const [resetEmail, setResetEmail] = useState('');
-    const [resetLoading, setResetLoading] = useState(false);
-    const [resetMessage, setResetMessage] = useState({ type: '', text: '' });
-    const [tempServerIp, setTempServerIp] = useState(serverIp); 
+    const [tempServerIp, setTempServerIp] = useState(serverIp);
     const [localIp, setLocalIp] = useState('Fetching...');
     const [showGoogleResetConfirm, setShowGoogleResetConfirm] = useState(false);
     const [hasGoogleConnection, setHasGoogleConnection] = useState(false);
@@ -175,9 +172,9 @@ const LoginPage = () => {
             if (result.status !== "complete") {
                 throw new Error("Additional authentication steps are required.");
             }
-            
+
             await setActive({ session: result.createdSessionId });
-            
+
             // Wait for Clerk to make the session active and token available
             // Let's use window.Clerk.session to get the token directly if useAuth is stale.
             const activeSession = window.Clerk?.session;
@@ -186,7 +183,7 @@ const LoginPage = () => {
             // 2. Send token to backend to get app session
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 5000);
-            
+
             const response = await fetch(`http://${serverIp}:3001/api/login`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
@@ -204,9 +201,9 @@ const LoginPage = () => {
             await window.electronAPI.setLoginState(data);
         } catch (err) {
             console.error("Login Error:", err);
-            
+
             let userFriendlyError = 'An unexpected error occurred. Please try again.';
-            
+
             if (err.errors && err.errors.length > 0) {
                 const clerkError = err.errors[0].code;
                 if (clerkError === 'form_password_incorrect' || clerkError === 'form_identifier_not_found') {
@@ -221,7 +218,7 @@ const LoginPage = () => {
             } else if (err.message) {
                 userFriendlyError = err.message;
             }
-            
+
             showToast(userFriendlyError, 'error');
         } finally {
             setIsLoading(false);
@@ -245,7 +242,7 @@ const LoginPage = () => {
         try {
             // 1. Try Silent Login first (using stored Refresh Token)
             let result = await window.electronAPI.loginGoogleSilent();
-            
+
             // 2. If silent login fails (no token or expired), fall back to Browser Loopback
             if (result.error) {
                 result = await window.electronAPI.loginGoogleLoopback();
@@ -256,7 +253,7 @@ const LoginPage = () => {
             // 3. Exchange Google ID Token for Clerk Ticket via our Backend
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 5000);
-            
+
             const ticketResponse = await fetch(`http://${serverIp}:3001/api/login/google-ticket`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -274,9 +271,6 @@ const LoginPage = () => {
             const { ticket } = ticketData;
 
             // 4. Use Ticket to Sign In to Clerk
-            if (window.Clerk?.session) {
-                await window.Clerk.signOut();
-            }
 
             const signInAttempt = await signIn.create({
                 strategy: 'ticket',
@@ -286,9 +280,9 @@ const LoginPage = () => {
             if (signInAttempt.status !== "complete") {
                 throw new Error("Additional authentication steps are required.");
             }
-            
+
             await setActive({ session: signInAttempt.createdSessionId });
-            
+
             // 5. Get Clerk Session Token directly from the created session
             const sessionToUse = window.Clerk.client.sessions.find(s => s.id === signInAttempt.createdSessionId);
             if (!sessionToUse) {
@@ -299,7 +293,7 @@ const LoginPage = () => {
             // 6. Send Clerk token to backend to get app session
             const appController = new AbortController();
             const appTimeoutId = setTimeout(() => appController.abort(), 5000);
-            
+
             const appResponse = await fetch(`http://${serverIp}:3001/api/login`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${clerkToken}` },
@@ -318,7 +312,7 @@ const LoginPage = () => {
         } catch (err) {
             console.error("Google Login Error:", err);
             let errorMessage = 'An unexpected error occurred during Google Sign-In.';
-            
+
             if (err.name === 'AbortError') {
                 errorMessage = `Connection timeout to server at ${serverIp}:3001. Server may be offline or unreachable.`;
             } else if (err.message?.includes('Failed to fetch')) {
@@ -326,60 +320,14 @@ const LoginPage = () => {
             } else if (err.message) {
                 errorMessage = err.message;
             }
-            
+
             showToast(errorMessage, 'error');
-            alert("DEBUG ERROR: " + errorMessage);
         } finally {
             setIsLoading(false);
         }
     };
 
-    const handlePasswordReset = async (e) => {
-        e.preventDefault();
-        setResetLoading(true);
-        setResetMessage({ type: '', text: '' });
 
-        if (!navigator.onLine) {
-            setResetMessage({ type: 'error', text: 'No internet connection.' });
-            setResetLoading(false);
-            return;
-        }
-
-        if (!isLoaded) return;
-
-        try {
-            await signIn.create({
-                strategy: "reset_password_email_code",
-                identifier: resetEmail
-            });
-            setResetMessage({ type: 'success', text: 'Password reset instructions sent! Please check your email for a code.' });
-            // Note: Clerk uses codes for password resets natively in this flow,
-            // but we'd need another form to input the code.
-            // If the user expects a link, it might be better handled by the backend 
-            // but since we want to keep it simple, we'll indicate an email was sent.
-            // Ideally we could use a custom backend route to generate a reset link using clerkClient on the server.
-            showToast('To complete reset, please check your email.', 'success');
-        } catch (err) {
-            console.error("Password reset error:", err);
-            let errorMessage = 'Failed to send reset email. Please check the address and try again.';
-            if (err.errors && err.errors.length > 0) {
-                errorMessage = err.errors[0].longMessage || err.errors[0].message;
-            }
-            setResetMessage({ type: 'error', text: errorMessage });
-        } finally {
-            setResetLoading(false);
-        }
-    };
-
-    const openResetModal = () => {
-        setResetEmail('');
-        setResetMessage({ type: '', text: '' });
-        setShowResetModal(true);
-    };
-
-    const closeResetModal = () => {
-        setShowResetModal(false);
-    };
 
     const handleCheckForUpdate = () => {
         setIsUpdateChecking(true);
@@ -446,15 +394,15 @@ const LoginPage = () => {
                             <div className="absolute top-10 right-0 w-64 p-3 bg-white dark:bg-gray-700 border dark:border-gray-600 rounded-lg shadow-lg text-left text-sm text-gray-700 dark:text-gray-200 z-50 hidden group-hover:block transition-all duration-300 opacity-0 group-hover:opacity-100">
                                 <h4 className="font-bold mb-1 text-gray-900 dark:text-white">About This App</h4>
                                 <p className="mb-2">
-                                    The PSA Kalinga Hired Tracking System streamlines personnel management for Contract of Service Workers (COSWs). It centralizes monitoring, automates employment and training certificates, and features a performance evaluation tool. Supervisor ratings are used as a reference for future hiring, ensuring a fair, transparent, and efficient system that reduces paperwork and speeds up hiring for field surveys.
+                                    The PSA Kalinga HireTrack System streamlines personnel management for Contract of Service Workers (COSWs). It centralizes monitoring, automates employment and training certificates, and features a performance evaluation tool. Supervisor ratings are used as a reference for future hiring, ensuring a fair, transparent, and efficient system that reduces paperwork and speeds up hiring for field surveys.
                                 </p>
                                 <hr className="my-1 border-gray-300 dark:border-gray-600" />
-                                <p>Developer: Chano, ISA II</p>
+                                <p>TechCraft by Chano</p>
                             </div>
                         </div>
                     </div>
                     <img src={PSALogo} alt="PSA Logo" className="w-16 h-16 mx-auto" />
-                    <h2 className="mt-6 text-3xl font-bold text-gray-900 dark:text-white">PSA KALINGA <br /> Hired Tracking System</h2>
+                    <h2 className="mt-6 text-3xl font-bold text-gray-900 dark:text-white">PSA KALINGA <br /> HireTrack System</h2>
                     <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">Please sign in to continue</p>
                 </div>
 
@@ -479,7 +427,7 @@ const LoginPage = () => {
                                 Email Address
                             </label>
                         </div>
-                        
+
                         <div className="relative">
                             <input
                                 id="password"
@@ -502,11 +450,7 @@ const LoginPage = () => {
                             </button>
                         </div>
                     </div>
-                    <div className="flex items-center justify-end text-sm">
-                        <button type="button" onClick={openResetModal} className="font-medium text-blue-600 hover:text-blue-500 dark:text-blue-400 dark:hover:text-blue-300">
-                            Forgot password?
-                        </button>
-                    </div>
+
                     <div>
                         <button type="submit" disabled={isLoading} title={isLoading ? 'Signing in...' : 'Sign in to account'} className="group relative w-full flex justify-center py-3 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50">
                             {isLoading ? 'Signing In...' : 'Sign in'}
@@ -537,144 +481,110 @@ const LoginPage = () => {
                 </form>
             </div>
 
-            {showResetModal && (
-                <div className="fixed inset-0 bg-black bg-opacity-50 z-40 flex justify-center items-center p-4">
-                    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-2xl p-6 w-full max-w-sm z-50">
-                        <h2 className="text-xl font-bold mb-4 text-gray-800 dark:text-white text-center">Reset Password</h2>
-                        {resetMessage.text && (
-                            <div className={`p-3 mb-4 text-sm rounded-lg ${resetMessage.type === 'success' ? 'bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300' : 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300'}`}>
-                                {resetMessage.text}
-                            </div>
-                        )}
-                        {resetMessage.type !== 'success' && (
-                            <form onSubmit={handlePasswordReset}>
-                                <p className="text-gray-600 dark:text-gray-300 mb-4">Enter your email address and we will send you a link to reset your password.</p>
-                                <div className="relative">
-                                    <input
-                                        id="reset-email"
-                                        name="reset-email"
-                                        type="email"
-                                        required
-                                        className="block px-3 pt-6 pb-2 w-full text-gray-900 bg-transparent rounded-lg border-2 border-gray-300 appearance-none dark:text-white dark:border-gray-600 focus:outline-none focus:ring-0 focus:border-blue-600 peer"
-                                        placeholder=" "
-                                        value={resetEmail}
-                                        onChange={(e) => setResetEmail(e.target.value)}
-                                    />
-                                    <label
-                                        htmlFor="reset-email"
-                                        className="absolute text-gray-500 dark:text-gray-400 duration-300 transform -translate-y-4 scale-75 top-4 z-10 origin-[0] start-3 peer-placeholder-shown:scale-100 peer-placeholder-shown:translate-y-0 peer-focus:scale-75 peer-focus:-translate-y-4 peer-focus:text-blue-600 dark:peer-focus:text-blue-500"
-                                    >
-                                        Email Address
-                                    </label>
-                                </div>
-                                <div className="flex gap-4 mt-6">
-                                    <button type="button" onClick={closeResetModal} className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-gray-500 text-white font-semibold rounded-lg hover:bg-gray-600"><FiX className="w-4 h-4" />Cancel</button>
-                                    <button type="submit" disabled={resetLoading} title={resetLoading ? 'Sending reset link...' : 'Send password reset email'} className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 disabled:opacity-50">
-                                        {resetLoading ? 'Sending...' : <><FaPaperPlane className="w-4 h-4" />Send Reset Link</>}
-                                    </button>
-                                </div>
-                            </form>
-                        )}
-                        {resetMessage.type === 'success' && (
-                            <div className="mt-6">
-                                <button onClick={closeResetModal} className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700"><FiX className="w-4 h-4" />Close</button>
-                            </div>
-                        )}
-                    </div>
-                </div>
-            )}
 
             {isSettingsOpen && (
                 <div className="fixed inset-0 bg-black bg-opacity-50 z-40 flex justify-center items-center p-4">
-                    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-2xl p-6 w-full max-w-sm z-50 space-y-6">
-                        <h2 className="text-xl font-bold text-gray-800 dark:text-white text-center">Connection Settings</h2>
-                        
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Your Local IP Address</label>
-                            <p className="p-3 bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded-md">{localIp}</p>
-                        </div>
+                    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-2xl p-6 w-full max-w-3xl z-50 flex flex-col max-h-[90vh] overflow-y-auto">
+                        <h2 className="text-2xl font-bold text-gray-800 dark:text-white mb-6 border-b border-gray-200 dark:border-gray-700 pb-4">Settings</h2>
 
-                        <div className="relative">
-                            <input
-                                id="serverIp"
-                                name="serverIp"
-                                type="text"
-                                className="block px-3 pt-6 pb-2 w-full text-gray-900 bg-transparent rounded-lg border-2 border-gray-300 appearance-none dark:text-white dark:border-gray-600 focus:outline-none focus:ring-0 focus:border-blue-600 peer"
-                                placeholder=" "
-                                value={tempServerIp}
-                                onChange={(e) => setTempServerIp(e.target.value)}
-                            />
-                            <label
-                                htmlFor="serverIp"
-                                className="absolute text-gray-500 dark:text-gray-400 duration-300 transform -translate-y-4 scale-75 top-4 z-10 origin-[0] start-3 peer-placeholder-shown:scale-100 peer-placeholder-shown:translate-y-0 peer-focus:scale-75 peer-focus:-translate-y-4"
-                            >
-                                Server IP Address
-                            </label>
-                        </div>
-                        <div className="flex gap-4">
-                            <button 
-                                onClick={handleSaveSettings} 
-                                disabled={tempServerIp === serverIp}
-                                title={tempServerIp === serverIp ? 'No changes to save' : 'Save new server IP'}
-                                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                                <FiSave className="w-4 h-4" />Save
-                            </button>
-                        </div>
-                        <div className="border-t border-gray-300 dark:border-gray-600 my-6"></div>
-
-                        <div>
-                            <h3 className="text-lg font-medium text-center text-gray-800 dark:text-white mb-3">Google Account</h3>
-                            <p className="text-center text-sm text-gray-600 dark:text-gray-400 mb-4">Disconnect the currently linked Google account to sign in with a different one.</p>
-                            <button 
-                                onClick={() => setShowGoogleResetConfirm(true)}
-                                disabled={!hasGoogleConnection}
-                                title={!hasGoogleConnection ? "No Google account is currently connected." : "Disconnect your Google account"}
-                                className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-orange-600 text-white font-semibold rounded-lg hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                                <FaUnlink className="w-4 h-4" />Disconnect Google Account
-                            </button>
-                        </div>
-
-                        <div className="border-t border-gray-300 dark:border-gray-600 my-6"></div>
-
-                        <div>
-                            <h3 className="text-lg font-medium text-center text-gray-800 dark:text-white mb-2">Application Update</h3>
-                            <p className="text-center text-sm text-gray-500 dark:text-gray-400 mb-4">Current Version: {appVersion}</p>
-                            
-                            {updateStatus && (
-                                <p className={`text-center text-sm mb-3 ${isUpdateDownloaded ? 'text-green-600 dark:text-green-400' : 'text-gray-600 dark:text-gray-300'}`}>
-                                    {updateStatus}
-                                </p>
-                            )}
-
-                            {isDownloading && (
-                                <div className="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700 mb-3 overflow-hidden">
-                                    <div 
-                                        className={`h-2.5 rounded-full transition-all duration-300 ease-out ${downloadProgress <= 0 ? 'bg-blue-300 dark:bg-blue-500 animate-pulse w-full' : 'bg-blue-600'}`}
-                                        style={{ width: downloadProgress <= 0 ? '100%' : `${downloadProgress}%` }}
-                                    ></div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                            {/* Left Column: Connection Settings */}
+                            <div className="space-y-5">
+                                <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-200">Connection Settings</h3>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Your Local IP Address</label>
+                                    <p className="p-3 bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded-md font-mono text-sm">{localIp}</p>
                                 </div>
-                            )}
-
-                            {!isUpdateDownloaded ? (
-                                <button 
-                                    onClick={handleCheckForUpdate} 
-                                    disabled={isUpdateChecking || isDownloading}
-                                    className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 disabled:opacity-50"
-                                    title={isUpdateChecking ? 'Checking for updates...' : isDownloading ? 'Downloading update...' : 'Check for Updates'}
+                                <div className="relative">
+                                    <input
+                                        id="serverIp"
+                                        name="serverIp"
+                                        type="text"
+                                        className="block px-3 pt-6 pb-2 w-full text-gray-900 bg-transparent rounded-lg border-2 border-gray-300 appearance-none dark:text-white dark:border-gray-600 focus:outline-none focus:ring-0 focus:border-blue-600 peer"
+                                        placeholder=" "
+                                        value={tempServerIp}
+                                        onChange={(e) => setTempServerIp(e.target.value)}
+                                    />
+                                    <label
+                                        htmlFor="serverIp"
+                                        className="absolute text-gray-500 dark:text-gray-400 duration-300 transform -translate-y-4 scale-75 top-4 z-10 origin-[0] start-3 peer-placeholder-shown:scale-100 peer-placeholder-shown:translate-y-0 peer-focus:scale-75 peer-focus:-translate-y-4"
+                                    >
+                                        Server IP Address
+                                    </label>
+                                </div>
+                                <button
+                                    onClick={handleSaveSettings}
+                                    disabled={tempServerIp === serverIp}
+                                    title={tempServerIp === serverIp ? 'No changes to save' : 'Save new server IP'}
+                                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
-                                    {isUpdateChecking ? 'Checking...' : (isDownloading ? 'Downloading...' : <><FaSync className="w-4 h-4" />Check for Updates</>)}
+                                    <FiSave className="w-4 h-4" />Save
                                 </button>
-                            ) : (
-                                <button onClick={handleRestartAndInstall} className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700">
-                                    <FiDownload className="w-4 h-4" />Restart & Install Now
-                                </button>
-                            )}
+                            </div>
+
+                            {/* Right Column: Other Settings */}
+                            <div className="space-y-8">
+                                {/* Google Account Section */}
+                                <div className="space-y-4">
+                                    <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-200">Google Account</h3>
+                                    <p className="text-sm text-gray-600 dark:text-gray-400 leading-relaxed">
+                                        Disconnect the currently linked Google account to sign in with a different one.
+                                    </p>
+                                    <button
+                                        onClick={() => setShowGoogleResetConfirm(true)}
+                                        disabled={!hasGoogleConnection}
+                                        title={!hasGoogleConnection ? "No Google account is currently connected." : "Disconnect your Google account"}
+                                        className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-orange-600 text-white font-semibold rounded-lg hover:bg-orange-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        <FaUnlink className="w-4 h-4" />Disconnect Google Account
+                                    </button>
+                                </div>
+
+                                {/* Application Update Section */}
+                                <div className="space-y-4">
+                                    <div className="flex justify-between items-end border-t border-gray-200 dark:border-gray-700 pt-4">
+                                        <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-200">Application Update</h3>
+                                        <p className="text-sm text-gray-500 dark:text-gray-400">v{appVersion}</p>
+                                    </div>
+
+                                    {updateStatus && (
+                                        <p className={`text-sm ${isUpdateDownloaded ? 'text-green-600 dark:text-green-400' : 'text-gray-600 dark:text-gray-300'}`}>
+                                            {updateStatus}
+                                        </p>
+                                    )}
+
+                                    {isDownloading && (
+                                        <div className="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700 overflow-hidden">
+                                            <div
+                                                className={`h-2.5 rounded-full transition-all duration-300 ease-out ${downloadProgress <= 0 ? 'bg-blue-300 dark:bg-blue-500 animate-pulse w-full' : 'bg-blue-600'}`}
+                                                style={{ width: downloadProgress <= 0 ? '100%' : `${downloadProgress}%` }}
+                                            ></div>
+                                        </div>
+                                    )}
+
+                                    {!isUpdateDownloaded ? (
+                                        <button
+                                            onClick={handleCheckForUpdate}
+                                            disabled={isUpdateChecking || isDownloading}
+                                            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
+                                            title={isUpdateChecking ? 'Checking for updates...' : isDownloading ? 'Downloading update...' : 'Check for Updates'}
+                                        >
+                                            {isUpdateChecking ? 'Checking...' : (isDownloading ? 'Downloading...' : <><FaSync className="w-4 h-4" />Check for Updates</>)}
+                                        </button>
+                                    ) : (
+                                        <button onClick={handleRestartAndInstall} className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700 transition-colors">
+                                            <FiDownload className="w-4 h-4" />Restart & Install Now
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
                         </div>
-                        {/* Modal Actions */}
-                        <div className="!mt-8 pt-6 border-t border-gray-200 dark:border-gray-700 flex gap-4">
-                            <button onClick={() => setIsSettingsOpen(false)} className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-gray-500 text-white font-semibold rounded-lg hover:bg-gray-600 transition-colors"><FiX className="w-4 h-4" />Close</button>
+
+                        {/* Modal Footer Actions */}
+                        <div className="mt-8 pt-5 border-t border-gray-200 dark:border-gray-700 flex justify-end">
+                            <button onClick={() => setIsSettingsOpen(false)} className="px-6 py-2 bg-gray-500 text-white font-semibold rounded-lg hover:bg-gray-600 transition-colors flex items-center gap-2">
+                                <FiX className="w-4 h-4" />Close
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -687,13 +597,13 @@ const LoginPage = () => {
                             This will remove the linked Google account. You'll be able to sign in with a different Google account next time.
                         </p>
                         <div className="flex gap-4">
-                            <button 
-                                onClick={() => setShowGoogleResetConfirm(false)} 
+                            <button
+                                onClick={() => setShowGoogleResetConfirm(false)}
                                 className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-gray-500 text-white font-semibold rounded-lg hover:bg-gray-600"
                             >
                                 <FiX className="w-4 h-4" />Cancel
                             </button>
-                            <button 
+                            <button
                                 onClick={handleResetGoogleAccount}
                                 className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-orange-600 text-white font-semibold rounded-lg hover:bg-orange-700"
                             >
@@ -714,8 +624,8 @@ const LoginPage = () => {
                             The server IP has been updated. The app must restart to apply the new settings.
                         </p>
                         <div className="mt-6">
-                            <button 
-                                onClick={handleRestartApp} 
+                            <button
+                                onClick={handleRestartApp}
                                 className="w-full flex items-center justify-center gap-2 px-4 py-2 font-semibold text-white bg-blue-600 rounded-md shadow-sm hover:bg-blue-700"
                             >
                                 <FaRedo className="w-4 h-4" />Restart Now

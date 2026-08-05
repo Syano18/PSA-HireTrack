@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import Papa from 'papaparse';
-import { FaFilePdf, FaArrowLeft, FaArrowRight } from 'react-icons/fa';
-import { FiDownload, FiUpload } from 'react-icons/fi';
+import { FaFilePdf,  } from 'react-icons/fa';
+import { FiDownload, FiUpload, FiX } from 'react-icons/fi';
 import { useSettings } from '../context/SettingsContext';
 import ProgressModal from '../components/Progress';
 import ToastContainer from '../components/ToastContainer';
@@ -82,14 +82,14 @@ const TempTrainingCertificates = () => {
   const [loading, setLoading] = useState(false);
   const [sessionState, setSessionState] = useState(null);
   const fileInputRef = useRef(null);
-  const [currentPage, setCurrentPage] = useState(1);
-  const rowsPerPage = 12;
+
   const [isProgressModalOpen, setIsProgressModalOpen] = useState(false);
   const [progressMessage, setProgressMessage] = useState('');
   const [isProgressComplete, setIsProgressComplete] = useState(false);
   const [savedFilePath, setSavedFilePath] = useState(null);
   const [duplicateRecords, setDuplicateRecords] = useState([]);
   const [isDuplicateModalOpen, setIsDuplicateModalOpen] = useState(false);
+  const [isGenerateModalOpen, setIsGenerateModalOpen] = useState(false);
 
   useEffect(() => {
     const getSession = async () => {
@@ -98,7 +98,6 @@ const TempTrainingCertificates = () => {
         setSessionState(state);
         if (state?.user) {
             setEncodedBy(state.user.email_address || '');
-            // Auto-fill transmitter name from session user
             const { first_name, middle_initial, last_name, suffix } = state.user;
             const fullName = [first_name, middle_initial, last_name, suffix].filter(Boolean).join(' ');
             setTransmitterName(fullName);
@@ -122,17 +121,16 @@ const TempTrainingCertificates = () => {
 
   const handleImportClick = () => {
     if (!recipientType) {
-      showToast('Please select who the certificate is for (Participant/s or Resource Person/s) before importing.', 'error');
+      showToast('Please select who the certificate is for before importing.', 'error');
       return;
     }
     if (recipientType === 'Participant/s' && !certType) {
-      showToast('Please select a certificate type (Participation or Completion) before importing.', 'error');
+      showToast('Please select a certificate type before importing.', 'error');
       return;
     }
     fileInputRef.current.click();
   };
 
-  // Handle CSV File Upload and Parsing
   const handleFileChange = (e) => {
     const selectedFile = e.target.files[0];
 
@@ -141,7 +139,6 @@ const TempTrainingCertificates = () => {
         header: true,
         skipEmptyLines: true,
         complete: (results) => {
-          // Validate required fields
           let requiredFields = ['First Name', 'Last Name', 'Training Title', 'Start Date', 'End Date', 'Hours', 'Venue'];
           if (recipientType === 'Resource Person/s') {
             requiredFields = requiredFields.filter(field => field !== 'Hours');
@@ -161,9 +158,7 @@ const TempTrainingCertificates = () => {
             return;
           }
 
-          // Map CSV columns to the structure expected by the backend
           const formattedData = results.data.map((row, index) => {
-            // Construct full name for the certificate display
             const fullName = [
               row['First Name'],
               row['Middle Initial'],
@@ -172,7 +167,7 @@ const TempTrainingCertificates = () => {
             ].filter(Boolean).join(' ').trim();
 
             return {
-              id: index, // Temporary ID for key
+              id: index,
               name: fullName,
               first_name: row['First Name'] || '',
               middle_initial: row['Middle Initial'] || '',
@@ -186,101 +181,50 @@ const TempTrainingCertificates = () => {
             };
           });
           setData(formattedData);
-          setCurrentPage(1);
         },
         error: (error) => {
           console.error('Error parsing CSV:', error);
-          showToast('Error parsing CSV file. Please check the format.', 'error');
+          showToast('Error parsing CSV file.', 'error');
         }
       });
     }
-    e.target.value = null; // Reset input to allow re-uploading same file
+    e.target.value = null;
   };
 
-  // Handle Generate Button Click
   const handleGenerate = async () => {
     if (data.length === 0) {
-      showToast('No data available. Please import a CSV file first.', 'error');
+      showToast('No data available.', 'error');
       return;
     }
-    if (!recipientType) {
-      showToast('Please select who the certificate is for.', 'error');
-      return;
-    }
-
-    let finalCertType = '';
-    if (recipientType === 'Participant/s') {
-      if (!certType) {
-        showToast('Please select a certificate type (Participation/Completion).', 'error');
-        return;
-      }
-      finalCertType = certType;
-    } else if (recipientType === 'Resource Person/s') {
-      finalCertType = 'Appreciation';
-    }
-
-    // Validate that all records have required fields with actual values
+    let finalCertType = recipientType === 'Resource Person/s' ? 'Appreciation' : certType;
     const requiredFields = recipientType === 'Resource Person/s' 
       ? ['first_name', 'last_name', 'trainingTitle', 'startDate', 'endDate', 'venue']
       : ['first_name', 'last_name', 'trainingTitle', 'startDate', 'endDate', 'hours', 'venue'];
     
     const invalidRecords = [];
     data.forEach((record, index) => {
-      const missingFields = [];
-      requiredFields.forEach(field => {
-        const value = record[field];
-        // Check if field is empty, undefined, null, or contains only whitespace
-        if (!value || (typeof value === 'string' && value.trim() === '')) {
-          missingFields.push(field);
-        }
-      });
-      if (missingFields.length > 0) {
-        invalidRecords.push(`Row ${index + 1} (${record.name || 'N/A'}): Missing or empty ${missingFields.join(', ')}`);
-      }
+      const missingFields = requiredFields.filter(field => !record[field] || (typeof record[field] === 'string' && record[field].trim() === ''));
+      if (missingFields.length > 0) invalidRecords.push(`Row ${index + 1}: Missing ${missingFields.join(', ')}`);
     });
 
     if (invalidRecords.length > 0) {
-      showToast(`Validation failed:\n${invalidRecords.slice(0, 5).join('\n')}${invalidRecords.length > 5 ? '\n...' : ''}`, 'error');
+      showToast(`Validation failed`, 'error');
       return;
     }
 
-    if (!serverIp || !sessionState) {
-        showToast('Server connection or session not available.', 'error');
-        return;
-    }
-
     setIsProgressComplete(false);
-    setProgressMessage('Preparing certificate generation...');
-    setSavedFilePath(null);
+    setProgressMessage('Generating...');
     setIsProgressModalOpen(true);
     setLoading(true);
     try {
-      const payload = {
-        certificates: data,
-        transmitterName,
-        encodedBy,
-        certType: finalCertType
-      };
-
-      const API_PORT = 3001;
-      const fullUrl = `http://${serverIp}:${API_PORT}/api/generate-batch-training-certificate`;
-
+      const payload = { certificates: data, transmitterName, encodedBy, certType: finalCertType };
       const prepareResponse = await window.electronAPI.prepareDownload({
-        url: fullUrl,
-        payload: {
-          headers: { 
-              'Authorization': `Bearer ${sessionState.token}`,
-          },
-          body: payload
-        },
+        url: `http://${serverIp}:3001/api/generate-batch-training-certificate`,
+        payload: { headers: { 'Authorization': `Bearer ${sessionState.token}` }, body: payload },
         fileType: 'pdf'
       });
 
-      if (!prepareResponse.success) {
-          throw new Error(prepareResponse.message || 'Failed to prepare download');
-      }
-
-      setProgressMessage('Generating PDF... Auto-saving to C:\\HireTrack PDFs\\External');
+      if (!prepareResponse.success) throw new Error(prepareResponse.message);
 
       const autoSaveResult = await window.electronAPI.autoSaveCertificate({
         downloadId: prepareResponse.downloadId,
@@ -289,13 +233,12 @@ const TempTrainingCertificates = () => {
       });
 
       if (autoSaveResult.status === 'completed') {
-        // Close progress modal immediately (match Certificates.js behavior)
         setSavedFilePath(autoSaveResult.path);
         setIsProgressModalOpen(false);
-        showToast('Batch certificates generated, saved to External folder, and opened.', 'success');
+        showToast('Generated successfully', 'success');
       } else {
         setIsProgressComplete(true);
-        setProgressMessage(`Failed to auto-save file: ${autoSaveResult.message}`);
+        setProgressMessage(`Failed: ${autoSaveResult.message}`);
       }
     } catch (error) {
       console.error('Error generating certificates:', error);
@@ -319,129 +262,68 @@ const TempTrainingCertificates = () => {
 
   const handleCsvDownload = async (content, fileName) => {
     setIsProgressComplete(false);
-    setProgressMessage('Preparing file...');
-    setSavedFilePath(null);
+    setProgressMessage('Preparing...');
     setIsProgressModalOpen(true);
-
-    try {
-      const result = await window.electronAPI.saveCsvFile({ content, fileName });
-
-      if (result.status === 'completed') {
-        setIsProgressComplete(true);
-        setProgressMessage(result.message);
-        setSavedFilePath(result.path);
-      } else if (result.status === 'failed') {
-        setIsProgressComplete(true);
-        setProgressMessage(`Error: ${result.message}`);
-        setSavedFilePath(null);
-      } else {
-        setIsProgressModalOpen(false);
-      }
-    } catch (err) {
-      console.error('An unexpected error occurred during the download process:', err);
+    const result = await window.electronAPI.saveCsvFile({ content, fileName });
+    if (result.status === 'completed') {
       setIsProgressComplete(true);
-      setProgressMessage('An unexpected error occurred. Please check the console.');
+      setProgressMessage(result.message);
+      setSavedFilePath(result.path);
+    } else {
+      setIsProgressComplete(true);
+      setProgressMessage(`Error: ${result.message}`);
     }
   };
 
-  // Helper to download a CSV template
   const downloadTemplate = () => {
     if (!recipientType) {
-      showToast('Please select who the certificate is for before downloading the template.', 'error');
+      showToast('Select recipient type first', 'error');
       return;
     }
-
-    let headers, example, fileName;
-
-    if (recipientType === 'Resource Person/s') {
-        headers = "First Name,Middle Initial,Last Name,Suffix,Training Title,Start Date,End Date,Venue\n";
-        example = "Lanie,G.,Pagtud,,R Programming,2024-08-01,2024-08-01,PSA Conference Hall";
-        fileName = "resource_person_template.csv";
-    } else { // Default to participant, even if nothing is selected
-        headers = "First Name,Middle Initial,Last Name,Suffix,Training Title,Start Date,End Date,Hours,Venue\n";
-        example = "Sheminit,S.,Abon,,Data Privacy Act Training,2023-10-01,2023-10-02,16,PSA Headquarters";
-        fileName = "participant_template.csv";
-    }
-
-    const csvContent = headers + example;
-    handleCsvDownload(csvContent, fileName);
+    const isRP = recipientType === 'Resource Person/s';
+    const headers = isRP ? "First Name,Middle Initial,Last Name,Suffix,Training Title,Start Date,End Date,Venue\n" : "First Name,Middle Initial,Last Name,Suffix,Training Title,Start Date,End Date,Hours,Venue\n";
+    const example = isRP ? "Lanie,G.,Pagtud,,R Programming,2024-08-01,2024-08-01,PSA Conference Hall" : "Sheminit,S.,Abon,,Data Privacy Act Training,2023-10-01,2023-10-02,16,PSA Headquarters";
+    handleCsvDownload(headers + example, isRP ? "resource_person_template.csv" : "participant_template.csv");
   };
 
-  const totalItems = data.length;
-  const totalPages = Math.ceil(totalItems / rowsPerPage);
-  const paginatedData = data.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage);
-
-  const handleNextPage = () => setCurrentPage(prev => Math.min(prev + 1, totalPages));
-  const handlePreviousPage = () => setCurrentPage(prev => Math.max(prev - 1, 1));
-
   return (
-    <div>        <ToastContainer toasts={toasts} onClose={removeToast} />        <div className="flex flex-col md:flex-row items-center justify-between mb-4 gap-4">
+    <div className="flex-1 w-full flex flex-col min-h-0">        <ToastContainer toasts={toasts} onClose={removeToast} />        <div className="flex flex-col md:flex-row items-center justify-between mb-4 gap-4">
           <h1 className="text-3xl font-bold text-gray-900 dark:text-white">External Partners Certificate Generation</h1>
           
-          {/* Button Bar */}
           <div className="flex flex-wrap items-center gap-2 justify-end">
             {data.length > 0 && (
               <button
                 onClick={handleGenerate}
                 disabled={loading}
-                title={loading ? 'Generating certificates...' : 'Generate certificates for selected trainings'}
-                className={`flex items-center gap-2 px-3 py-2 text-xs font-semibold text-white rounded-lg ${
+                className={`flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white rounded-lg ${
                   loading ? 'bg-gray-400 cursor-not-allowed dark:bg-gray-500' : 'bg-blue-600 hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600'
                 }`}
               >
-                <FaFilePdf className="w-4 h-4" />{loading ? 'Generating...' : 'Generate Certificates'}
+                <FaFilePdf className="w-5 h-5" />{loading ? 'Generating...' : 'Confirm Generate'}
               </button>
             )}
-            
-            <div className="w-48">
-              <SearchableDropdown
-                id="recipientType"
-                options={recipientTypeOptions}
-                value={recipientType}
-                onChange={(value) => { setRecipientType(value); setCertType(''); }}
-                placeholder="Certificate for..."
-                className="text-xs font-semibold"
-              />
-            </div>
 
-            {recipientType === 'Participant/s' && (
-              <div className="w-48">
-                <SearchableDropdown
-                  id="certType"
-                  options={certTypeOptions}
-                  value={certType}
-                  onChange={setCertType}
-                  placeholder="Select Type..."
-                  className="text-xs font-semibold"
-                />
-              </div>
-            )}
-
-                <button 
-              onClick={downloadTemplate}
-              className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-gray-900 dark:text-gray-100 bg-gray-400 rounded-lg hover:bg-gray-500 dark:bg-gray-600 dark:hover:bg-gray-700"
-            >
-              <FiDownload className="w-4 h-4" />Download Template
-            </button>
-            
             <button 
-              onClick={handleImportClick}
-              className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-white bg-green-600 rounded-lg hover:bg-green-700 dark:bg-green-700 dark:hover:bg-green-600"
+              onClick={() => setIsGenerateModalOpen(true)}
+              className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-green-600 rounded-lg hover:bg-green-700 dark:bg-green-700 dark:hover:bg-green-600"
             >
-              <FiUpload className="w-4 h-4" />Import CSV
+              <FiUpload className="w-5 h-5" />Generate
             </button>
+
             <input 
               type="file" 
               ref={fileInputRef}
               accept=".csv"
-              onChange={handleFileChange}
+              onChange={(e) => {
+                handleFileChange(e);
+                setIsGenerateModalOpen(false);
+              }}
               className="hidden"
             />
           </div>
         </div>
 
-        {/* Preview Table */}
-        <div className="overflow-x-auto bg-white h-[760px] rounded-lg shadow dark:bg-gray-800">
+        <div className="overflow-auto bg-white rounded-lg shadow flex-1 min-h-0 dark:bg-gray-800">
             <table className="min-w-full text-sm leading-normal table-fixed">
               <thead className="sticky top-0 border-b-2 border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-900/50">
                 <tr>
@@ -456,11 +338,11 @@ const TempTrainingCertificates = () => {
                 {data.length === 0 ? (
                   <tr>
                     <td colSpan="5" className="px-5 py-16 text-lg font-semibold text-center text-gray-500 dark:text-gray-400">
-                      No data loaded. Please upload a CSV file.
+                      No data loaded.
                     </td>
                   </tr>
                 ) : (
-                  paginatedData.map((row) => (
+                  data.map((row) => (
                     <tr key={row.id} className="transition-colors duration-200 ease-in-out border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50">
                       <td className="px-5 py-4 break-words text-sm font-medium text-gray-900 dark:text-white">{row.name}</td>
                       <td className="px-5 py-4 break-words text-sm text-gray-700 dark:text-gray-300">{row.trainingTitle}</td>
@@ -476,16 +358,68 @@ const TempTrainingCertificates = () => {
             </table>
         </div>
 
-      <div className="flex justify-between items-center mt-1">
-        <span className="text-sm text-gray-700 dark:text-gray-300">
-          Showing {totalItems > 0 ? (currentPage - 1) * rowsPerPage + 1 : 0} to {Math.min(currentPage * rowsPerPage, totalItems)} of {totalItems} records
-        </span>
-        <div className="flex items-center space-x-2">
-          <button onClick={handlePreviousPage} disabled={currentPage === 1} title={currentPage === 1 ? 'Already on first page' : 'Go to previous page'} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"><FaArrowLeft className="w-4 h-4" />Previous</button>
-          <span className="text-gray-700 dark:text-gray-300 px-2">{currentPage}</span>
-          <button onClick={handleNextPage} disabled={currentPage >= totalPages} title={currentPage >= totalPages ? 'Already on last page' : 'Go to next page'} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed">Next<FaArrowRight className="w-4 h-4" /></button>
+      {isGenerateModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all duration-300 scale-100 opacity-100">
+            <div className="px-6 py-4 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center bg-gray-50/50 dark:bg-gray-800/50">
+              <h3 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                <FiUpload className="text-blue-500" /> Import Certificates
+              </h3>
+              <button 
+                onClick={() => setIsGenerateModalOpen(false)}
+                className="text-gray-400 hover:text-red-500 transition-colors p-1 rounded-md hover:bg-red-50 dark:hover:bg-red-900/20"
+              >
+                <FiX className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6 space-y-5">
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1.5">
+                  Certificate For <span className="text-red-500">*</span>
+                </label>
+                <SearchableDropdown
+                  id="recipientTypeModal"
+                  options={recipientTypeOptions}
+                  value={recipientType}
+                  onChange={(value) => { setRecipientType(value); setCertType(''); }}
+                  placeholder="Select Recipient Type..."
+                  className="w-full text-sm"
+                />
+              </div>
+
+              {recipientType === 'Participant/s' && (
+                <div className="animate-fade-in-up">
+                  <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1.5">
+                    Certificate Type <span className="text-red-500">*</span>
+                  </label>
+                  <SearchableDropdown
+                    id="certTypeModal"
+                    options={certTypeOptions}
+                    value={certType}
+                    onChange={setCertType}
+                    placeholder="Select Type..."
+                    className="w-full text-sm"
+                  />
+                </div>
+              )}
+            </div>
+            <div className="px-6 py-4 bg-gray-50 dark:bg-gray-700/50 border-t border-gray-100 dark:border-gray-700 flex flex-col sm:flex-row gap-3 justify-end items-center">
+              <button 
+                onClick={downloadTemplate}
+                className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-600 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-500 transition-colors"
+              >
+                <FiDownload className="w-4 h-4" /> Template
+              </button>
+              <button 
+                onClick={handleImportClick}
+                className="w-full sm:w-auto flex items-center justify-center gap-2 px-5 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 shadow-sm hover:shadow transition-all"
+              >
+                <FiUpload className="w-4 h-4" /> Import CSV
+              </button>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
 
       <ProgressModal
         isOpen={isProgressModalOpen}

@@ -53,7 +53,7 @@ const executeTurso = async (sql, args) => {
 router.get('/', verifyToken, checkRole(['Super_Admin', 'Admin', 'PACD']), async (req, res) => {
   try {
     const [results] = await dbPool.query(
-      "SELECT id, first_name, middle_initial, suffix, last_name, email_address AS email, hiretrack_role AS role, opshub_role, position, salary, salary_grade, status, created_at FROM users ORDER BY last_name, first_name"
+      "SELECT id, first_name, middle_initial, suffix, last_name, email_address AS email, hiretrack_role AS role, status, created_at FROM users ORDER BY last_name, first_name"
     );
     res.json(results);
   } catch (err) {
@@ -65,7 +65,7 @@ router.get('/', verifyToken, checkRole(['Super_Admin', 'Admin', 'PACD']), async 
 // POST /api/users (Create user)
 router.post('/', verifyToken, checkRole(['Super_Admin', 'Admin', 'PACD']), async (req, res) => {
   const actingUserId = req.user?.id;
-  const { first_name, middle_initial, last_name, suffix, email, role, opshub_role, position, salary, salary_grade, status } = req.body;
+  const { first_name, middle_initial, last_name, suffix, email, role, status } = req.body;
 
   if (!actingUserId || !first_name || !middle_initial || !last_name || !email || !role || !status) {
     return res.status(400).json({ error: 'Missing required fields.' });
@@ -102,8 +102,8 @@ router.post('/', verifyToken, checkRole(['Super_Admin', 'Admin', 'PACD']), async
 
     // 1. INSERT into local DB
     const [result] = await connection.query(
-      'INSERT INTO users (first_name, middle_initial, last_name, suffix, email_address, hiretrack_role, opshub_role, position, salary, salary_grade, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [first_name, middle_initial || null, last_name, suffix || null, email, role, opshub_role || null, position || null, salary || null, salary_grade || null, status || 'Active']
+      'INSERT INTO users (first_name, middle_initial, last_name, suffix, email_address, hiretrack_role, status) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [first_name, middle_initial || null, last_name, suffix || null, email, role || null, status || 'Active']
     );
     const newUserId = result.insertId;
 
@@ -128,8 +128,8 @@ router.post('/', verifyToken, checkRole(['Super_Admin', 'Admin', 'PACD']), async
     // 3. SYNC to Turso
     try {
       await executeTurso(
-        "INSERT INTO User_Permissions (Email, First_Name, Middle_Name, Last_Name, Suffix, Role, Position, Salary, Salary_Grade, Status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        [email, first_name, middle_initial || null, last_name, suffix || null, opshub_role || null, position || null, salary || null, salary_grade || null, status || 'Active']
+        "INSERT INTO User_Permissions (Email, First_Name, Middle_Name, Last_Name, Suffix, Role, Status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [email, first_name, middle_initial || null, last_name, suffix || null, role || null, status || 'Active']
       );
     } catch (tursoErr) {
       await connection.rollback(); // Rollback local DB insert
@@ -146,6 +146,56 @@ router.post('/', verifyToken, checkRole(['Super_Admin', 'Admin', 'PACD']), async
 
     // --- Commit Transaction ---
     await connection.commit();
+
+    // --- Send Email ---
+    try {
+      if (process.env.SMTP_USER && process.env.SMTP_PASS) {
+        const nodemailer = require('nodemailer');
+        const transportOptions = {
+          auth: {
+            user: process.env.SMTP_USER,
+            pass: process.env.SMTP_PASS
+          }
+        };
+        
+        if (process.env.SMTP_HOST) {
+          transportOptions.host = process.env.SMTP_HOST;
+          transportOptions.port = process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT, 10) : 587;
+        } else {
+          transportOptions.service = 'gmail';
+        }
+        
+        const transporter = nodemailer.createTransport(transportOptions);
+        const fromAddress = process.env.SMTP_FROM || `"HireTrack" <${process.env.SMTP_USER}>`;
+
+        await transporter.sendMail({
+          from: fromAddress,
+          to: email,
+          subject: 'Welcome to HireTrack System - Your Account Details',
+          html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+            <h2 style="color: #0d9488;">Welcome to PSA HireTrack!</h2>
+            <p>Hello ${first_name} ${last_name},</p>
+            <p>An administrator has created an account for you with the role of <strong>${role}</strong>.</p>
+            <div style="background-color: #f8fafc; padding: 15px; border-radius: 8px; margin: 20px 0;">
+              <p style="margin: 0 0 10px 0;"><strong>Your Login Email:</strong> ${email}</p>
+              <p style="margin: 0;"><strong>Your Temporary Password:</strong> <span style="font-family: monospace; background: #e2e8f0; padding: 2px 6px; border-radius: 4px;">${temporaryPassword}</span></p>
+            </div>
+            <p>Please log in and change your password as soon as possible.</p>
+            <p>Best regards,<br>HireTrack System Admin</p>
+            <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;" />
+            <p style="font-size: 12px; color: #64748b; margin-bottom: 4px;"><strong>Please do not reply to this email.</strong></p>
+            <p style="font-size: 12px; color: #64748b;">This is an automated notification from HireTrack System.</p>
+          </div>
+        `
+        });
+        console.log(`Email sent successfully to ${email}`);
+      } else {
+        console.warn('SMTP credentials not found in .env, skipping welcome email.');
+      }
+    } catch (emailErr) {
+      console.error('Failed to send welcome email:', emailErr);
+    }
 
     // --- Post-transaction actions ---
     res.status(201).json({ message: 'User created successfully', userId: newUserId, resetLink });
@@ -168,7 +218,7 @@ router.post('/', verifyToken, checkRole(['Super_Admin', 'Admin', 'PACD']), async
 router.put('/:id', verifyToken, checkRole(['Super_Admin', 'Admin', 'PACD']), async (req, res) => {
   const { id } = req.params;
   const actingUserId = req.user?.id;
-  const { first_name, middle_initial, last_name, suffix, email, role, opshub_role, position, salary, salary_grade, status } = req.body;
+  const { first_name, middle_initial, last_name, suffix, email, role, status } = req.body;
 
   if (!actingUserId || !first_name || !middle_initial || !last_name || !email || !role || !status) {
     return res.status(400).json({ error: 'Missing required fields.' });
@@ -182,7 +232,7 @@ router.put('/:id', verifyToken, checkRole(['Super_Admin', 'Admin', 'PACD']), asy
     const actingUser = await getUserWithRole(actingUserId);
 
     const [targetUserRows] = await connection.query(
-      'SELECT first_name, middle_initial, last_name, suffix, email_address, hiretrack_role AS role, opshub_role, position, salary, salary_grade, status FROM users WHERE id = ?',
+      'SELECT first_name, middle_initial, last_name, suffix, email_address, hiretrack_role AS role, status FROM users WHERE id = ?',
       [id]
     );
     if (!actingUser || targetUserRows.length === 0) {
@@ -230,19 +280,19 @@ router.put('/:id', verifyToken, checkRole(['Super_Admin', 'Admin', 'PACD']), asy
       }
     }
 
-    const updatedUser = { first_name, middle_initial, last_name, suffix, email, role, opshub_role, position, salary, salary_grade, status };
+    const updatedUser = { first_name, middle_initial, last_name, suffix, email, role, status };
 
     // 1. UPDATE local DB
     await connection.query(
-      'UPDATE users SET first_name = ?, middle_initial = ?, last_name = ?, suffix = ?, email_address = ?, hiretrack_role = ?, opshub_role = ?, position = ?, salary = ?, salary_grade = ?, status = ? WHERE id = ?',
-      [first_name, middle_initial || null, last_name, suffix || null, email, role, opshub_role || null, position || null, salary || null, salary_grade || null, status, id]
+      'UPDATE users SET first_name = ?, middle_initial = ?, last_name = ?, suffix = ?, email_address = ?, hiretrack_role = ?, status = ? WHERE id = ?',
+      [first_name, middle_initial || null, last_name, suffix || null, email, role || null, status, id]
     );
 
     // 2. SYNC to Turso
     try {
       await executeTurso(
-        `UPDATE User_Permissions SET Email = ?, First_Name = ?, Middle_Name = ?, Last_Name = ?, Suffix = ?, Role = ?, Position = ?, Salary = ?, Salary_Grade = ?, Status = ? WHERE Email = ?`,
-        [email, first_name, middle_initial || null, last_name, suffix || null, opshub_role || null, position || null, salary || null, salary_grade || null, status, oldEmail]
+        `UPDATE User_Permissions SET Email = ?, First_Name = ?, Middle_Name = ?, Last_Name = ?, Suffix = ?, Role = ?, Status = ? WHERE Email = ?`,
+        [email, first_name, middle_initial || null, last_name, suffix || null, role || null, status, oldEmail]
       );
     } catch (tursoErr) {
       // If Turso fails, try to revert Clerk email change (skipped for now as email update is not implemented)

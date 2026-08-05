@@ -102,7 +102,7 @@ const levenshtein = (a, b) => {
 
 // --- Helper: Fetch existing employees and build lookup maps for matching ---
 const fetchExistingEmployeesAndMaps = async (connection) => {
-    const [dbEmployees] = await connection.query("SELECT id, employee_id, first_name, last_name, DATE_FORMAT(date_of_birth, '%Y-%m-%d') as dob FROM employees");
+    const [dbEmployees] = await connection.query("SELECT id, employee_id, first_name, last_name, email, DATE_FORMAT(date_of_birth, '%Y-%m-%d') as dob FROM employees");
     
     const existingEmployeeMap = new Map();
     dbEmployees.forEach(emp => {

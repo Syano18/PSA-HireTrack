@@ -3,6 +3,8 @@ import { HashRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { SettingsProvider } from './context/SettingsContext';
+import { ClerkProvider } from '@clerk/clerk-react';
+import { useNavigate } from 'react-router-dom';
 
 // --- Page & Layout Imports ---
 import LoginPage from './pages/LoginPage';
@@ -85,18 +87,33 @@ const App = () => {
     );
 };
 
+const ClerkWithRoutes = ({ children }) => {
+    const navigate = useNavigate();
+    return (
+        <ClerkProvider 
+            publishableKey={process.env.REACT_APP_CLERK_PUBLISHABLE_KEY} 
+            telemetry={false}
+            navigate={(to) => navigate(to)}
+        >
+            {children}
+        </ClerkProvider>
+    );
+};
+
 // --- Final Exported Component ---
 // This is what you import in index.js
 const PSAHireTrack = () => {
     return (
         <Router>
-            <ThemeProvider>
-                <SettingsProvider>
-                    <AuthProvider>
-                        <App />
-                    </AuthProvider>
-                </SettingsProvider>
-            </ThemeProvider>
+            <ClerkWithRoutes>
+                <ThemeProvider>
+                    <SettingsProvider>
+                        <AuthProvider>
+                            <App />
+                        </AuthProvider>
+                    </SettingsProvider>
+                </ThemeProvider>
+            </ClerkWithRoutes>
         </Router>
     );
 };

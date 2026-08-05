@@ -33,6 +33,7 @@ const locationRoutes = require('./routes/locations');
 const employeeRoutes = require('./routes/employees');
 const trainingRoutes = require('./routes/trainings');
 const employmentRoutes = require('./routes/employments');
+const emailRoutes = require('./routes/emailRoutes');
 const trainingcertificateRoutes = require('./routes/trainingcertificateRoutes');
 const employmentcertificateRoutes = require('./routes/employmentcertificateRoutes');
 const dashboardRoutes = require('./routes/dashboard'); // This is the one we're fixing
@@ -46,6 +47,7 @@ app.use('/api', locationRoutes);
 app.use('/api/employees', employeeRoutes);
 app.use('/api/trainings', trainingRoutes);
 app.use('/api/employments', employmentRoutes);
+app.use('/api', emailRoutes);
 app.use('/api', trainingcertificateRoutes);
 app.use('/api', employmentcertificateRoutes);
 app.use('/api', dashboardRoutes);

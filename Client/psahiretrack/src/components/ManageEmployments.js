@@ -19,11 +19,9 @@ const ManageSurveys = ({ session }) => {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [currentSurvey, setCurrentSurvey] = useState({ id: null, name: '' });
     const [searchQuery, setSearchQuery] = useState('');
-    const [currentPage, setCurrentPage] = useState(1);
     const [originalSurveyData, setOriginalSurveyData] = useState(null);
     const [surveyToDelete, setSurveyToDelete] = useState(null);
     const [nonDeletableSurveys, setNonDeletableSurveys] = useState(new Set());
-    const rowsPerPage = 10;
     const [sortConfig, setSortConfig] = useState({ key: 'name', direction: 'ascending' });
     
     // State for rating criteria fields
@@ -116,10 +114,6 @@ const ManageSurveys = ({ session }) => {
         });
     }, [surveysWithNames, searchQuery]);
 
-    useEffect(() => {
-        setCurrentPage(1);
-    }, [searchQuery, sortConfig]);
-
     const sortedSurveys = useMemo(() => {
         let sortableItems = [...filteredSurveys];
         if (sortConfig.key) {
@@ -136,11 +130,7 @@ const ManageSurveys = ({ session }) => {
         return sortableItems;
     }, [filteredSurveys, sortConfig]);
 
-    const totalPages = Math.ceil(sortedSurveys.length / rowsPerPage);
-    const paginatedSurveys = useMemo(() => {
-        const startIndex = (currentPage - 1) * rowsPerPage;
-        return sortedSurveys.slice(startIndex, startIndex + rowsPerPage);
-    }, [sortedSurveys, currentPage]);
+
 
     const requestSort = (key) => {
         const direction = (sortConfig.key === key && sortConfig.direction === 'ascending') ? 'descending' : 'ascending';
@@ -152,8 +142,7 @@ const ManageSurveys = ({ session }) => {
         return sortConfig.direction === 'ascending' ? <FaSortUp className="inline-block ml-1 text-blue-500" /> : <FaSortDown className="inline-block ml-1 text-blue-500" />;
     };
 
-    const handleNextPage = () => setCurrentPage(prev => Math.min(prev + 1, totalPages));
-    const handlePreviousPage = () => setCurrentPage(prev => Math.max(prev - 1, 1));
+
 
     const handleOpenModal = (survey = { id: null, name: '', contract_start_date: null, contract_end_date: null, focal_person_id: '' }) => {
         const formatForInput = (dateString) => {
@@ -483,7 +472,7 @@ const ManageSurveys = ({ session }) => {
     }
 
     return (
-        <div>
+        <div className="flex-1 w-full flex flex-col min-h-0">
             <ToastContainer toasts={toasts} onClose={removeToast} />
             <div className="flex justify-between items-center mb-4">
               <h1 className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white">Manage Surveys</h1>
@@ -500,15 +489,15 @@ const ManageSurveys = ({ session }) => {
                       )}
                   </div>
                   {canManage && (
-                      <button onClick={() => handleOpenModal()} className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600">
-                          <FiPlus className="w-4 h-4" />
+                      <button onClick={() => handleOpenModal()} className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600">
+                          <FiPlus className="w-5 h-5" />
                           Add Survey/Census
                       </button>
                   )}
               </div>
           </div>
 
-          <div className="overflow-x-auto bg-white h-[680px] rounded-lg shadow dark:bg-gray-800">
+          <div className="overflow-auto bg-white rounded-lg shadow flex-1 min-h-0 dark:bg-gray-800">
               <table className="min-w-full text-sm leading-normal">
                   <thead>
                       <tr className="sticky top-0 border-b-2 border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-900/50">
@@ -522,7 +511,7 @@ const ManageSurveys = ({ session }) => {
                       </tr>
                   </thead>
                   <tbody>
-                      {paginatedSurveys.length > 0 ? paginatedSurveys.map(survey => (
+                      {sortedSurveys.length > 0 ? sortedSurveys.map(survey => (
                           <tr key={survey.id} className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors duration-200">
                               <td className="px-6 py-4 font-medium text-gray-800 dark:text-gray-200">{survey.name}</td>
                               <td className="px-5 py-4 text-gray-700 dark:text-gray-300">{survey.contract_start_date ? format(parseISO(survey.contract_start_date), 'MM/dd/yyyy') : 'N/A'}</td>
@@ -552,16 +541,9 @@ const ManageSurveys = ({ session }) => {
               </table>
           </div>
 
-          {totalPages > 1 && (
-              <div className="flex justify-between items-center mt-1">
-                  <span className="text-sm text-gray-700 dark:text-gray-300">Showing {Math.min((currentPage - 1) * rowsPerPage + 1, sortedSurveys.length)} to {Math.min(currentPage * rowsPerPage, sortedSurveys.length)} of {sortedSurveys.length} records</span>
-                  <div className="flex items-center space-x-2">
-                      <button onClick={handlePreviousPage} disabled={currentPage === 1} className="px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed">Previous</button>
-                      <span className="text-gray-700 dark:text-gray-300 px-2">{currentPage}</span>
-                      <button onClick={handleNextPage} disabled={currentPage >= totalPages} className="px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed">Next</button>
-                  </div>
-              </div>
-          )}
+          <div className="flex justify-end items-center mt-2 px-2 flex-shrink-0">
+              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Total Records: {sortedSurveys.length}</span>
+          </div>
 
           {isModalOpen && (
               <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">

@@ -1,20 +1,19 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useTheme } from '../context/ThemeContext';
 import { motion } from 'framer-motion';
-import { 
-    FiLogOut, FiChevronLeft, FiChevronRight, FiUser, FiLayout, FiMessageSquare,
+import {
+    FiLogOut, FiUser, FiLayout, FiMessageSquare,
     FiUsers, FiTool, FiBriefcase, FiBook, FiAward, FiFileText, FiUserPlus, FiClipboard
 } from 'react-icons/fi';
 import { FaSun, FaMoon } from 'react-icons/fa';
+import PSALogo from '../assets/iconat.png';
 
 const Sidebar = ({ onLogout, user }) => {
     const location = useLocation();
-    const [isCollapsed, setIsCollapsed] = useState(false);
     const { isDarkMode, setIsDarkMode } = useTheme();
-    
+
     const ThemeIcon = isDarkMode ? FaSun : FaMoon;
-    const CollapseIcon = isCollapsed ? FiChevronRight : FiChevronLeft;
 
     const navLinks = [
         { name: 'Dashboard', icon: FiLayout, path: '/dashboard' },
@@ -26,7 +25,7 @@ const Sidebar = ({ onLogout, user }) => {
         { name: 'Employment', icon: FiBriefcase, path: '/employments' },
         { name: 'Certificate', icon: FiAward, path: '/certificates' },
         { name: 'External Partners', icon: FiFileText, path: '/temp-certificates' },
-        { name: 'Utilities', icon: FiTool, path: '/utilities'},
+        { name: 'Utilities', icon: FiTool, path: '/utilities' },
         { name: 'Account', icon: FiUser, path: '/accounts' },
     ];
 
@@ -41,24 +40,13 @@ const Sidebar = ({ onLogout, user }) => {
     });
 
     return (
-        <aside className={`min-h-screen bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 flex flex-col flex-shrink-0 transition-all duration-300 ${isCollapsed ? 'w-20' : 'w-64'}`}>
-            
+        <aside className={`min-h-screen bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 flex flex-col flex-shrink-0 transition-all duration-300 w-64`}>
+
             {/* --- Top Section: Header and Navigation --- */}
             <div className="flex-grow">
-                {/* Header with Theme and Collapse Buttons */}
-                <div className="px-4 pt-4 flex justify-between items-center">
-                    <motion.button 
-                        onClick={() => setIsDarkMode(!isDarkMode)} 
-                        className="p-2 rounded-full text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-700"
-                    >
-                        <ThemeIcon className="w-6 h-6" />
-                    </motion.button>
-                    <motion.button 
-                        onClick={() => setIsCollapsed(!isCollapsed)} 
-                        className="p-2 rounded-full text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-700"
-                    >
-                        <CollapseIcon className="w-6 h-6" />
-                    </motion.button>
+                {/* Logo Section */}
+                <div className="px-4 pt-8 pb-6 flex flex-col items-center justify-center border-b border-gray-200 dark:border-gray-700 mb-2">
+                    <img src={PSALogo} alt="PSA Logo" className="w-[150px] h-[150px] object-contain drop-shadow-md" />
                 </div>
 
                 {/* Navigation Links */}
@@ -67,21 +55,20 @@ const Sidebar = ({ onLogout, user }) => {
                         {visibleLinks.map((link) => {
                             const NavLinkIcon = link.icon;
                             const isActive = location.pathname.startsWith(link.path);
-                            const linkClasses = `flex items-center p-2 rounded-lg transition-colors ${
-                                isActive 
-                                ? "bg-blue-600 text-white" 
+                            const linkClasses = `flex items-center p-2 rounded-lg transition-colors ${isActive
+                                ? "bg-blue-600 text-white"
                                 : "hover:bg-blue-500 hover:text-white"
-                            }`;
+                                }`;
 
                             return (
-                                <motion.li 
-                                    key={link.name} 
+                                <motion.li
+                                    key={link.name}
                                     className="mb-2"
                                     whileHover={{ scale: 1.05 }}
                                 >
                                     <Link to={link.path} className={linkClasses}>
                                         <NavLinkIcon className="w-6 h-6 flex-shrink-0" />
-                                        {!isCollapsed && <span className="text-lg ml-4 whitespace-nowrap">{link.name}</span>}
+                                        <span className="text-lg ml-4 whitespace-nowrap">{link.name}</span>
                                     </Link>
                                 </motion.li>
                             );
@@ -90,16 +77,30 @@ const Sidebar = ({ onLogout, user }) => {
                 </nav>
             </div>
 
-            {/* --- Bottom Section: Logo and Logout Button --- */}
-            <div className="p-4">
-                <motion.button 
-                    onClick={onLogout} 
-                    className="group w-full h-12 flex justify-center items-center py-3 px-4 text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700"
-                    whileHover={{ scale: 1.05 }}
+            {/* --- Bottom Section: Theme Toggle and Logout Button --- */}
+            <div className="p-4 space-y-3">
+                <button
+                    onClick={() => setIsDarkMode(!isDarkMode)}
+                    className="w-full flex items-center justify-between py-3 px-4 border border-gray-200 dark:border-gray-700 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
                 >
-                    <FiLogOut className="w-6 h-6 flex-shrink-0" />
-                    {!isCollapsed && <span className="font-medium ml-2">Logout</span>}
-                </motion.button>
+                    <div className="flex items-center gap-3">
+                        <ThemeIcon className={`w-5 h-5 ${isDarkMode ? 'text-gray-300' : 'text-yellow-500'}`} />
+                        <span className="font-medium text-gray-700 dark:text-gray-200 text-sm">
+                            {isDarkMode ? 'Dark Mode' : 'Light Mode'}
+                        </span>
+                    </div>
+                    <div className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${isDarkMode ? 'bg-blue-600' : 'bg-gray-300'}`}>
+                        <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${isDarkMode ? 'translate-x-5' : 'translate-x-1'}`} />
+                    </div>
+                </button>
+
+                <button
+                    onClick={onLogout}
+                    className="w-full flex items-center gap-3 py-3 px-4 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                >
+                    <FiLogOut className="w-5 h-5 text-gray-500 dark:text-gray-400" />
+                    <span className="font-medium text-sm">Logout</span>
+                </button>
             </div>
         </aside>
     );

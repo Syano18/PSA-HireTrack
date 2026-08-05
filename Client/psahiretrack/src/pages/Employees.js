@@ -130,8 +130,6 @@ const Employees = () => {
   const [selectedMunicipalityId, setSelectedMunicipalityId] = useState('');
   const [sortConfig, setSortConfig] = useState({ key: 'employee_id', direction: 'ascending' });
   const [searchQuery, setSearchQuery] = useState('');
-  const [currentPage, setCurrentPage] = useState(1);
-  const rowsPerPage = 9;
   const [sessionState, setSessionState] = useState(null);
   const [userPermissions, setUserPermissions] = useState({ canManage: false });
   const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
@@ -362,9 +360,6 @@ const Employees = () => {
     });
   }, [employeesWithAge, searchQuery]);
   
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [searchQuery]);
 
   const sortedEmployees = useMemo(() => {
     let sortableEmployees = [...filteredEmployees];
@@ -464,11 +459,7 @@ const Employees = () => {
     }
   }, [syncSelectedSurveyName, surveys]);
 
-  const totalPages = Math.ceil(sortedEmployees.length / rowsPerPage);
-  const indexOfLastItem = currentPage * rowsPerPage;
-  const indexOfFirstItem = indexOfLastItem - rowsPerPage;
-  const currentItems = sortedEmployees.slice(indexOfFirstItem, indexOfLastItem);
-  
+
   if (!sessionState || isLoading || isSettingsLoading) { 
     return (
       <div className="p-4 sm:p-6 lg:p-8">
@@ -494,15 +485,12 @@ const Employees = () => {
     );
   }
 
-  const handleNextPage = () => setCurrentPage(prev => Math.min(prev + 1, totalPages));
-  const handlePreviousPage = () => setCurrentPage(prev => Math.max(prev - 1, 1));
-  
+
   const handleSearchChange = (e) => {
     setSearchQuery(e.target.value);
   };
   
   const requestSort = (key) => {
-    setCurrentPage(1);
     let direction = 'ascending';
     if (sortConfig.key === key && sortConfig.direction === 'ascending') {
       direction = 'descending';
@@ -1602,8 +1590,8 @@ const Employees = () => {
 
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-4">
+    <div className="flex-1 w-full flex flex-col min-h-0">
+      <div className="flex items-center justify-between mb-4 flex-shrink-0">
         <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">Employee Records</h1>
         <div className="flex items-center gap-4">
           <div className="relative">
@@ -1631,23 +1619,23 @@ const Employees = () => {
       <div className="flex flex-wrap items-center gap-2 mb-4">
         {userPermissions.canManage && (
           <>
-            <button onClick={handleAddClick} className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600"><FiPlus className="w-4 h-4" />Add New Employee</button>
+            <button onClick={handleAddClick} className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600"><FiPlus className="w-5 h-5" />Add New Employee</button>
             <div className="flex-grow" />
-            <button onClick={handleDownloadTemplate} className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-gray-900 dark:text-gray-100 bg-gray-400 rounded-lg hover:bg-gray-500 dark:bg-gray-600 dark:hover:bg-gray-700"><FiDownload className="w-4 h-4" />Download Template</button>
-            <label className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-white bg-green-600 rounded-lg hover:bg-green-700 dark:bg-green-700 dark:hover:bg-green-600 cursor-pointer">
-              <FiUpload className="w-4 h-4" />
+            <button onClick={handleDownloadTemplate} className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-gray-900 dark:text-gray-100 bg-gray-400 rounded-lg hover:bg-gray-500 dark:bg-gray-600 dark:hover:bg-gray-700"><FiDownload className="w-5 h-5" />Download Template</button>
+            <label className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-green-600 rounded-lg hover:bg-green-700 dark:bg-green-700 dark:hover:bg-green-600 cursor-pointer">
+              <FiUpload className="w-5 h-5" />
               Import CSV
               <input type="file" accept=".csv" onChange={handleImportFileSelect} className="hidden" />
             </label>
-            <button onClick={handleSyncClick} disabled={isSyncLoading || assessedApplicantsCount === 0} title={assessedApplicantsCount === 0 ? 'No assessed applicants available' : `${assessedApplicantsCount} assessed applicants ready to sync`} className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-white bg-purple-600 rounded-lg hover:bg-purple-700 dark:bg-purple-700 dark:hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed"><FiDownload className="w-4 h-4" />{isSyncLoading ? 'Syncing...' : `Sync Hired Applicants (${assessedApplicantsCount})`}</button>
+            <button onClick={handleSyncClick} disabled={isSyncLoading || assessedApplicantsCount === 0} title={assessedApplicantsCount === 0 ? 'No assessed applicants available' : `${assessedApplicantsCount} assessed applicants ready to sync`} className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-purple-600 rounded-lg hover:bg-purple-700 dark:bg-purple-700 dark:hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed"><FiDownload className="w-5 h-5" />{isSyncLoading ? 'Syncing...' : `Sync Hired Applicants (${assessedApplicantsCount})`}</button>
             {['Super_Admin', 'Admin'].includes(sessionState?.user?.role) && (
-              <button onClick={handleExportAll} className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-gray-900 dark:text-gray-100 bg-yellow-400 rounded-lg hover:bg-yellow-500 dark:bg-yellow-600 dark:hover:bg-yellow-700"><FiDownload className="w-4 h-4" />Export</button>
+              <button onClick={handleExportAll} className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-gray-900 dark:text-gray-100 bg-yellow-400 rounded-lg hover:bg-yellow-500 dark:bg-yellow-600 dark:hover:bg-yellow-700"><FiDownload className="w-5 h-5" />Export</button>
             )}
           </>
         )}
       </div>
 
-      <div className="overflow-x-auto bg-white rounded-lg shadow h-[760px] dark:bg-gray-800">
+      <div className="overflow-auto bg-white rounded-lg shadow flex-1 min-h-0 dark:bg-gray-800">
         <table className="min-w-full text-sm leading-normal">
           <thead>
             <tr className="sticky top-0 border-b-2 border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-900/50">
@@ -1667,8 +1655,8 @@ const Employees = () => {
             </tr>
           </thead>
           <tbody>
-            {currentItems.length > 0 ? (
-              currentItems.map((emp) => (
+            {sortedEmployees.length > 0 ? (
+              sortedEmployees.map((emp) => (
                 <tr key={emp.id} className="transition-colors duration-200 ease-in-out border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50">
                   <td className="px-5 py-4 font-medium text-gray-900 dark:text-white">
                     <p className="font-medium text-gray-900 whitespace-no-wrap dark:text-white">{[emp.first_name, emp.middle_initial, emp.last_name, emp.suffix].filter(Boolean).join(' ')}</p>
@@ -1706,31 +1694,10 @@ const Employees = () => {
         </table>
       </div>
       
-      <div className="flex justify-between items-center mt-1">
-        <span className="text-sm text-gray-700 dark:text-gray-300">
-          Showing {Math.min((currentPage - 1) * rowsPerPage + 1, filteredEmployees.length)} to {Math.min(currentPage * rowsPerPage, filteredEmployees.length)} of {filteredEmployees.length} records
+      <div className="flex justify-end items-center mt-2 px-2 flex-shrink-0">
+        <span className="text-sm text-gray-700 dark:text-gray-300 font-medium">
+          Total Records: {filteredEmployees.length}
         </span>
-        <div className="flex items-center space-x-2">
-          <button 
-            onClick={handlePreviousPage} 
-            disabled={currentPage === 1} 
-            title={currentPage === 1 ? 'Already on first page' : 'Go to previous page'}
-            className="px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Previous
-          </button>
-          <span className="text-gray-700 dark:text-gray-300 px-2">
-            {currentPage}
-          </span>
-          <button 
-            onClick={handleNextPage} 
-            disabled={currentPage === totalPages} 
-            title={currentPage === totalPages ? 'Already on last page' : 'Go to next page'}
-            className="px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Next
-          </button>
-        </div>
       </div>
 
       {isModalOpen && (

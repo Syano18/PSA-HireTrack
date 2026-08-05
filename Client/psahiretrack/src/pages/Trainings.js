@@ -119,7 +119,7 @@ const Trainings = () => {
     const [isLoading, setIsLoading] = useState(true);
     const { toasts, showToast, removeToast } = useToast();
     const [filters, setFilters] = useState({ query: '' });
-    const [currentPage, setCurrentPage] = useState(1);
+
     const [selectedTrainings, setSelectedTrainings] = useState(new Set());
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [formData, setFormData] = useState(INITIAL_FORM_STATE);
@@ -166,7 +166,6 @@ const Trainings = () => {
     const [sortConfig, setSortConfig] = useState({ key: 'id', direction: 'ascending' });
     const canManage = useMemo(() => sessionState && MANAGABLE_ROLES.includes(sessionState.user.role), [sessionState]);
     const canExport = useMemo(() => sessionState && sessionState.user.role === 'Super_Admin', [sessionState]);
-    const rowsPerPage = 9;
     const viewModalRef = useRef(null);
 
     useClickOutside(viewModalRef, () => {
@@ -555,8 +554,6 @@ const Trainings = () => {
         );
       }
     const totalItems = filteredAndSortedTrainings.length;
-    const totalPages = Math.ceil(totalItems / rowsPerPage);
-    const paginatedList = filteredAndSortedTrainings.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage);
 
     const requestSort = (key) => {
         let direction = 'ascending';
@@ -574,8 +571,6 @@ const Trainings = () => {
     };
     
     const handleFilterChange = (e) => setFilters({ query: e.target.value });
-    const handleNextPage = () => setCurrentPage(prev => Math.min(prev + 1, totalPages));
-    const handlePreviousPage = () => setCurrentPage(prev => Math.max(prev - 1, 1));
     const handleAddClick = () => { 
         setEditingTraining(null); 
         setFormData(INITIAL_FORM_STATE); 
@@ -713,7 +708,7 @@ const Trainings = () => {
 
 
     return (
-        <div>
+        <div className="flex-1 w-full flex flex-col min-h-0">
             <ToastContainer toasts={toasts} onClose={removeToast} />
             <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
                 <h1 className="text-3xl font-bold text-gray-800 dark:text-white">Training Records</h1>
@@ -736,16 +731,16 @@ const Trainings = () => {
             
             {canManage && (
                 <div className="flex flex-wrap items-center gap-2 mb-4">
-                    <button onClick={handleAddClick} className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600"><FiPlus className="w-4 h-4" />Assign Training</button>
+                    <button onClick={handleAddClick} className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600"><FiPlus className="w-5 h-5" />Assign Training</button>
                     <div className="flex-grow" />
-                    <button onClick={handleSyncClick} disabled={isSyncLoading || syncPendingCount === 0} title={syncPendingCount === 0 ? 'No assessed applicants available for training record assignment' : `${syncPendingCount} assessed applicant/s ready for training record assignment`} className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-white bg-purple-600 rounded-lg hover:bg-purple-700 dark:bg-purple-700 dark:hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed"><FiDownload className="w-4 h-4" />{isSyncLoading ? 'Loading...' : `Assign Training to Hired (${syncPendingCount})`}</button>
-                    {canExport && <button onClick={handleExportAll} title="Export all training records" className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-gray-900 dark:text-gray-100 bg-yellow-400 rounded-lg hover:bg-yellow-500 dark:bg-yellow-600 dark:hover:bg-yellow-700">
-                        <FiDownload className="w-4 h-4" />Export All
+                    <button onClick={handleSyncClick} disabled={isSyncLoading || syncPendingCount === 0} title={syncPendingCount === 0 ? 'No assessed applicants available for training record assignment' : `${syncPendingCount} assessed applicant/s ready for training record assignment`} className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-purple-600 rounded-lg hover:bg-purple-700 dark:bg-purple-700 dark:hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed"><FiDownload className="w-5 h-5" />{isSyncLoading ? 'Loading...' : `Assign Training to Hired (${syncPendingCount})`}</button>
+                    {canExport && <button onClick={handleExportAll} title="Export all training records" className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-gray-900 dark:text-gray-100 bg-yellow-400 rounded-lg hover:bg-yellow-500 dark:bg-yellow-600 dark:hover:bg-yellow-700">
+                        <FiDownload className="w-5 h-5" />Export All
                     </button>}
                 </div>
             )}
             
-            <div className="overflow-x-auto bg-white h-[760px] rounded-lg shadow dark:bg-gray-800">
+            <div className="overflow-auto bg-white rounded-lg shadow flex-1 min-h-0 dark:bg-gray-800">
                 <table className="min-w-full text-sm leading-normal">
                     <thead>
                         <tr className="sticky top-0 border-b-2 border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-900/50">
@@ -763,7 +758,7 @@ const Trainings = () => {
                         </tr>
                     </thead>
                     <tbody>
-                        {paginatedList.length > 0 ? paginatedList.map(rec => {
+                        {filteredAndSortedTrainings.length > 0 ? filteredAndSortedTrainings.map(rec => {
                             const fullName = [rec.first_name, rec.middle_initial, rec.last_name, rec.suffix].filter(Boolean).join(' ');
                             return (
                                 <tr key={rec.id} className="transition-colors duration-200 border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50">
@@ -795,15 +790,10 @@ const Trainings = () => {
                 </table>
             </div>
             
-            <div className="flex justify-between items-center mt-1">
-                <span className="text-sm text-gray-700 dark:text-gray-300">
-                    Showing {totalItems > 0 ? (currentPage - 1) * rowsPerPage + 1 : 0} to {Math.min(currentPage * rowsPerPage, totalItems)} of {totalItems} records
+            <div className="flex justify-end items-center mt-2 px-2 flex-shrink-0">
+                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Total Records: {totalItems}
                 </span>
-                <div className="flex items-center space-x-2">
-                    <button onClick={handlePreviousPage} disabled={currentPage === 1} title={currentPage === 1 ? 'Already on first page' : 'Go to previous page'} className="px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50">Previous</button>
-                    <span className="px-2 text-gray-700 dark:text-gray-300">{currentPage}</span>
-                    <button onClick={handleNextPage} disabled={currentPage >= totalPages} title={currentPage >= totalPages ? 'Already on last page' : 'Go to next page'} className="px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50">Next</button>
-                </div>
             </div>
 
             {isModalOpen && (

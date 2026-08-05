@@ -32,8 +32,6 @@ const ManageTrainings = ({ session }) => {
         }
     }, [location.state]);
 
-    const [currentPage, setCurrentPage] = useState(1);
-    const rowsPerPage = 9;
     const [sortConfig, setSortConfig] = useState({ key: 'title', direction: 'ascending' });
     const [titleToDelete, setTitleToDelete] = useState(null);
     const [nonDeletableTitles, setNonDeletableTitles] = useState(new Set());
@@ -83,9 +81,7 @@ const ManageTrainings = ({ session }) => {
         );
     }, [titles, searchQuery]);
 
-    useEffect(() => {
-        setCurrentPage(1);
-    }, [searchQuery, sortConfig]);
+
 
     const sortedTitles = useMemo(() => {
         let sortableItems = [...filteredTitles];
@@ -103,12 +99,6 @@ const ManageTrainings = ({ session }) => {
         return sortableItems;
     }, [filteredTitles, sortConfig]);
 
-    const totalPages = Math.ceil(sortedTitles.length / rowsPerPage);
-    const paginatedTitles = useMemo(() => {
-        const startIndex = (currentPage - 1) * rowsPerPage;
-        return sortedTitles.slice(startIndex, startIndex + rowsPerPage);
-    }, [sortedTitles, currentPage]);
-
     const requestSort = (key) => {
         const direction = (sortConfig.key === key && sortConfig.direction === 'ascending') ? 'descending' : 'ascending';
         setSortConfig({ key, direction });
@@ -118,9 +108,6 @@ const ManageTrainings = ({ session }) => {
         if (sortConfig.key !== key) return <FaSort className="inline-block ml-1 text-gray-400" />;
         return sortConfig.direction === 'ascending' ? <FaSortUp className="inline-block ml-1 text-blue-500" /> : <FaSortDown className="inline-block ml-1 text-blue-500" />;
     };
-
-    const handleNextPage = () => setCurrentPage(prev => Math.min(prev + 1, totalPages));
-    const handlePreviousPage = () => setCurrentPage(prev => Math.max(prev - 1, 1));
 
     const handleOpenModal = (training = INITIAL_FORM_STATE) => {
         const formatForInput = (dateString) => {
@@ -246,7 +233,7 @@ const ManageTrainings = ({ session }) => {
     }
 
     return (
-        <div>
+        <div className="flex-1 w-full flex flex-col min-h-0">
             <ToastContainer toasts={toasts} onClose={removeToast} />
             <div className="flex justify-between items-center mb-4">
                 <h1 className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white">Manage Training Titles</h1>
@@ -263,15 +250,15 @@ const ManageTrainings = ({ session }) => {
                         )}
                     </div>
                     {canManage && (
-                        <button onClick={() => handleOpenModal()} className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600">
-                            <FiPlus className="w-4 h-4" />
+                        <button onClick={() => handleOpenModal()} className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600">
+                            <FiPlus className="w-5 h-5" />
                             Add Training Title
                         </button>
                     )}
                 </div>
             </div>
 
-            <div className="overflow-x-auto bg-white h-[680px] rounded-lg shadow dark:bg-gray-800">
+            <div className="overflow-auto bg-white rounded-lg shadow flex-1 min-h-0 dark:bg-gray-800">
                 <table className="min-w-full text-sm leading-normal">
                     <thead>
                         <tr className="sticky top-0 border-b-2 border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-900/50">
@@ -290,7 +277,7 @@ const ManageTrainings = ({ session }) => {
                         </tr>
                     </thead>
                     <tbody>
-                        {paginatedTitles.length > 0 ? paginatedTitles.map(title => (
+                        {sortedTitles.length > 0 ? sortedTitles.map(title => (
                             <tr key={title.id} className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors duration-200">
                                 <td className="px-6 py-4 font-medium text-gray-800 dark:text-gray-200">{title.title}</td>
                                 <td className="px-6 py-4 font-medium text-gray-800 dark:text-gray-200">{title.start_date ? format(parseISO(title.start_date), 'MM/dd/yyyy') : ''}</td>
@@ -321,18 +308,11 @@ const ManageTrainings = ({ session }) => {
                 </table>
             </div>
 
-            {totalPages > 1 && (
-                <div className="flex justify-between items-center mt-1">
-                    <span className="text-sm text-gray-700 dark:text-gray-300">
-                        Showing {Math.min((currentPage - 1) * rowsPerPage + 1, sortedTitles.length)} to {Math.min(currentPage * rowsPerPage, sortedTitles.length)} of {sortedTitles.length} records
-                    </span>
-                    <div className="flex items-center space-x-2">
-                        <button onClick={handlePreviousPage} disabled={currentPage === 1} className="px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed">Previous</button>
-                        <span className="text-gray-700 dark:text-gray-300 px-2">{currentPage}</span>
-                        <button onClick={handleNextPage} disabled={currentPage >= totalPages} className="px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed">Next</button>
-                    </div>
-                </div>
-            )}
+            <div className="flex justify-end items-center mt-2 px-2 flex-shrink-0">
+                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Total Records: {sortedTitles.length}
+                </span>
+            </div>
 
             {isModalOpen && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">

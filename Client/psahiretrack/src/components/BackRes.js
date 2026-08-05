@@ -70,11 +70,11 @@ const BackRes = () => {
             <div className="mt-8 p-6 border-t dark:border-gray-700 bg-white dark:bg-gray-800 rounded-lg shadow-sm">
                 <h2 className="text-xl font-bold mb-4 text-gray-900 dark:text-white">Database Management</h2>
                 <div className="flex flex-col sm:flex-row gap-4">
-                    <button onClick={handleBackup} className="px-3 py-2 text-xs font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600">
+                    <button onClick={handleBackup} className="px-4 py-2.5 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600">
                         Backup Database
                     </button>
                 {canRestore && (
-                    <button onClick={() => setIsRestoreModalOpen(true)} title="Restore database from backup file (Super Admin / Admin only)" className="px-3 py-2 text-xs font-semibold text-white bg-red-600 rounded-lg hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600">
+                    <button onClick={() => setIsRestoreModalOpen(true)} title="Restore database from backup file (Super Admin / Admin only)" className="px-4 py-2.5 text-sm font-semibold text-white bg-red-600 rounded-lg hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600">
                         Restore from Backup
                     </button>
                 )}

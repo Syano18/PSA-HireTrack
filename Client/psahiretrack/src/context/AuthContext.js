@@ -1,4 +1,5 @@
 import React, { createContext, useState, useEffect, useContext, useCallback } from 'react';
+import { useAuth as useClerkAuth } from '@clerk/clerk-react';
 
 const AuthContext = createContext(null);
 
@@ -24,9 +25,13 @@ export const AuthProvider = ({ children }) => {
         return () => removeListener();
     }, [checkSession]);
 
+    const { signOut } = useClerkAuth();
+
     const handleLogout = async () => {
         await window.electronAPI.clearLoginState();
-        setSession(null);
+        // Fire and forget signOut so it clears tokens, but immediately reboot before it can hijack the URL
+        signOut().catch(() => {});
+        window.electronAPI.restartApp();
     };
 
     const value = {

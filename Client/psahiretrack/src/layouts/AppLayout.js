@@ -13,16 +13,16 @@ const AppLayout = () => {
     const { isDarkMode, setIsDarkMode } = useTheme();
 
     return (
-        <div className="flex min-h-screen bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
+        <div className="flex h-screen overflow-hidden bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
             <Sidebar 
                 onLogout={logout} 
                 user={session.user}
                 isDarkMode={isDarkMode}
                 setIsDarkMode={setIsDarkMode} 
             />
-            <div className="flex-1 flex flex-col">
+            <div className="flex-1 flex flex-col min-w-0">
                 <Header user={session.user} />
-                <main className="flex-1 p-4 lg:p-4">
+                <main className="flex-1 px-4 pb-4 pt-2 flex flex-col min-h-0">
                     <Outlet />
                 </main>
             </div>

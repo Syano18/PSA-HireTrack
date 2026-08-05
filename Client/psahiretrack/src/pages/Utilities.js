@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
+import { FiBook, FiBriefcase, FiClipboard, FiDatabase } from 'react-icons/fi';
 import ManageTrainings from '../components/ManageTrainings';
 import ManagePositions from '../components/ManagePositions';
 import ManageEmployments from '../components/ManageEmployments';
@@ -25,17 +26,19 @@ const Utilities = () => {
         }
     }, [location.state]);
 
-    const TabButton = ({ tabName, label }) => {
+    const TabButton = ({ tabName, label, icon: Icon }) => {
         const isActive = activeTab === tabName;
-        const baseClasses = "px-4 py-3 text-base font-semibold border-b-2 transition-colors duration-200 focus:outline-none";
-        const activeClasses = "border-blue-600 text-blue-600 dark:text-blue-400 dark:border-blue-400";
-        const inactiveClasses = "border-transparent text-gray-500 hover:text-gray-800 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-200 dark:hover:border-gray-600";
 
         return (
             <button
                 onClick={() => setActiveTab(tabName)}
-                className={`${baseClasses} ${isActive ? activeClasses : inactiveClasses}`}
+                className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                  isActive
+                    ? 'bg-white dark:bg-gray-700 text-blue-600 dark:text-blue-400 shadow-sm'
+                    : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+                }`}
             >
+                {Icon && <Icon className="w-4 h-4" />}
                 {label}
             </button>
         );
@@ -62,20 +65,21 @@ const Utilities = () => {
     }
 
     return (
-        <div>
-            <h1 className="text-3xl font-bold text-gray-800 dark:text-white mb-6">System Utilities</h1>
-            
-            {/* --- MODIFIED: The tab navigation container --- */}
-            <div className="border-b border-gray-200 dark:border-gray-700">
-                <TabButton tabName="trainings" label="Training Titles" />
-                <TabButton tabName="positions" label="Positions" />
-                <TabButton tabName="survey" label="Survey/Census" />
-                <TabButton tabName="backres" label="Backup and Restore" />
-                {/* Add more TabButtons here for future utilities */}
+        <div className="flex-1 w-full flex flex-col min-h-0">
+            {/* Header and Tabs */}
+            <div className="mb-6 flex flex-col gap-4 flex-shrink-0">
+                <h1 className="text-3xl font-bold text-gray-800 dark:text-white">System Utilities</h1>
+                
+                <div className="inline-flex flex-wrap bg-gray-100 border border-gray-200 dark:bg-gray-800 dark:border-gray-700 rounded-lg p-1 self-start gap-1">
+                    <TabButton tabName="trainings" label="Training Titles" icon={FiBook} />
+                    <TabButton tabName="positions" label="Positions" icon={FiBriefcase} />
+                    <TabButton tabName="survey" label="Survey/Census" icon={FiClipboard} />
+                    <TabButton tabName="backres" label="Backup and Restore" icon={FiDatabase} />
+                </div>
             </div>
 
             {/* Content for the active tab is rendered below the menu */}
-            <div className="mt-6">
+            <div className="flex-1 flex flex-col min-h-0">
                 {renderTabContent()}
             </div>
         </div>
