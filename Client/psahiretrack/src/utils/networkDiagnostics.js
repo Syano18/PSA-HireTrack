@@ -27,10 +27,10 @@ export const checkInternetConnectivity = async () => {
 /**
  * Check if the server is reachable
  * @param {string} serverIp - Server IP address
- * @param {number} port - Server port (default: 3001)
+ * @param {number} port - Server port (default: 80)
  * @returns {Promise<{reachable: boolean, statusCode?: number, error?: string, errorType?: string}>}
  */
-export const checkServerReachability = async (serverIp, port = 3001) => {
+export const checkServerReachability = async (serverIp, port = 80) => {
     const url = `http://${serverIp}:${port}/api/health`;
     
     try {
@@ -72,10 +72,10 @@ export const checkServerReachability = async (serverIp, port = 3001) => {
 /**
  * Perform full network diagnosis
  * @param {string} serverIp - Server IP address
- * @param {number} serverPort - Server port (default: 3001)
+ * @param {number} serverPort - Server port (default: 80)
  * @returns {Promise<{summary: string, details: object}>}
  */
-export const performNetworkDiagnostics = async (serverIp, serverPort = 3001) => {
+export const performNetworkDiagnostics = async (serverIp, serverPort = 80) => {
     const results = {
         timestamp: new Date().toISOString(),
         serverIp,
@@ -130,12 +130,12 @@ export const performNetworkDiagnostics = async (serverIp, serverPort = 3001) => 
 export const getErrorDescription = (errorCode, serverIp) => {
     const descriptions = {
         DNS_FAILED: `Cannot resolve server address '${serverIp}'. Check if the IP address is correct.`,
-        CONNECTION_REFUSED: `Server at ${serverIp}:3001 is not accepting connections. Server may be offline.`,
-        TIMEOUT: `Server at ${serverIp}:3001 is not responding (timeout). Network may be slow or server is busy.`,
+        CONNECTION_REFUSED: `Server at ${serverIp}:80 is not accepting connections. Server may be offline.`,
+        TIMEOUT: `Server at ${serverIp}:80 is not responding (timeout). Network may be slow or server is busy.`,
         HOST_UNREACHABLE: `Host ${serverIp} is unreachable. Check your network connection and IP address.`,
         NETWORK_UNREACHABLE: 'Your network is unreachable. Check your internet connection.',
-        REQUEST_TIMEOUT: `Request to server ${serverIp}:3001 timed out. Server is not responding.`,
-        CONNECTION_ERROR: `Connection to server ${serverIp}:3001 failed. Check IP address and server status.`,
+        REQUEST_TIMEOUT: `Request to server ${serverIp}:80 timed out. Server is not responding.`,
+        CONNECTION_ERROR: `Connection to server ${serverIp}:80 failed. Check IP address and server status.`,
         UNKNOWN: 'An unknown connection error occurred. Check your network and server settings.'
     };
     

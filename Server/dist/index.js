@@ -158527,7 +158527,7 @@ try {
     const recipientNameLocal = `${data.first_name} ${data.middle_initial || ''} ${data.last_name} ${data.suffix || ''}`.replace(/\s+/g, ' ').trim();
     await dbPool.query(
         "INSERT IGNORE INTO certificate_registry (reference_number, certificate_type, recipient_name, details, issued_at) VALUES (?, ?, ?, ?, ?)",
-        [refNumber, 'training', recipientNameLocal, JSON.stringify({ training_title: data.trainingTitle, training_dates: dateString, training_hours: data.hours || data.thours, qr_token: qrToken, source: 'employee' }), new Date().toISOString()]
+        [refNumber, 'training', recipientNameLocal, JSON.stringify({ training_title: data.trainingTitle, training_dates: dateString, training_hours: data.hours || data.thours, qr_token: qrToken, source: 'employee', venue: data.venue }), new Date().toISOString()]
     );
 } catch (localDbErr) {
     console.error("Failed to log generated training certificate locally:", localDbErr.message);
@@ -158538,7 +158538,7 @@ await registerCertificateInTurso(executeTurso, {
   refNumber,
   certType: 'training',
   recipientName: data.name,
-  details: { trainingTitle: data.trainingTitle, dates: dateString, hours: data.hours || data.thours },
+  details: { trainingTitle: data.trainingTitle, dates: dateString, hours: data.hours || data.thours, venue: data.venue },
 });
 
 if (data.type !== 'Training') {
@@ -158638,7 +158638,7 @@ router.post('/generate-batch-training-certificate', async (req, res) => {
           const recipientNameLocal = `${cert.first_name || ''} ${cert.middle_initial || ''} ${cert.last_name || ''} ${cert.suffix || ''}`.replace(/\s+/g, ' ').trim();
           await dbPool.query(
             "INSERT IGNORE INTO certificate_registry (reference_number, certificate_type, recipient_name, details, issued_at) VALUES (?, ?, ?, ?, ?)",
-            [refNumber, 'training', recipientNameLocal, JSON.stringify({ training_title: cert.trainingTitle, training_dates: dateString, training_hours: cert.hours || cert.thours, source: 'external_partner' }), new Date().toISOString()]
+            [refNumber, 'training', recipientNameLocal, JSON.stringify({ training_title: cert.trainingTitle, training_dates: dateString, training_hours: cert.hours || cert.thours, source: 'external_partner', venue: cert.venue }), new Date().toISOString()]
           );
         } catch (localDbErr) {
           console.error("Failed to log generated temp certificate locally:", localDbErr.message);
@@ -158649,7 +158649,7 @@ router.post('/generate-batch-training-certificate', async (req, res) => {
           refNumber,
           certType: 'training',
           recipientName: cert.name,
-          details: { trainingTitle: cert.trainingTitle, dates: dateString, hours: cert.hours || cert.thours },
+          details: { trainingTitle: cert.trainingTitle, dates: dateString, hours: cert.hours || cert.thours, venue: cert.venue },
         });
 
         drawCertificate(doc, { ...cert, qrCodeDataUrl, refNumber, thours: cert.hours || cert.thours, certType });
@@ -158716,7 +158716,7 @@ router.post('/generate-batch-training-certificate', async (req, res) => {
           const recipientNameLocal = `${first_name} ${middle_initial || ''} ${last_name} ${suffix || ''}`.replace(/\s+/g, ' ').trim();
           await dbPool.query(
               "INSERT IGNORE INTO certificate_registry (reference_number, certificate_type, recipient_name, details, issued_at) VALUES (?, ?, ?, ?, ?)",
-              [refNumber, 'training', recipientNameLocal, JSON.stringify({ training_title: training.trainingTitle, training_dates: dateString, training_hours: training.hours || training.thours, source: 'employee', qr_token: qrToken }), new Date().toISOString()]
+              [refNumber, 'training', recipientNameLocal, JSON.stringify({ training_title: training.trainingTitle, training_dates: dateString, training_hours: training.hours || training.thours, source: 'employee', qr_token: qrToken, venue: training.venue }), new Date().toISOString()]
           );
       } catch (localDbErr) {
           console.error("Failed to log generated batch training certificate locally:", localDbErr.message);
@@ -158727,7 +158727,7 @@ router.post('/generate-batch-training-certificate', async (req, res) => {
         refNumber,
         certType: 'training',
         recipientName: name,
-        details: { trainingTitle: training.trainingTitle, dates: dateString, hours: training.hours || training.thours },
+        details: { trainingTitle: training.trainingTitle, dates: dateString, hours: training.hours || training.thours, venue: training.venue },
       });
 
       const certificateData = { 
@@ -158864,7 +158864,7 @@ router.post('/generate-certificates-by-training', async (req, res) => {
       // --- Local DB Logging (certificate_registry) for each participant ---
       dbPool.query(
           "INSERT IGNORE INTO certificate_registry (reference_number, certificate_type, recipient_name, details, issued_at) VALUES (?, ?, ?, ?, ?)",
-          [refNumber, 'training', `${participant.first_name} ${participant.middle_initial || ''} ${participant.last_name} ${participant.suffix || ''}`.replace(/\s+/g, ' ').trim(), JSON.stringify({ training_title: trainingTitle, training_dates: dateString, training_hours: participant.hours || participant.thours }), new Date().toISOString()]
+          [refNumber, 'training', `${participant.first_name} ${participant.middle_initial || ''} ${participant.last_name} ${participant.suffix || ''}`.replace(/\s+/g, ' ').trim(), JSON.stringify({ training_title: trainingTitle, training_dates: dateString, training_hours: participant.hours || participant.thours, venue: participant.venue }), new Date().toISOString()]
       ).catch(err => {
           console.error(`Failed to log training cert for ${participant.last_name}:`, err.message);
       });
@@ -158955,7 +158955,7 @@ router.post('/regenerate-training-certificate', async (req, res) => {
         'UPDATE certificate_registry SET recipient_name = ?, details = ? WHERE reference_number = ?',
         [
           recipientName,
-          JSON.stringify({ training_title: data.trainingTitle, training_dates: dateString, training_hours: hours, qr_token: storedQrToken }),
+          JSON.stringify({ training_title: data.trainingTitle, training_dates: dateString, training_hours: hours, qr_token: storedQrToken, venue: data.venue }),
           refNumber,
         ]
       );
@@ -158967,7 +158967,7 @@ router.post('/regenerate-training-certificate', async (req, res) => {
     await updateCertificateInTurso(executeTurso, {
       refNumber,
       recipientName,
-      details: { trainingTitle: data.trainingTitle, dates: dateString, hours },
+      details: { trainingTitle: data.trainingTitle, dates: dateString, hours, venue: data.venue },
     });
 
     // --- Update Turso Digital_Logbook: TRANSMITTER → editor, REMARKS → changed fields ---
@@ -159860,6 +159860,14 @@ const checkRole = __nccwpck_require__(59261);
 const { createClerkClient } = __nccwpck_require__(11599);
 const clerkClient = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY });
 const router = express.Router();
+const path = __nccwpck_require__(16928);
+const fs = __nccwpck_require__(79896);
+
+const basePath = process.pkg ? path.dirname(process.execPath) : path.join(__dirname, '..');
+const profilePicDir = path.join(basePath, 'assets', 'profile_pictures');
+if (!fs.existsSync(profilePicDir)) {
+  fs.mkdirSync(profilePicDir, { recursive: true });
+}
 
 // Helper: Get user role
 const getUserWithRole = async (userId) => {
@@ -159904,7 +159912,7 @@ const executeTurso = async (sql, args) => {
 };
 
 // GET /api/users
-router.get('/', verifyToken, checkRole(['Super_Admin', 'Admin', 'PACD']), async (req, res) => {
+router.get('/', verifyToken, checkRole(['Super_Admin', 'Admin']), async (req, res) => {
   try {
     const [results] = await dbPool.query(
       "SELECT id, first_name, middle_initial, suffix, last_name, email_address AS email, hiretrack_role AS role, status, created_at FROM users ORDER BY last_name, first_name"
@@ -159917,7 +159925,7 @@ router.get('/', verifyToken, checkRole(['Super_Admin', 'Admin', 'PACD']), async 
 });
 
 // POST /api/users (Create user)
-router.post('/', verifyToken, checkRole(['Super_Admin', 'Admin', 'PACD']), async (req, res) => {
+router.post('/', verifyToken, checkRole(['Super_Admin', 'Admin']), async (req, res) => {
   const actingUserId = req.user?.id;
   const { first_name, middle_initial, last_name, suffix, email, role, status } = req.body;
 
@@ -159962,7 +159970,7 @@ router.post('/', verifyToken, checkRole(['Super_Admin', 'Admin', 'PACD']), async
     const newUserId = result.insertId;
 
     // 2. CREATE in Clerk
-    const temporaryPassword = crypto.randomBytes(16).toString('hex');
+    const temporaryPassword = crypto.randomBytes(6).toString('hex');
     let resetLink = null;
     try {
       await clerkClient.users.createUser({
@@ -160069,7 +160077,7 @@ router.post('/', verifyToken, checkRole(['Super_Admin', 'Admin', 'PACD']), async
 });
 
 // PUT /api/users/:id (Update user)
-router.put('/:id', verifyToken, checkRole(['Super_Admin', 'Admin', 'PACD']), async (req, res) => {
+router.put('/:id', verifyToken, checkRole(['Super_Admin', 'Admin']), async (req, res) => {
   const { id } = req.params;
   const actingUserId = req.user?.id;
   const { first_name, middle_initial, last_name, suffix, email, role, status } = req.body;
@@ -160186,7 +160194,7 @@ router.put('/:id', verifyToken, checkRole(['Super_Admin', 'Admin', 'PACD']), asy
 });
 
 // DELETE /api/users/:id
-router.delete('/:id', verifyToken, checkRole(['Super_Admin', 'Admin', 'PACD']), async (req, res) => {
+router.delete('/:id', verifyToken, checkRole(['Super_Admin', 'Admin']), async (req, res) => {
   const { id } = req.params;
   const actingUserId = req.user?.id;
 
@@ -160294,6 +160302,42 @@ router.post('/:id/reset-password', verifyToken, checkRole(['Super_Admin', 'Admin
     console.error(`Database error during password reset: ${err.message}`);
     res.status(500).json({ error: 'Database error during password reset.' });
   }
+});
+
+// POST /api/users/profile-picture
+router.post('/profile-picture', verifyToken, async (req, res) => {
+    try {
+        const { email, base64Data } = req.body;
+        if (!email || !base64Data) return res.status(400).json({ error: 'Missing email or image data.' });
+        
+        const base64Image = base64Data.split(';base64,').pop();
+        const safeEmail = email.replace(/[^a-zA-Z0-9@.-]/g, '_');
+        const filePath = path.join(profilePicDir, `${safeEmail}.png`);
+        
+        fs.writeFileSync(filePath, base64Image, {encoding: 'base64'});
+        res.json({ message: 'Profile picture saved successfully.' });
+    } catch (err) {
+        console.error('Save Profile Pic Error:', err);
+        res.status(500).json({ error: 'Failed to save profile picture.' });
+    }
+});
+
+// GET /api/users/profile-picture/:email
+router.get('/profile-picture/:email', verifyToken, async (req, res) => {
+    try {
+        const safeEmail = req.params.email.replace(/[^a-zA-Z0-9@.-]/g, '_');
+        const filePath = path.join(profilePicDir, `${safeEmail}.png`);
+        
+        if (fs.existsSync(filePath)) {
+            const data = fs.readFileSync(filePath, { encoding: 'base64' });
+            res.json({ base64Data: `data:image/png;base64,${data}` });
+        } else {
+            res.status(404).json({ error: 'Profile picture not found.' });
+        }
+    } catch (err) {
+        console.error('Get Profile Pic Error:', err);
+        res.status(500).json({ error: 'Failed to get profile picture.' });
+    }
 });
 
 module.exports = router;
@@ -212485,9 +212529,10 @@ global.TextDecoder = (__nccwpck_require__(45443).TextDecoder);
 const express = __nccwpck_require__(68468);
 const cors = __nccwpck_require__(66521);
 const fs = __nccwpck_require__(79896);
+const path = __nccwpck_require__(16928);
 
 const app = express();
-const port = 3001;
+const port = 80;
 
 app.use(cors());
 
@@ -212535,6 +212580,22 @@ app.use('/api', employmentcertificateRoutes);
 app.use('/api', dashboardRoutes);
 app.use('/api/database', databaseRoutes);
 app.use('/api/applicants', applicantRoutes);
+
+// --- SERVE FRONTEND ---
+// Base path should be the directory of the executable if running via pkg, otherwise __dirname
+const basePath = process.pkg ? path.dirname(process.execPath) : __dirname;
+
+// Serve static files from the React app
+app.use(express.static(path.join(basePath, 'client_build')));
+
+// For any other GET request not starting with /api, send back React's index.html
+app.use((req, res, next) => {
+    if (req.method !== 'GET' || req.url.startsWith('/api')) {
+        return next();
+    }
+    res.sendFile(path.join(basePath, 'client_build', 'index.html'));
+});
+
 
 // --- GLOBAL ERROR HANDLER ---
 // This should be the last 'use' middleware. It catches any unhandled errors from routes.

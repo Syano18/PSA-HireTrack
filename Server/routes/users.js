@@ -6,6 +6,14 @@ const checkRole = require('../middleware/checkRole');
 const { createClerkClient } = require('@clerk/clerk-sdk-node');
 const clerkClient = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY });
 const router = express.Router();
+const path = require('path');
+const fs = require('fs');
+
+const basePath = process.pkg ? path.dirname(process.execPath) : path.join(__dirname, '..');
+const profilePicDir = path.join(basePath, 'assets', 'profile_pictures');
+if (!fs.existsSync(profilePicDir)) {
+  fs.mkdirSync(profilePicDir, { recursive: true });
+}
 
 // Helper: Get user role
 const getUserWithRole = async (userId) => {
@@ -108,7 +116,7 @@ router.post('/', verifyToken, checkRole(['Super_Admin', 'Admin']), async (req, r
     const newUserId = result.insertId;
 
     // 2. CREATE in Clerk
-    const temporaryPassword = crypto.randomBytes(16).toString('hex');
+    const temporaryPassword = crypto.randomBytes(6).toString('hex');
     let resetLink = null;
     try {
       await clerkClient.users.createUser({
@@ -440,6 +448,42 @@ router.post('/:id/reset-password', verifyToken, checkRole(['Super_Admin', 'Admin
     console.error(`Database error during password reset: ${err.message}`);
     res.status(500).json({ error: 'Database error during password reset.' });
   }
+});
+
+// POST /api/users/profile-picture
+router.post('/profile-picture', verifyToken, async (req, res) => {
+    try {
+        const { email, base64Data } = req.body;
+        if (!email || !base64Data) return res.status(400).json({ error: 'Missing email or image data.' });
+        
+        const base64Image = base64Data.split(';base64,').pop();
+        const safeEmail = email.replace(/[^a-zA-Z0-9@.-]/g, '_');
+        const filePath = path.join(profilePicDir, `${safeEmail}.png`);
+        
+        fs.writeFileSync(filePath, base64Image, {encoding: 'base64'});
+        res.json({ message: 'Profile picture saved successfully.' });
+    } catch (err) {
+        console.error('Save Profile Pic Error:', err);
+        res.status(500).json({ error: 'Failed to save profile picture.' });
+    }
+});
+
+// GET /api/users/profile-picture/:email
+router.get('/profile-picture/:email', verifyToken, async (req, res) => {
+    try {
+        const safeEmail = req.params.email.replace(/[^a-zA-Z0-9@.-]/g, '_');
+        const filePath = path.join(profilePicDir, `${safeEmail}.png`);
+        
+        if (fs.existsSync(filePath)) {
+            const data = fs.readFileSync(filePath, { encoding: 'base64' });
+            res.json({ base64Data: `data:image/png;base64,${data}` });
+        } else {
+            res.status(404).json({ error: 'Profile picture not found.' });
+        }
+    } catch (err) {
+        console.error('Get Profile Pic Error:', err);
+        res.status(500).json({ error: 'Failed to get profile picture.' });
+    }
 });
 
 module.exports = router;

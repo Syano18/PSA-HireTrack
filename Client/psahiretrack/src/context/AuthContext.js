@@ -9,8 +9,9 @@ export const AuthProvider = ({ children }) => {
 
     const checkSession = useCallback(async () => {
         try {
-            const savedState = await window.electronAPI.getLoginState();
-            setSession(savedState && savedState.user ? savedState : null);
+            const savedState = localStorage.getItem('loginState');
+            const parsedState = savedState ? JSON.parse(savedState) : null;
+            setSession(parsedState && parsedState.user ? parsedState : null);
         } catch (error) {
             console.error("Failed to get session state:", error);
             setSession(null);
@@ -21,23 +22,36 @@ export const AuthProvider = ({ children }) => {
 
     useEffect(() => {
         checkSession();
-        const removeListener = window.electronAPI.onLoginStateChange(checkSession);
-        return () => removeListener();
+        
+        // Listen for storage events (cross-tab sync)
+        const handleStorageChange = (e) => {
+            if (e.key === 'loginState') {
+                checkSession();
+            }
+        };
+        window.addEventListener('storage', handleStorageChange);
+        
+        return () => window.removeEventListener('storage', handleStorageChange);
     }, [checkSession]);
+
+    const setLoginState = (data) => {
+        localStorage.setItem('loginState', JSON.stringify(data));
+        setSession(data);
+    };
 
     const { signOut } = useClerkAuth();
 
     const handleLogout = async () => {
-        await window.electronAPI.clearLoginState();
-        // Fire and forget signOut so it clears tokens, but immediately reboot before it can hijack the URL
-        signOut().catch(() => {});
-        window.electronAPI.restartApp();
+        localStorage.removeItem('loginState');
+        try { await signOut(); } catch (e) {}
+        window.location.reload();
     };
 
     const value = {
         session,
         isLoading,
         logout: handleLogout,
+        setLoginState,
     };
 
     return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -92,90 +92,90 @@ const Dashboard = ({ user, isDarkMode }) => {
     return (
         <div className="bg-gray-100 dark:bg-gray-900 flex-1 w-full flex flex-col min-h-0">
             <ToastContainer toasts={toasts} onClose={removeToast} />
-            <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">Dashboard Overview</h1>
-            <div className="mb-6">
+            <h1 className="text-2xl lg:text-3xl font-bold text-gray-900 dark:text-white mb-2">Dashboard Overview</h1>
+            <div className="mb-4 lg:mb-6 h-28 sm:h-32 lg:h-48 flex-shrink-0">
                 <motion.div
-                    className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4"
+                    className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-2 lg:p-4 h-full"
                     whileHover={{ scale: 1.01 }}
                     transition={{ type: "spring", stiffness: 300 }}
                 >
                     <img src={Cover} alt="System Icon" className="h-full w-full object-contain rounded-lg" />
                 </motion.div>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-6 mb-4 lg:mb-6 flex-shrink-0">
                 <motion.div
-                    className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6 flex items-center justify-between h-full w-full"
+                    className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4 lg:p-6 flex items-center justify-between h-full w-full"
                     whileHover={{ scale: 1.02 }}
                     transition={{ type: "spring", stiffness: 300 }}
                 >
                     <div>
-                        <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Total Applicants</p>
-                        <p className="text-3xl font-bold text-gray-900 dark:text-white">{dashboardData.totalApplicants}</p>
+                        <p className="text-xs lg:text-sm font-medium text-gray-500 dark:text-gray-400">Total Applicants</p>
+                        <p className="text-2xl lg:text-3xl font-bold text-gray-900 dark:text-white">{dashboardData.totalApplicants}</p>
                     </div>
-                    <FaClipboardList className="text-4xl text-purple-500 flex-shrink-0 ml-2" />
+                    <FaClipboardList className="text-3xl lg:text-4xl text-purple-500 flex-shrink-0 ml-2" />
                 </motion.div>
                 
                 <motion.div
-                    className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6 flex items-center justify-between h-full w-full"
+                    className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4 lg:p-6 flex items-center justify-between h-full w-full"
                     whileHover={{ scale: 1.02 }}
                     transition={{ type: "spring", stiffness: 300 }}
                 >
                     <div>
-                        <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Total Employees</p>
-                        <p className="text-3xl font-bold text-gray-900 dark:text-white">{dashboardData.totalEmployees}</p>
+                        <p className="text-xs lg:text-sm font-medium text-gray-500 dark:text-gray-400">Total Employees</p>
+                        <p className="text-2xl lg:text-3xl font-bold text-gray-900 dark:text-white">{dashboardData.totalEmployees}</p>
                     </div>
-                    <FaUsers className="text-4xl text-blue-500 flex-shrink-0 ml-2" />
+                    <FaUsers className="text-3xl lg:text-4xl text-blue-500 flex-shrink-0 ml-2" />
                 </motion.div>
                 
                 <motion.div
-                    className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6 flex items-center justify-between h-full w-full"
+                    className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4 lg:p-6 flex items-center justify-between h-full w-full"
                     whileHover={{ scale: 1.02 }}
                     transition={{ type: "spring", stiffness: 300 }}
                 >
                     <div>
-                        <p className="text-sm font-medium text-gray-500 dark:text-gray-400 break-words">Employment Certificates</p>
-                        <p className="text-3xl font-bold text-gray-900 dark:text-white">{dashboardData.totalEmployments}</p>
+                        <p className="text-xs lg:text-sm font-medium text-gray-500 dark:text-gray-400 break-words">Employment Certificates</p>
+                        <p className="text-2xl lg:text-3xl font-bold text-gray-900 dark:text-white">{dashboardData.totalEmployments}</p>
                     </div>
-                    <FaBriefcase className="text-4xl text-green-500 flex-shrink-0 ml-2" />
+                    <FaBriefcase className="text-3xl lg:text-4xl text-green-500 flex-shrink-0 ml-2" />
                 </motion.div>
                 
                 <motion.div
-                    className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6 flex items-center justify-between h-full w-full"
+                    className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4 lg:p-6 flex items-center justify-between h-full w-full"
                     whileHover={{ scale: 1.02 }}
                     transition={{ type: "spring", stiffness: 300 }}
                 >
                     <div>
-                        <p className="text-sm font-medium text-gray-500 dark:text-gray-400 break-words">Training Certificates</p>
-                        <p className="text-3xl font-bold text-gray-900 dark:text-white">{dashboardData.totalTrainings}</p>
+                        <p className="text-xs lg:text-sm font-medium text-gray-500 dark:text-gray-400 break-words">Training Certificates</p>
+                        <p className="text-2xl lg:text-3xl font-bold text-gray-900 dark:text-white">{dashboardData.totalTrainings}</p>
                     </div>
-                    <FaGraduationCap className="text-4xl text-yellow-500 flex-shrink-0 ml-2" />
+                    <FaGraduationCap className="text-3xl lg:text-4xl text-yellow-500 flex-shrink-0 ml-2" />
                 </motion.div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 flex-1 min-h-0">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 lg:gap-6 flex-1 min-h-0">
                 <motion.div
-                    className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6 flex flex-col h-full"
+                    className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4 lg:p-6 flex flex-col h-full"
                     whileHover={{ scale: 1.02 }}
                 >
-                    <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-4 flex-shrink-0">Employees by City/Municipality</h2>
+                    <h2 className="text-base lg:text-lg font-semibold text-gray-800 dark:text-white mb-2 lg:mb-4 flex-shrink-0">Employees by City/Municipality</h2>
                     <div className="flex-1 w-full min-h-0 flex items-center justify-center">
                         <MunicipalityBarChart data={dashboardData.municipalityCounts} isDarkMode={isDarkMode} />
                     </div>
                 </motion.div>
                 <motion.div
-                    className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6 flex flex-col h-full"
+                    className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4 lg:p-6 flex flex-col h-full"
                     whileHover={{ scale: 1.02 }}
                 >
-                    <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-4 flex-shrink-0">Employees by Sex</h2>
+                    <h2 className="text-base lg:text-lg font-semibold text-gray-800 dark:text-white mb-2 lg:mb-4 flex-shrink-0">Employees by Sex</h2>
                     <div className="flex-1 w-full min-h-0 flex items-center justify-center">
                        <DemographicsRechart data={dashboardData.demographics} isDarkMode={isDarkMode} />
                     </div>
                 </motion.div>
                 <motion.div
-                    className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6 flex flex-col h-full"
+                    className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4 lg:p-6 flex flex-col h-full"
                     whileHover={{ scale: 1.02 }}
                 >
-                    <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-4 flex-shrink-0">Performance Ratings</h2>
+                    <h2 className="text-base lg:text-lg font-semibold text-gray-800 dark:text-white mb-2 lg:mb-4 flex-shrink-0">Performance Ratings</h2>
                     <div className="flex-1 w-full min-h-0 flex items-center justify-center">
                         <PerformanceRatingsChart data={dashboardData.performanceRatings} isDarkMode={isDarkMode} />
                     </div>

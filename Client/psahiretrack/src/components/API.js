@@ -1,13 +1,13 @@
 // src/components/API.js
 
-const API_PORT = 3001;
+const API_PORT = 80;
 
 export const apiFetch = async (endpoint, serverIp, options = {}) => {
   if (!serverIp) {
     throw new Error("Server IP has not been configured or provided.");
   }
   
-  const session = await window.electronAPI.getLoginState();
+  const session = JSON.parse(localStorage.getItem('loginState')) || null;
   const token = session?.token;
   
   const url = `http://${serverIp}:${API_PORT}/api/${endpoint}`;
@@ -33,7 +33,8 @@ export const apiFetch = async (endpoint, serverIp, options = {}) => {
 
       // Handle session expired as a special case
       if (response.status === 401) {
-        await window.electronAPI.handleSessionExpired();
+        localStorage.removeItem('loginState');
+        window.location.reload();
       }
 
       let errorData = {};

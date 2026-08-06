@@ -149,7 +149,7 @@ const Applicants = () => {
   useEffect(() => {
     const getSession = async () => {
       try {
-        const state = await window.electronAPI.getLoginState();
+        const state = (JSON.parse(localStorage.getItem('loginState')) || null);
         if (state?.user) {
           setUserRole(state.user.role);
         }

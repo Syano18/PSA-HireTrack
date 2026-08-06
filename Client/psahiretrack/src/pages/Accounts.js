@@ -7,7 +7,8 @@ import ToastContainer from '../components/ToastContainer';
 import useToast from '../hooks/useToast';
 import { apiFetch } from '../components/API';
 import { useSettings } from '../context/SettingsContext';
-// Removed Firebase imports
+import { useAuth } from '../context/AuthContext';
+
 const initialFormState = {
   first_name: '',
   middle_initial: '',
@@ -95,12 +96,20 @@ const ProfileView = ({ sessionState, serverIp }) => {
     const user = sessionState?.user;
 
     useEffect(() => {
-        if (user?.id && window.electronAPI?.getProfilePicture) {
-            window.electronAPI.getProfilePicture(user.id).then(pic => {
-                if (pic) setLocalProfilePic(pic);
-            }).catch(console.error);
+        if (user?.email_address && serverIp) {
+            const fetchPic = async () => {
+                try {
+                    const response = await apiFetch(`users/profile-picture/${user.email_address}`, serverIp);
+                    if (response.base64Data) {
+                        setLocalProfilePic(response.base64Data);
+                    }
+                } catch (err) {
+                    console.log('No profile picture found or error fetching:', err);
+                }
+            };
+            fetchPic();
         }
-    }, [user?.id]);
+    }, [user?.email_address, serverIp]);
 
     const handlePasswordChange = async (e) => {
         e.preventDefault();
@@ -141,8 +150,11 @@ const ProfileView = ({ sessionState, serverIp }) => {
             reader.onload = async () => {
                 try {
                     const base64Data = reader.result;
-                    const response = await window.electronAPI.saveProfilePicture(user.id, base64Data);
-                    if (response.success) {
+                    const response = await apiFetch(`users/profile-picture`, serverIp, {
+                        method: 'POST',
+                        body: JSON.stringify({ email: user.email_address, base64Data })
+                    });
+                    if (response.message) {
                         setLocalProfilePic(base64Data);
                         showToast("Profile picture updated successfully.", 'success');
                     } else {
@@ -173,39 +185,39 @@ const ProfileView = ({ sessionState, serverIp }) => {
     if (!user) return null;
 
     return (
-        <div className="animate-fadeIn w-full space-y-6 pb-12">
+        <div className="animate-fadeIn w-full space-y-4 xl:space-y-6 pb-6 xl:pb-12">
             <ToastContainer toasts={toasts} onClose={removeToast} />
             
             {/* Header / Banner Area */}
             <div className="relative bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
                 {/* Blue Banner */}
-                <div className="h-32 bg-blue-600 w-full relative">
-                    <div className="absolute bottom-1 left-[140px] sm:left-[172px]">
-                        <h2 className="text-2xl sm:text-[1.7rem] font-extrabold text-white drop-shadow-md tracking-wide">
+                <div className="h-20 sm:h-24 xl:h-32 bg-blue-600 w-full relative">
+                    <div className="absolute bottom-1 sm:bottom-2 left-[100px] sm:left-[130px] xl:left-[172px] pr-4 max-w-full">
+                        <h2 className="text-lg sm:text-xl xl:text-[1.7rem] font-extrabold text-white drop-shadow-md tracking-wide truncate">
                             {user.first_name} {user.middle_initial ? user.middle_initial + '.' : ''} {user.last_name}
                         </h2>
                     </div>
                 </div>
                 
                 {/* Content over banner */}
-                <div className="relative px-6 pb-6">
+                <div className="relative px-4 xl:px-6 pb-4 xl:pb-6">
                     {/* Profile Picture & Info */}
                     <div className="flex flex-col sm:flex-row sm:items-start justify-between">
-                        <div className="flex items-start gap-5">
+                        <div className="flex items-start gap-3 sm:gap-4 xl:gap-5">
                             <div 
-                                className="-mt-12 sm:-mt-16 w-24 h-24 sm:w-32 sm:h-32 rounded-xl bg-white p-1 shadow border border-gray-200 relative z-10 overflow-hidden shrink-0 cursor-pointer group"
+                                className="-mt-10 sm:-mt-12 xl:-mt-16 w-20 h-20 sm:w-24 sm:h-24 xl:w-32 xl:h-32 rounded-xl bg-white p-1 shadow border border-gray-200 relative z-10 overflow-hidden shrink-0 cursor-pointer group"
                                 onClick={() => fileInputRef.current?.click()}
                                 title="Change Profile Picture"
                             >
                                 {localProfilePic || clerkUser?.imageUrl ? (
                                     <img src={localProfilePic || clerkUser.imageUrl} className="w-full h-full rounded-lg object-cover group-hover:opacity-75 transition-opacity" alt="Profile" />
                                 ) : (
-                                    <div className="w-full h-full rounded-lg bg-gray-100 flex items-center justify-center text-gray-800 text-3xl sm:text-5xl font-bold group-hover:opacity-75 transition-opacity">
+                                    <div className="w-full h-full rounded-lg bg-gray-100 flex items-center justify-center text-gray-800 text-2xl sm:text-3xl xl:text-5xl font-bold group-hover:opacity-75 transition-opacity">
                                         {user.first_name?.charAt(0)}{user.last_name?.charAt(0)}
                                     </div>
                                 )}
                                 <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 opacity-0 group-hover:opacity-100 transition-opacity rounded-lg m-1">
-                                    <span className="text-white text-xs sm:text-sm font-semibold">{isUploadingImage ? 'Uploading...' : 'Change'}</span>
+                                    <span className="text-white text-[10px] sm:text-xs xl:text-sm font-semibold">{isUploadingImage ? 'Uploading...' : 'Change'}</span>
                                 </div>
                                 <input 
                                     type="file" 
@@ -216,20 +228,20 @@ const ProfileView = ({ sessionState, serverIp }) => {
                                     disabled={isUploadingImage}
                                 />
                             </div>
-                            <div className="pt-0.5 sm:pt-1">
+                            <div className="pt-1 xl:pt-1">
                                 {user.email_address ? (
-                                    <p className="text-base sm:text-[1.05rem] font-medium text-gray-600 dark:text-gray-400 tracking-wide">
+                                    <p className="text-sm xl:text-[1.05rem] font-medium text-gray-600 dark:text-gray-400 tracking-wide truncate max-w-[200px] sm:max-w-xs md:max-w-md xl:max-w-lg">
                                         {user.email_address}
                                     </p>
                                 ) : (
-                                    <p className="text-sm italic text-gray-400">No email provided</p>
+                                    <p className="text-xs xl:text-sm italic text-gray-400">No email provided</p>
                                 )}
                             </div>
                         </div>
                         
                         {/* Badge */}
-                        <div className="pt-4 sm:pt-2">
-                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-xs font-semibold whitespace-nowrap dark:bg-blue-900/30 dark:border-blue-800 dark:text-blue-300">
+                        <div className="pt-3 sm:pt-2 flex-shrink-0">
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 xl:px-3 xl:py-1 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-[10px] xl:text-xs font-semibold whitespace-nowrap dark:bg-blue-900/30 dark:border-blue-800 dark:text-blue-300">
                                 <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
                                 {user.role} Access
                             </span>
@@ -239,13 +251,13 @@ const ProfileView = ({ sessionState, serverIp }) => {
             </div>
 
             {/* Security Settings */}
-            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-                <div className="flex items-center gap-2 mb-6">
-                    <FiLock className="text-gray-400 w-4 h-4" />
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-gray-400">Security Settings</h3>
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4 xl:p-6">
+                <div className="flex items-center gap-2 mb-4 xl:mb-6">
+                    <FiLock className="text-gray-400 w-4 h-4 xl:w-4 xl:h-4" />
+                    <h3 className="text-[10px] xl:text-xs font-bold uppercase tracking-wider text-gray-400">Security Settings</h3>
                 </div>
                 
-                <form onSubmit={handlePasswordChange} className="max-w-md space-y-4">
+                <form onSubmit={handlePasswordChange} className="max-w-md space-y-3 xl:space-y-4">
                     <div>
                         <label className="block text-xs text-gray-400 mb-1">Current Password</label>
                         <input type="password" required className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-600 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-sm" />
@@ -290,8 +302,8 @@ const Accounts = () => {
   const [activeTab, setActiveTab] = useState('profile');
   const [copySuccess, setCopySuccess] = useState('');
   const [tempPasswordModalTitle, setTempPasswordModalTitle] = useState(''); // <-- 1. ADDED STATE
-  const [sessionState, setSessionState] = useState(null);
-  const [canManage, setCanManage] = useState(false);
+  const { session: sessionState } = useAuth();
+  const canManage = sessionState?.user?.role === 'Super_Admin' || sessionState?.user?.role === 'Admin';
   const [sortConfig, setSortConfig] = useState({ key: 'last_name', direction: 'ascending' });
   const [filters, setFilters] = useState({ query: '' });
   const firstNameRef = useRef(null);
@@ -313,24 +325,7 @@ const Accounts = () => {
       }
   });
 
-  useEffect(() => {
-    const getSession = async () => {
-      try {
-        const state = await window.electronAPI.getLoginState();
-        if (state?.token) {
-          setSessionState(state);
-          setCanManage(['Super_Admin', 'Admin'].includes(state.user.role));
-        } else {
-          showToast("Authentication failed. Please log in again.", 'error');
-          setIsLoading(false);
-        }
-      } catch (err) {
-        showToast("Failed to retrieve session data.", 'error');
-        setIsLoading(false);
-      }
-    };
-    getSession();
-  }, [showToast]);
+  // useEffect for getting session removed, using useAuth hook instead
 
   const fetchUsers = useCallback(async () => {
     if (!serverIp) return;
@@ -562,7 +557,7 @@ const Accounts = () => {
       <ToastContainer toasts={toasts} onClose={removeToast} />
       
       {/* Header and Tabs */}
-      <div className="mb-6 flex flex-col gap-4 flex-shrink-0">
+      <div className="mb-1 flex flex-col gap-2 flex-shrink-0">
         <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">Accounts</h1>
         {canManage && (
           <div className="inline-flex bg-gray-100 border border-gray-200 dark:bg-gray-800 dark:border-gray-700 rounded-lg p-1 self-start">

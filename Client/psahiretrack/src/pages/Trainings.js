@@ -129,9 +129,9 @@ const Trainings = () => {
     const [originalFormData, setOriginalFormData] = useState(null);
 
     const [isProgressModalOpen, setIsProgressModalOpen] = useState(false);
-    const [progressMessage, setProgressMessage] = useState('');
-    const [isProgressComplete, setIsProgressComplete] = useState(false);
-    const [savedFilePath, setSavedFilePath] = useState(null);
+    const [progressMessage] = useState('');
+    const [isProgressComplete] = useState(false);
+    const [savedFilePath] = useState(null);
 
     const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
     const [syncModalStep, setSyncModalStep] = useState('filter'); // 'filter', 'preview', or 'results'
@@ -411,7 +411,7 @@ const Trainings = () => {
     useEffect(() => {
         const getSession = async () => {
             try {
-                const state = await window.electronAPI.getLoginState();
+                const state = (JSON.parse(localStorage.getItem('loginState')) || null);
                 if (state && state.token) {
                     setSessionState(state);
                 } else {
@@ -680,28 +680,17 @@ const Trainings = () => {
     };
 
     const handleCsvDownload = async (content, fileName) => {
-        setIsProgressComplete(false);
-        setProgressMessage('Preparing file...');
-        setSavedFilePath(null);
-        setIsProgressModalOpen(true);
-
         try {
-            const result = await window.electronAPI.saveCsvFile({ content, fileName });
-            if (result.status === 'completed') {
-                setIsProgressComplete(true);
-                setProgressMessage(result.message);
-                setSavedFilePath(result.path);
-            } else if (result.status === 'failed') {
-                setIsProgressComplete(true);
-                setProgressMessage(`Error: ${result.message}`);
-                setSavedFilePath(null);
-            } else {
-                setIsProgressModalOpen(false);
-            }
+            const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.setAttribute('href', url);
+            link.setAttribute('download', fileName);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
         } catch (err) {
             console.error('An unexpected error occurred during the download process:', err);
-            setIsProgressComplete(true);
-            setProgressMessage('An unexpected error occurred. Please check the console.');
         }
     };
 

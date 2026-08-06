@@ -3,9 +3,10 @@ global.TextDecoder = require('text-encoding').TextDecoder;
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
+const path = require('path');
 
 const app = express();
-const port = 3001;
+const port = 80;
 
 app.use(cors());
 
@@ -53,6 +54,22 @@ app.use('/api', employmentcertificateRoutes);
 app.use('/api', dashboardRoutes);
 app.use('/api/database', databaseRoutes);
 app.use('/api/applicants', applicantRoutes);
+
+// --- SERVE FRONTEND ---
+// Base path should be the directory of the executable if running via pkg, otherwise __dirname
+const basePath = process.pkg ? path.dirname(process.execPath) : __dirname;
+
+// Serve static files from the React app
+app.use(express.static(path.join(basePath, 'client_build')));
+
+// For any other GET request not starting with /api, send back React's index.html
+app.use((req, res, next) => {
+    if (req.method !== 'GET' || req.url.startsWith('/api')) {
+        return next();
+    }
+    res.sendFile(path.join(basePath, 'client_build', 'index.html'));
+});
+
 
 // --- GLOBAL ERROR HANDLER ---
 // This should be the last 'use' middleware. It catches any unhandled errors from routes.

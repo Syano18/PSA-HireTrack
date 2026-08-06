@@ -13,7 +13,7 @@ const Utilities = () => {
 
     useEffect(() => {
         const getSession = async () => {
-            const state = await window.electronAPI.getLoginState();
+            const state = (JSON.parse(localStorage.getItem('loginState')) || null);
             setSessionState(state);
         };
         getSession();

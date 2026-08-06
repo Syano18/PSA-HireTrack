@@ -9,11 +9,12 @@ export const SettingsProvider = ({ children }) => {
   useEffect(() => {
     const loadInitialIp = async () => {
       try {
-        const savedIp = await window.electronAPI.getServerIp();
-        setServerIp(savedIp || '127.0.0.1');
+        const savedIp = localStorage.getItem('serverIp');
+        const defaultIp = window.location.hostname || '127.0.0.1';
+        setServerIp(savedIp || defaultIp);
       } catch (error) {
         console.error('Failed to load server IP:', error);
-        setServerIp('127.0.0.1');
+        setServerIp(window.location.hostname || '127.0.0.1');
       } finally {
         setIsLoading(false);
       }
@@ -22,7 +23,8 @@ export const SettingsProvider = ({ children }) => {
   }, []);
 
   const updateServerIp = async (newIp) => {
-    await window.electronAPI.setServerIp(newIp);
+    localStorage.setItem('serverIp', newIp);
+    setServerIp(newIp);
   };
 
   const value = { serverIp, updateServerIp, isLoading };

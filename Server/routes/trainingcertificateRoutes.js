@@ -298,7 +298,7 @@ try {
     const recipientNameLocal = `${data.first_name} ${data.middle_initial || ''} ${data.last_name} ${data.suffix || ''}`.replace(/\s+/g, ' ').trim();
     await dbPool.query(
         "INSERT IGNORE INTO certificate_registry (reference_number, certificate_type, recipient_name, details, issued_at) VALUES (?, ?, ?, ?, ?)",
-        [refNumber, 'training', recipientNameLocal, JSON.stringify({ training_title: data.trainingTitle, training_dates: dateString, training_hours: data.hours || data.thours, qr_token: qrToken, source: 'employee' }), new Date().toISOString()]
+        [refNumber, 'training', recipientNameLocal, JSON.stringify({ training_title: data.trainingTitle, training_dates: dateString, training_hours: data.hours || data.thours, qr_token: qrToken, source: 'employee', venue: data.venue }), new Date().toISOString()]
     );
 } catch (localDbErr) {
     console.error("Failed to log generated training certificate locally:", localDbErr.message);
@@ -309,7 +309,7 @@ await registerCertificateInTurso(executeTurso, {
   refNumber,
   certType: 'training',
   recipientName: data.name,
-  details: { trainingTitle: data.trainingTitle, dates: dateString, hours: data.hours || data.thours },
+  details: { trainingTitle: data.trainingTitle, dates: dateString, hours: data.hours || data.thours, venue: data.venue },
 });
 
 if (data.type !== 'Training') {
@@ -409,7 +409,7 @@ router.post('/generate-batch-training-certificate', async (req, res) => {
           const recipientNameLocal = `${cert.first_name || ''} ${cert.middle_initial || ''} ${cert.last_name || ''} ${cert.suffix || ''}`.replace(/\s+/g, ' ').trim();
           await dbPool.query(
             "INSERT IGNORE INTO certificate_registry (reference_number, certificate_type, recipient_name, details, issued_at) VALUES (?, ?, ?, ?, ?)",
-            [refNumber, 'training', recipientNameLocal, JSON.stringify({ training_title: cert.trainingTitle, training_dates: dateString, training_hours: cert.hours || cert.thours, source: 'external_partner' }), new Date().toISOString()]
+            [refNumber, 'training', recipientNameLocal, JSON.stringify({ training_title: cert.trainingTitle, training_dates: dateString, training_hours: cert.hours || cert.thours, source: 'external_partner', venue: cert.venue }), new Date().toISOString()]
           );
         } catch (localDbErr) {
           console.error("Failed to log generated temp certificate locally:", localDbErr.message);
@@ -420,7 +420,7 @@ router.post('/generate-batch-training-certificate', async (req, res) => {
           refNumber,
           certType: 'training',
           recipientName: cert.name,
-          details: { trainingTitle: cert.trainingTitle, dates: dateString, hours: cert.hours || cert.thours },
+          details: { trainingTitle: cert.trainingTitle, dates: dateString, hours: cert.hours || cert.thours, venue: cert.venue },
         });
 
         drawCertificate(doc, { ...cert, qrCodeDataUrl, refNumber, thours: cert.hours || cert.thours, certType });
@@ -487,7 +487,7 @@ router.post('/generate-batch-training-certificate', async (req, res) => {
           const recipientNameLocal = `${first_name} ${middle_initial || ''} ${last_name} ${suffix || ''}`.replace(/\s+/g, ' ').trim();
           await dbPool.query(
               "INSERT IGNORE INTO certificate_registry (reference_number, certificate_type, recipient_name, details, issued_at) VALUES (?, ?, ?, ?, ?)",
-              [refNumber, 'training', recipientNameLocal, JSON.stringify({ training_title: training.trainingTitle, training_dates: dateString, training_hours: training.hours || training.thours, source: 'employee', qr_token: qrToken }), new Date().toISOString()]
+              [refNumber, 'training', recipientNameLocal, JSON.stringify({ training_title: training.trainingTitle, training_dates: dateString, training_hours: training.hours || training.thours, source: 'employee', qr_token: qrToken, venue: training.venue }), new Date().toISOString()]
           );
       } catch (localDbErr) {
           console.error("Failed to log generated batch training certificate locally:", localDbErr.message);
@@ -498,7 +498,7 @@ router.post('/generate-batch-training-certificate', async (req, res) => {
         refNumber,
         certType: 'training',
         recipientName: name,
-        details: { trainingTitle: training.trainingTitle, dates: dateString, hours: training.hours || training.thours },
+        details: { trainingTitle: training.trainingTitle, dates: dateString, hours: training.hours || training.thours, venue: training.venue },
       });
 
       const certificateData = { 
@@ -635,7 +635,7 @@ router.post('/generate-certificates-by-training', async (req, res) => {
       // --- Local DB Logging (certificate_registry) for each participant ---
       dbPool.query(
           "INSERT IGNORE INTO certificate_registry (reference_number, certificate_type, recipient_name, details, issued_at) VALUES (?, ?, ?, ?, ?)",
-          [refNumber, 'training', `${participant.first_name} ${participant.middle_initial || ''} ${participant.last_name} ${participant.suffix || ''}`.replace(/\s+/g, ' ').trim(), JSON.stringify({ training_title: trainingTitle, training_dates: dateString, training_hours: participant.hours || participant.thours }), new Date().toISOString()]
+          [refNumber, 'training', `${participant.first_name} ${participant.middle_initial || ''} ${participant.last_name} ${participant.suffix || ''}`.replace(/\s+/g, ' ').trim(), JSON.stringify({ training_title: trainingTitle, training_dates: dateString, training_hours: participant.hours || participant.thours, venue: participant.venue }), new Date().toISOString()]
       ).catch(err => {
           console.error(`Failed to log training cert for ${participant.last_name}:`, err.message);
       });
@@ -726,7 +726,7 @@ router.post('/regenerate-training-certificate', async (req, res) => {
         'UPDATE certificate_registry SET recipient_name = ?, details = ? WHERE reference_number = ?',
         [
           recipientName,
-          JSON.stringify({ training_title: data.trainingTitle, training_dates: dateString, training_hours: hours, qr_token: storedQrToken }),
+          JSON.stringify({ training_title: data.trainingTitle, training_dates: dateString, training_hours: hours, qr_token: storedQrToken, venue: data.venue }),
           refNumber,
         ]
       );
@@ -738,7 +738,7 @@ router.post('/regenerate-training-certificate', async (req, res) => {
     await updateCertificateInTurso(executeTurso, {
       refNumber,
       recipientName,
-      details: { trainingTitle: data.trainingTitle, dates: dateString, hours },
+      details: { trainingTitle: data.trainingTitle, dates: dateString, hours, venue: data.venue },
     });
 
     // --- Update Turso Digital_Logbook: TRANSMITTER → editor, REMARKS → changed fields ---

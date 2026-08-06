@@ -280,7 +280,7 @@ const Employees = () => {
   useEffect(() => {
     const getSession = async () => {
       try {
-        const state = await window.electronAPI.getLoginState();
+        const state = (JSON.parse(localStorage.getItem('loginState')) || null);
         if (state && state.user) {
           setSessionState(state);
           setUserPermissions({
@@ -509,7 +509,15 @@ const Employees = () => {
 
   const handleCsvDownload = async (content, fileName) => {
     try {
-      await window.electronAPI.saveCsvFile({ content, fileName });
+      const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute('download', fileName);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      showToast('File downloaded successfully.', 'success');
     } catch (err) {
       console.error('An unexpected error occurred during the download process:', err);
       showToast('Failed to save file. Please try again.', 'error');

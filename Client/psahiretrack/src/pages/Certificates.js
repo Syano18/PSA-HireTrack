@@ -95,7 +95,7 @@ const Certificates = () => {
   useEffect(() => {
     const getSession = async () => {
       try {
-        const state = await window.electronAPI.getLoginState();
+        const state = (JSON.parse(localStorage.getItem('loginState')) || null);
         setSessionState(state);
       } catch (err) {
         showToast("Failed to retrieve session data. Please log in.", 'error');
@@ -242,7 +242,7 @@ const Certificates = () => {
       formData.append('name', `${selectedEmployee.firstName} ${selectedEmployee.lastName}`);
       formData.append('certificate', emailAttachment);
       
-      const res = await fetch(`http://${serverIp}:3001/api/send-email-upload`, {
+      const res = await fetch(`http://${serverIp}:80/api/send-email-upload`, {
         method: 'POST',
         body: formData,
       });
@@ -360,51 +360,38 @@ const Certificates = () => {
       showToast('Server IP is not available.', 'error');
       return false;
     }
-    setIsProgressComplete(false);
-    setProgress(0);
-    setProgressMessage('Preparing your file, please wait...');
-    setIsProgressModalOpen(true);
 
     try {
-      const API_PORT = 3001;
+      const API_PORT = 80;
       const fullUrl = `http://${serverIp}:${API_PORT}/api/${endpointPath}`;
 
-      const prepareResponse = await window.electronAPI.prepareDownload({
-        url: fullUrl,
-        payload: {
-          headers: { 'Authorization': `Bearer ${sessionState.token}` },
-          body: payload
+      const response = await fetch(fullUrl, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${sessionState.token}`
         },
-        fileType: fileType
+        body: JSON.stringify(payload)
       });
 
-      if (!prepareResponse.success) {
-        throw new Error(prepareResponse.message || 'Failed to prepare file for download.');
+      if (!response.ok) {
+        throw new Error(`Server responded with ${response.status}`);
       }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute('download', fileName);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
       
-      setProgressMessage('Saving certificate to local folder...');
-
-      // Use auto-save instead of manual file dialog
-      const saveResult = await window.electronAPI.autoSaveCertificate({
-        downloadId: prepareResponse.downloadId,
-        fileName: fileName,
-        certificateType: certificationType
-      });
-
-      if (saveResult.status === 'completed') {
-        setSavedFilePath(saveResult.path);
-
-        // Close the progress modal immediately without showing completion buttons
-        setIsProgressModalOpen(false);
-
-        return saveResult.message;
-      } else {
-        throw new Error(saveResult.message);
-      }
+      showToast('Certificate downloaded successfully.', 'success');
+      return 'File downloaded successfully';
     } catch (err) {
       console.error(`Error downloading file:`, err.message);
-      showToast(err.message, 'error');
-      setIsProgressModalOpen(false);
+      showToast('Failed to download certificate.', 'error');
       return false;
     }
   };
@@ -757,9 +744,10 @@ const Certificates = () => {
         startDate,
         endDate,
         thours        : d.training_hours  || '',
-        venue         : '',
+        venue         : d.venue || '',
         refNumber     : d.reference_number,
         certificateType: type,
+        source        : d.source || '',
       });
     } else {
       // Match against masterEmployeeList (already has barangay + municipality correctly aliased)
@@ -1221,14 +1209,16 @@ const Certificates = () => {
                         <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1">Hours</label>
                         <input type="text" value={editFormData.thours} onChange={e => handleEditChange('thours', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-amber-400" />
                       </div>
-                      <div>
-                        <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1">Certificate Type</label>
-                        <select value={editFormData.certType} onChange={e => handleEditChange('certType', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-amber-400">
-                          <option value="Participation">Participation</option>
-                          <option value="Completion">Completion</option>
-                          <option value="Appreciation">Appreciation</option>
-                        </select>
-                      </div>
+                      {editFormData.source === 'external_partner' && (
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1">Certificate Type</label>
+                          <select value={editFormData.certType} onChange={e => handleEditChange('certType', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-amber-400">
+                            <option value="Participation">Participation</option>
+                            <option value="Completion">Completion</option>
+                            <option value="Appreciation">Appreciation</option>
+                          </select>
+                        </div>
+                      )}
                       <div className="col-span-2">
                         <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1">Venue</label>
                         <input type="text" value={editFormData.venue} onChange={e => handleEditChange('venue', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-amber-400" />

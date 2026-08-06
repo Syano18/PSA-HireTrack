@@ -232,7 +232,7 @@ const Assessment = () => {
   useEffect(() => {
     const getSession = async () => {
         try {
-            const state = await window.electronAPI.getLoginState();
+            const state = (JSON.parse(localStorage.getItem('loginState')) || null);
             if (state?.user?.role) {
                 setUserRole(state.user.role);
             }
@@ -1048,34 +1048,20 @@ const Assessment = () => {
 
       // Generate PDF blob and open with system default PDF reader
       const pdfBlob = pdf.output('blob');
+      const fileName = `${filterSurvey}_${filterPosition}_Assessment.pdf`;
       
-      // Convert blob to base64 for Electron IPC
-      const reader = new FileReader();
-      reader.onload = async () => {
-        const base64Data = reader.result.split(',')[1];
-        const fileName = `${filterSurvey}_${filterPosition}_Assessment.pdf`;
-        
-        try {
-          // Try to use Electron API to open with system default PDF reader
-          if (window.electronAPI && window.electronAPI.savePDF) {
-            await window.electronAPI.savePDF(base64Data, fileName);
-            showToast('PDF exported and opened successfully.', 'success');
-          } else {
-            // Fallback: Use browser download
-            const pdfUrl = URL.createObjectURL(pdfBlob);
-            const link = document.createElement('a');
-            link.href = pdfUrl;
-            link.download = fileName;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            showToast('PDF exported successfully.', 'success');
-          }
-        } catch (err) {
-          showToast('Error opening PDF: ' + err.message, 'error');
-        }
-      };
-      reader.readAsDataURL(pdfBlob);
+      try {
+        const pdfUrl = URL.createObjectURL(pdfBlob);
+        const link = document.createElement('a');
+        link.href = pdfUrl;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        showToast('PDF exported successfully.', 'success');
+      } catch (err) {
+        showToast('Error exporting PDF: ' + err.message, 'error');
+      }
     } catch (err) {
       showToast('Error generating PDF: ' + err.message, 'error');
     }
@@ -1398,30 +1384,20 @@ const Assessment = () => {
 
       // Generate and save PDF
       const pdfBlob = pdf.output('blob');
-      const reader = new FileReader();
-      reader.onload = async () => {
-        const base64Data = reader.result.split(',')[1];
-        const fileName = `${filterSurvey}_${filterPosition}_Assessment_Report.pdf`;
+      const fileName = `${filterSurvey}_${filterPosition}_Assessment_Report.pdf`;
 
-        try {
-          if (window.electronAPI && window.electronAPI.savePDF) {
-            await window.electronAPI.savePDF(base64Data, fileName, 'Assessment Report');
-            showToast('Assessment Report generated and opened successfully.', 'success');
-          } else {
-            const pdfUrl = URL.createObjectURL(pdfBlob);
-            const link = document.createElement('a');
-            link.href = pdfUrl;
-            link.download = fileName;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            showToast('Assessment Report generated successfully.', 'success');
-          }
-        } catch (err) {
-          showToast('Error opening PDF: ' + err.message, 'error');
-        }
-      };
-      reader.readAsDataURL(pdfBlob);
+      try {
+        const pdfUrl = URL.createObjectURL(pdfBlob);
+        const link = document.createElement('a');
+        link.href = pdfUrl;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        showToast('Assessment Report generated successfully.', 'success');
+      } catch (err) {
+        showToast('Error exporting PDF: ' + err.message, 'error');
+      }
     } catch (err) {
       showToast('Error generating Assessment Report: ' + err.message, 'error');
     }

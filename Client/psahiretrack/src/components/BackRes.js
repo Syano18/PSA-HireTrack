@@ -13,7 +13,7 @@ const BackRes = () => {
     useEffect(() => {
         const getSession = async () => {
             try {
-                const state = await window.electronAPI.getLoginState();
+                const state = (JSON.parse(localStorage.getItem('auth_session')) || null);
                 if (state && state.user && state.user.role) {
                     const { role } = state.user;
                     // Set the permission based on the user's role
@@ -32,29 +32,12 @@ const BackRes = () => {
     }, []);
 
     const handleBackup = async () => {
-        showToast('Starting encrypted backup... Please wait.', 'info');
-        try {
-            const result = await window.electronAPI.backupDatabase();
-            showToast(result.message, result.success ? 'success' : 'error');
-        } catch (err) {
-            showToast(`An unexpected error occurred: ${err.message}`, 'error');
-        }
+        showToast('Database backup is managed by the server administrator in the browser deployment.', 'info');
     };
 
     const confirmRestore = async () => {
         setIsRestoreModalOpen(false);
-        showToast('Starting restore... This may take a moment.', 'info');
-        try {
-            const result = await window.electronAPI.restoreDatabase();
-            if (result.success) {
-                showToast("Restore complete. The application will now refresh.", 'success');
-                setTimeout(() => window.location.reload(), 3000);
-            } else {
-                showToast(result.message, 'error');
-            }
-        } catch (err) {
-            showToast(`An unexpected error occurred: ${err.message}`, 'error');
-        }
+        showToast('Database restore is managed by the server administrator in the browser deployment.', 'info');
     };
 
     if (isLoading) {

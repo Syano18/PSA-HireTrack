@@ -86,7 +86,8 @@ const TempTrainingCertificates = () => {
   const [isProgressModalOpen, setIsProgressModalOpen] = useState(false);
   const [progressMessage, setProgressMessage] = useState('');
   const [isProgressComplete, setIsProgressComplete] = useState(false);
-  const [savedFilePath, setSavedFilePath] = useState(null);
+
+
   const [duplicateRecords, setDuplicateRecords] = useState([]);
   const [isDuplicateModalOpen, setIsDuplicateModalOpen] = useState(false);
   const [isGenerateModalOpen, setIsGenerateModalOpen] = useState(false);
@@ -94,7 +95,7 @@ const TempTrainingCertificates = () => {
   useEffect(() => {
     const getSession = async () => {
       try {
-        const state = await window.electronAPI.getLoginState();
+        const state = (JSON.parse(localStorage.getItem('loginState')) || null);
         setSessionState(state);
         if (state?.user) {
             setEncodedBy(state.user.email_address || '');
@@ -218,28 +219,36 @@ const TempTrainingCertificates = () => {
     setLoading(true);
     try {
       const payload = { certificates: data, transmitterName, encodedBy, certType: finalCertType };
-      const prepareResponse = await window.electronAPI.prepareDownload({
-        url: `http://${serverIp}:3001/api/generate-batch-training-certificate`,
-        payload: { headers: { 'Authorization': `Bearer ${sessionState.token}` }, body: payload },
-        fileType: 'pdf'
+      
+      const response = await fetch(`http://${serverIp}:80/api/generate-batch-training-certificate`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${sessionState.token}`
+        },
+        body: JSON.stringify(payload)
       });
 
-      if (!prepareResponse.success) throw new Error(prepareResponse.message);
-
-      const autoSaveResult = await window.electronAPI.autoSaveCertificate({
-        downloadId: prepareResponse.downloadId,
-        fileName: `Batch-Certificates-${Date.now()}`,
-        certificateType: 'external'
-      });
-
-      if (autoSaveResult.status === 'completed') {
-        setSavedFilePath(autoSaveResult.path);
-        setIsProgressModalOpen(false);
-        showToast('Generated successfully', 'success');
-      } else {
-        setIsProgressComplete(true);
-        setProgressMessage(`Failed: ${autoSaveResult.message}`);
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        if (errorData && errorData.error) {
+            throw new Error(typeof errorData.error === 'object' ? JSON.stringify(errorData.error) : errorData.error);
+        } else {
+            throw new Error(`Server responded with ${response.status}`);
+        }
       }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute('download', `Batch-Certificates-${Date.now()}.pdf`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      setIsProgressModalOpen(false);
+      showToast('Generated successfully', 'success');
     } catch (error) {
       console.error('Error generating certificates:', error);
       try {
@@ -261,17 +270,17 @@ const TempTrainingCertificates = () => {
   };
 
   const handleCsvDownload = async (content, fileName) => {
-    setIsProgressComplete(false);
-    setProgressMessage('Preparing...');
-    setIsProgressModalOpen(true);
-    const result = await window.electronAPI.saveCsvFile({ content, fileName });
-    if (result.status === 'completed') {
-      setIsProgressComplete(true);
-      setProgressMessage(result.message);
-      setSavedFilePath(result.path);
-    } else {
-      setIsProgressComplete(true);
-      setProgressMessage(`Error: ${result.message}`);
+    try {
+        const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.setAttribute('href', url);
+        link.setAttribute('download', fileName);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    } catch (err) {
+        console.error('An unexpected error occurred during the download process:', err);
     }
   };
 
@@ -426,7 +435,6 @@ const TempTrainingCertificates = () => {
         onClose={() => setIsProgressModalOpen(false)}
         statusMessage={progressMessage}
         isComplete={isProgressComplete}
-        filePath={savedFilePath}
       />
 
       {isDuplicateModalOpen && (
