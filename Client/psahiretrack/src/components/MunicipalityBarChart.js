@@ -17,7 +17,7 @@ const MunicipalityBarChart = ({ data, isDarkMode }) => {
         Employees: data[key]
     })).sort((a, b) => b.Employees - a.Employees);
 
-    const tickColor = isDarkMode ? '#A0AEC0' : '#4A5568';
+    const tickColor = isDarkMode ? '#FFFFFF' : '#4A5568';
     const gridStrokeColor = isDarkMode ? '#4A5568' : '#E2E8F0';
 
     return (
@@ -27,8 +27,8 @@ const MunicipalityBarChart = ({ data, isDarkMode }) => {
                 margin={{
                     top: 20,
                     right: 20,
-                    left: -10,
-                    bottom: 20, 
+                    left: 20,
+                    bottom: 50, 
                 }}
             >
                 <CartesianGrid strokeDasharray="3 3" stroke={gridStrokeColor} />

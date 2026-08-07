@@ -28,6 +28,35 @@ const sendCertificateEmail = async (toEmail, employeeName, pdfBuffer, certificat
   return await transporter.sendMail(mailOptions);
 };
 
+const sendAssignmentEmail = async (toEmail, focalName, employeeName, position, surveyName) => {
+  const mailOptions = {
+    from: '"HireTrack" <kalinga@psa.gov.ph>',
+    to: toEmail,
+    subject: 'Performance Rating Request',
+    text: `Dear ${focalName},\n\nA new employee has been assigned under your supervision.\n\nEmployee Name: ${employeeName}\nPosition: ${position}\nSurvey: ${surveyName}\n\nPlease review this in the PSA HireTrack system.\n\nBest regards,\nireTrack Admin`,
+    html: `
+      <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; line-height: 1.6;">
+        <h2 style="color: #4F46E5;">Performance Rating Request</h2>
+        <p>Dear <strong>${focalName}</strong>,</p>
+        <p>A new employee has been assigned under your supervision.</p>
+        <div style="background-color: #f9fafb; padding: 15px; border-left: 4px solid #4F46E5; margin: 20px 0;">
+          <p style="margin: 0 0 10px 0;"><strong>Employee Name:</strong> ${employeeName}</p>
+          <p style="margin: 0 0 10px 0;"><strong>Position:</strong> ${position}</p>
+          <p style="margin: 0;"><strong>Survey:</strong> ${surveyName}</p>
+        </div>
+        <p>Please review this assignment and provide a rating as soon possible for us to issue the certificate to the requester.</p>
+        <div style="text-align: left; margin: 30px 0;">
+          <a href="https://operations-hub-iota.vercel.app/" style="background-color: #4F46E5; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">Open OpsHUB</a>
+        </div>
+        <p style="color: #6b7280; font-size: 0.9em; margin-top: 30px;">Best regards,<br>HireTrack Admin</p>
+      </div>
+    `
+  };
+
+  return await transporter.sendMail(mailOptions);
+};
+
 module.exports = {
   sendCertificateEmail,
+  sendAssignmentEmail,
 };

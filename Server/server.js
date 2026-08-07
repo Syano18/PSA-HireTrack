@@ -4,6 +4,8 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
+const https = require('https');
+const http = require('http');
 
 const app = express();
 const port = 80;
@@ -80,6 +82,32 @@ app.use((err, req, res, next) => {
 });
 
 // --- START SERVER ---
-app.listen(port, () => {
-    // Server started
-});
+const certPath = path.join(basePath, 'cert.pem');
+const keyPath = path.join(basePath, 'key.pem');
+
+if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
+    console.log('SSL certificates found! Starting HTTPS server on port 443...');
+    const options = {
+        cert: fs.readFileSync(certPath),
+        key: fs.readFileSync(keyPath)
+    };
+    
+    // Start HTTPS Server
+    https.createServer(options, app).listen(443, () => {
+        console.log('Secure HTTPS Server is running on port 443');
+    });
+
+    // Start HTTP Server to redirect all traffic to HTTPS
+    http.createServer((req, res) => {
+        const host = req.headers.host ? req.headers.host.split(':')[0] : 'localhost';
+        res.writeHead(301, { "Location": "https://" + host + req.url });
+        res.end();
+    }).listen(80, () => {
+        console.log('HTTP Server is running on port 80 (Redirecting to HTTPS)');
+    });
+} else {
+    console.log('No SSL certificates (cert.pem, key.pem) found. Starting standard HTTP server...');
+    app.listen(port, () => {
+        console.log(`HTTP Server running on port ${port}`);
+    });
+}

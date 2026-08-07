@@ -30,8 +30,10 @@ export const checkInternetConnectivity = async () => {
  * @param {number} port - Server port (default: 80)
  * @returns {Promise<{reachable: boolean, statusCode?: number, error?: string, errorType?: string}>}
  */
-export const checkServerReachability = async (serverIp, port = 80) => {
-    const url = `http://${serverIp}:${port}/api/health`;
+export const checkServerReachability = async (serverIp, defaultPort = 80) => {
+    const protocol = window.location.protocol;
+    const port = protocol === 'https:' ? 443 : defaultPort;
+    const url = `${protocol}//${serverIp}:${port}/api/health`;
     
     try {
         const response = await fetch(url, {

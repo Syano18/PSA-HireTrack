@@ -242,7 +242,9 @@ const Certificates = () => {
       formData.append('name', `${selectedEmployee.firstName} ${selectedEmployee.lastName}`);
       formData.append('certificate', emailAttachment);
       
-      const res = await fetch(`http://${serverIp}:80/api/send-email-upload`, {
+      const protocol = window.location.protocol;
+      const port = protocol === 'https:' ? 443 : 80;
+      const res = await fetch(`${protocol}//${serverIp}:${port}/api/send-email-upload`, {
         method: 'POST',
         body: formData,
       });
@@ -363,7 +365,9 @@ const Certificates = () => {
 
     try {
       const API_PORT = 80;
-      const fullUrl = `http://${serverIp}:${API_PORT}/api/${endpointPath}`;
+      const protocol = window.location.protocol;
+      const port = protocol === 'https:' ? 443 : 80;
+      const fullUrl = `${protocol}//${serverIp}:${port}/api/${endpointPath}`;
 
       const response = await fetch(fullUrl, {
         method: 'POST',
@@ -993,7 +997,7 @@ const Certificates = () => {
 
                   {/* Footer */}
                   <div className="px-5 py-3 bg-gray-50 dark:bg-gray-700/50 border-t border-gray-100 dark:border-gray-700 flex justify-between items-center flex-shrink-0">
-                    {validationResult?.valid && sessionState?.user?.role && ['Super_Admin', 'Admin'].includes(sessionState.user.role) ? (
+                    {validationResult?.valid && sessionState?.user?.role && ['Super_Admin', 'Admin', 'PACD'].includes(sessionState.user.role) ? (
                       <button onClick={handleOpenEdit} className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-amber-500 rounded-lg hover:bg-amber-600 focus:outline-none focus:ring-2 focus:ring-amber-400 shadow-sm">
                         ✏️ Edit &amp; Regenerate
                       </button>

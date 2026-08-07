@@ -85,11 +85,11 @@ const executeTurso = async (sql, args) => {
     });
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`Turso Sync Error: ${response.status} ${errorText}`);
+      throw new Error(`Cloud Database Sync Error: ${response.status} ${errorText}`);
     }
     return await response.json();
   } catch (err) {
-    console.error('Turso DB Error:', err.message);
+    console.error('Cloud Database Error:', err.message);
     throw err;
   }
 };
@@ -644,7 +644,7 @@ router.post('/generate-employment-certificate', async (req, res) => {
                 refNum = tursoInsertResult?.results?.[0]?.response?.result?.last_insert_rowid;
 
                 if (refNum) {
-                    // Step 2: Fetch the actual REFERENCE_NUMBER from Turso (with retry logic)
+                    // Step 2: Fetch the actual REFERENCE_NUMBER from Cloud Database (with retry logic)
                     let fullRefNumberResult = null;
                     let retries = 0;
                     const maxRetries = 5;
@@ -675,10 +675,10 @@ router.post('/generate-employment-certificate', async (req, res) => {
                     if (fullRefNumberResult) {
                         fullRefNumber = fullRefNumberResult;
                     } else {
-                        throw new Error(`[generate-employment-certificate] Could not fetch REFERENCE_NUMBER after ${maxRetries} retries for row ID ${refNum}. Turso may be unavailable.`);
+                        throw new Error(`[generate-employment-certificate] Could not fetch REFERENCE_NUMBER after ${maxRetries} retries for row ID ${refNum}. Cloud Database may be unavailable.`);
                     }
                 } else {
-                    throw new Error(`Failed to insert into Turso Digital_Logbook: ${JSON.stringify(tursoInsertResult)}`);
+                    throw new Error(`Failed to insert into Cloud Database Digital_Logbook: ${JSON.stringify(tursoInsertResult)}`);
                 }
             } catch (tursoError) {
                 throw new Error(`Turso database operation failed: ${tursoError.message}`);
@@ -686,7 +686,7 @@ router.post('/generate-employment-certificate', async (req, res) => {
         }
 
         if (!fullRefNumber) {
-            throw new Error('Reference number is required but was not generated from Turso');
+            throw new Error('Reference number is required but was not generated from Cloud Database');
         }
 
         // --- Generate encrypted QR code for online validation (computed first so token can be stored) ---
@@ -751,7 +751,7 @@ router.post('/generate-multi-employment-certificate', async (req, res) => {
                 refNum = tursoInsertResult?.results?.[0]?.response?.result?.last_insert_rowid;
 
                 if (refNum) {
-                    // Step 2: Fetch the actual REFERENCE_NUMBER from Turso (with retry logic)
+                    // Step 2: Fetch the actual REFERENCE_NUMBER from Cloud Database (with retry logic)
                     let fullRefNumberResult = null;
                     let retries = 0;
                     const maxRetries = 5;
@@ -782,10 +782,10 @@ router.post('/generate-multi-employment-certificate', async (req, res) => {
                     if (fullRefNumberResult) {
                         fullRefNumber = fullRefNumberResult;
                     } else {
-                        throw new Error(`[generate-multi-employment] Could not fetch REFERENCE_NUMBER after ${maxRetries} retries for row ID ${refNum}. Turso may be unavailable.`);
+                        throw new Error(`[generate-multi-employment] Could not fetch REFERENCE_NUMBER after ${maxRetries} retries for row ID ${refNum}. Cloud Database may be unavailable.`);
                     }
                 } else {
-                    throw new Error(`Failed to insert into Turso Digital_Logbook: ${JSON.stringify(tursoInsertResult)}`);
+                    throw new Error(`Failed to insert into Cloud Database Digital_Logbook: ${JSON.stringify(tursoInsertResult)}`);
                 }
             } catch (tursoError) {
                 throw new Error(`Turso database operation failed: ${tursoError.message}`);
@@ -793,7 +793,7 @@ router.post('/generate-multi-employment-certificate', async (req, res) => {
         }
 
         if (!fullRefNumber) {
-            throw new Error('Reference number is required but was not generated from Turso');
+            throw new Error('Reference number is required but was not generated from Cloud Database');
         }
 
         // --- Local DB Logging (certificate_registry) ---

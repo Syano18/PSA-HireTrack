@@ -49,7 +49,7 @@ const executeTurso = async (sql, args) => {
     });
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`Turso Sync Error: ${response.status} ${errorText}`);
+      throw new Error(`Cloud Database Sync Error: ${response.status} ${errorText}`);
     }
   } catch (err) {
     // Re-throw to be caught by the transactional logic
@@ -133,7 +133,7 @@ router.post('/', verifyToken, checkRole(['Super_Admin', 'Admin']), async (req, r
       throw new Error(`Clerk Error: ${fbErr.message || JSON.stringify(fbErr)}`); // Throw to be caught by main handler
     }
 
-    // 3. SYNC to Turso
+    // 3. SYNC to Cloud Database
     try {
       await executeTurso(
         "INSERT INTO User_Permissions (Email, First_Name, Middle_Name, Last_Name, Suffix, Role, Status) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -148,8 +148,8 @@ router.post('/', verifyToken, checkRole(['Super_Admin', 'Admin']), async (req, r
       } catch (fbDeleteErr) {
         console.error('CRITICAL: Failed to rollback Clerk user creation after Turso failure:', fbDeleteErr);
       }
-      console.error('Turso Sync Error:', tursoErr);
-      throw new Error(`Turso Sync Error: ${tursoErr.message}`); // Throw to be caught
+      console.error('Cloud Database Sync Error:', tursoErr);
+      throw new Error(`Cloud Database Sync Error: ${tursoErr.message}`); // Throw to be caught
     }
 
     // --- Commit Transaction ---
@@ -213,7 +213,7 @@ router.post('/', verifyToken, checkRole(['Super_Admin', 'Admin']), async (req, r
     if (err.message.includes('Permission denied') || err.message.includes('Admins can only create')) {
       return res.status(403).json({ error: err.message });
     }
-    if (err.message.startsWith('Clerk Error:') || err.message.startsWith('Turso Sync Error:')) {
+    if (err.message.startsWith('Clerk Error:') || err.message.startsWith('Cloud Database Sync Error:')) {
       return res.status(500).json({ error: err.message });
     }
     return res.status(500).json({ error: 'Database error.' });
@@ -297,7 +297,7 @@ router.put('/:id', verifyToken, checkRole(['Super_Admin', 'Admin']), async (req,
       [first_name, middle_initial || null, last_name, suffix || null, email, role || null, status, id]
     );
 
-    // 2. SYNC to Turso
+    // 2. SYNC to Cloud Database
     try {
       await executeTurso(
         `UPDATE User_Permissions SET Email = ?, First_Name = ?, Middle_Name = ?, Last_Name = ?, Suffix = ?, Role = ?, Status = ? WHERE Email = ?`,
@@ -366,7 +366,7 @@ router.delete('/:id', verifyToken, checkRole(['Super_Admin', 'Admin']), async (r
       // Proceed to delete from local DB even if FB fails (to clean up zombies)
     }
 
-    // Sync to Turso DB (Delete)
+    // Sync to Cloud Database DB (Delete)
     await executeTurso(
       "DELETE FROM User_Permissions WHERE Email = ?",
       [targetUser.email_address]

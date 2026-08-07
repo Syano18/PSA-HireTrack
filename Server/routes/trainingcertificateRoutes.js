@@ -45,16 +45,16 @@ const executeTurso = async (sql, args) => {
     });
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`Turso Sync Error: ${response.status} ${errorText}`);
+      throw new Error(`Cloud Database Sync Error: ${response.status} ${errorText}`);
     }
     return await response.json();
   } catch (err) {
-    console.error('Turso DB Error:', err.message);
+    console.error('Cloud Database Error:', err.message);
     return null;
   }
 };
 
-// ─── Helper: Insert into Turso logbook and return the formatted REFERENCE_NUMBER ───
+// ─── Helper: Insert into Cloud Database logbook and return the formatted REFERENCE_NUMBER ───
 // Throws error if Turso is unavailable or generation fails - no fallback to UUID
 const getTursoRefNumber = async (particulars, addressee, transmitterName, encodedBy) => {
   try {
@@ -64,7 +64,7 @@ const getTursoRefNumber = async (particulars, addressee, transmitterName, encode
     );
     const rowId = insertResult?.results?.[0]?.response?.result?.last_insert_rowid;
     if (!rowId) {
-      throw new Error('Failed to insert into Turso Digital_Logbook: no row ID returned');
+      throw new Error('Failed to insert into Cloud Database Digital_Logbook: no row ID returned');
     }
 
     // ✅ ADD RETRY LOGIC: Wait for Turso to generate REFERENCE_NUMBER
@@ -96,13 +96,13 @@ const getTursoRefNumber = async (particulars, addressee, transmitterName, encode
     }
 
     if (!refNumber) {
-      throw new Error(`[getTursoRefNumber] Could not fetch REFERENCE_NUMBER after ${maxRetries} retries for row ID ${rowId}. Turso may be unavailable or slow.`);
+      throw new Error(`[getTursoRefNumber] Could not fetch REFERENCE_NUMBER after ${maxRetries} retries for row ID ${rowId}. Cloud Database may be unavailable or slow.`);
     }
 
     return refNumber;
   } catch (err) {
     console.error('[getTursoRefNumber] Fatal error:', err.message);
-    throw new Error(`Failed to generate reference number from Turso: ${err.message}`);
+    throw new Error(`Failed to generate reference number from Cloud Database: ${err.message}`);
   }
 };
 

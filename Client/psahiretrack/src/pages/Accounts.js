@@ -344,9 +344,10 @@ const Accounts = () => {
 
   useEffect(() => {
     if (sessionState && !isSettingsLoading) {
-      fetchUsers();
       if (['Super_Admin', 'Admin'].includes(sessionState.user.role)) {
         fetchUsers();
+      } else {
+        setIsLoading(false);
       }
     }
   }, [sessionState, isSettingsLoading, fetchUsers]);

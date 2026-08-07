@@ -1,6 +1,10 @@
 // src/components/API.js
 
-const API_PORT = 80;
+const getApiUrl = (serverIp, endpoint) => {
+  const protocol = window.location.protocol; // 'http:' or 'https:'
+  const port = protocol === 'https:' ? 443 : 80;
+  return `${protocol}//${serverIp}:${port}/api/${endpoint}`;
+};
 
 export const apiFetch = async (endpoint, serverIp, options = {}) => {
   if (!serverIp) {
@@ -10,7 +14,7 @@ export const apiFetch = async (endpoint, serverIp, options = {}) => {
   const session = JSON.parse(localStorage.getItem('loginState')) || null;
   const token = session?.token;
   
-  const url = `http://${serverIp}:${API_PORT}/api/${endpoint}`;
+  const url = getApiUrl(serverIp, endpoint);
 
   const headers = {
     'Content-Type': 'application/json',

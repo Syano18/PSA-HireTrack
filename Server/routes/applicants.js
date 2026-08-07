@@ -53,11 +53,11 @@ const executeTurso = async (sql, args = []) => {
     });
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`Turso Sync Error: ${response.status} ${errorText}`);
+      throw new Error(`Cloud Database Sync Error: ${response.status} ${errorText}`);
     }
     return await response.json();
   } catch (err) {
-    console.error('Turso DB Error:', err.message);
+    console.error('Cloud Database Error:', err.message);
     return null;
   }
 };
@@ -73,7 +73,7 @@ const formatTursoResponse = (tursoResult) => {
     return rows.map(row => {
         const obj = {};
         row.forEach((value, i) => {
-            // The actual value is nested inside the value object from Turso
+            // The actual value is nested inside the value object from Cloud Database
             obj[columnNames[i]] = value.value;
         });
         return obj;
@@ -155,10 +155,10 @@ router.get('/assigned-to-me', verifyToken, async (req, res) => {
 });
 
 // --- POST /api/applicants/sync ---
-// Syncs profile_entries from Turso to local MariaDB, updating only matching fields
+// Syncs profile_entries from Cloud Database to local MariaDB, updating only matching fields
 router.post('/sync', verifyToken, async (req, res) => {
   try {
-    // Fetch all records from Turso profile_entries
+    // Fetch all records from Cloud Database profile_entries
     const tursoQuery = `
       SELECT id, first_name, middle_initial, last_name, suffix, email_address, phone_number, 
              date_of_birth, sex, tin, barangay, city_municipality, highest_grade_completed, 
@@ -167,11 +167,11 @@ router.post('/sync', verifyToken, async (req, res) => {
     `;
     const tursoResult = await executeTurso(tursoQuery);
     if (!tursoResult) {
-      return res.status(500).json({ error: 'Failed to fetch from Turso database.' });
+      return res.status(500).json({ error: 'Failed to fetch from Cloud Database database.' });
     }
     const applicants = formatTursoResponse(tursoResult);
     if (!applicants || applicants.length === 0) {
-      return res.json({ message: 'No applicants found in Turso.' });
+      return res.json({ message: 'No applicants found in Cloud Database.' });
     }
 
     const connection = await dbPool.getConnection();
@@ -737,7 +737,7 @@ router.put('/:id', verifyToken, async (req, res) => {
   const updates = req.body;
 
   try {
-    // 1. Fetch current local record to identify it in Turso (before update)
+    // 1. Fetch current local record to identify it in Cloud Database (before update)
     const [rows] = await dbPool.query("SELECT * FROM profile_entries WHERE id = ?", [id]);
     if (rows.length === 0) {
         return res.status(404).json({ error: 'Applicant not found.' });

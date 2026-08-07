@@ -80,7 +80,7 @@ router.get('/dashboard-summary', verifyToken, async (req, res) => {
 // This endpoint provides a simple metric display
 router.get('/certificate-stats', verifyToken, async (req, res) => {
     // For now, return default values
-    // In the future, this can be connected to a real certificate count from Turso
+    // In the future, this can be connected to a real certificate count from Cloud Database
     res.json({
         training_certs: 0,
         employment_certs: 0

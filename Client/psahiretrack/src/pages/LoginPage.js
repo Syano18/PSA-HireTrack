@@ -42,7 +42,9 @@ const LoginPage = () => {
                 const controller = new AbortController();
                 const timeoutId = setTimeout(() => controller.abort(), 5000);
                 
-                fetch(`http://${serverIp}:80/api/login`, {
+                const protocol = window.location.protocol;
+                const port = protocol === 'https:' ? 443 : 80;
+                fetch(`${protocol}//${serverIp}:${port}/api/login`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
                     signal: controller.signal
@@ -104,10 +106,12 @@ const LoginPage = () => {
             // 2. Send token to backend to get app session
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 5000);
-
-            const response = await fetch(`http://${serverIp}:80/api/login`, {
+            const protocol = window.location.protocol;
+            const port = protocol === 'https:' ? 443 : 80;
+            const response = await fetch(`${protocol}//${serverIp}:${port}/api/login`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
+                headers: {
+                    'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
                 signal: controller.signal
             });
 

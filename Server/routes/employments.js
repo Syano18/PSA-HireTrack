@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const dbPool = require('../db');
 require('dotenv').config();
+const { sendAssignmentEmail } = require('../utils/emailService');
 
 // --- HELPER FUNCTIONS ---
 
@@ -103,7 +104,7 @@ const executeTurso = async (sql, args = []) => {
       if (!response.ok) {
         const errorText = await response.text();
         console.error(`[Turso] Sync Failed (${response.status}): ${errorText}`);
-        throw new Error(`Turso Sync Error: ${response.status} ${errorText}`);
+        throw new Error(`Cloud Database Sync Error: ${response.status} ${errorText}`);
       }
       const result = await response.json();
       
@@ -111,13 +112,13 @@ const executeTurso = async (sql, args = []) => {
       const errors = result.results?.filter(r => r.type === 'error');
       if (errors && errors.length > 0) {
           console.error('[Turso] SQL Execution Failed:', JSON.stringify(errors, null, 2));
-          throw new Error(`Turso SQL Error: ${errors[0].error.message}`);
+          throw new Error(`Cloud Database SQL Error: ${errors[0].error.message}`);
       }
 
       //console.log('[Turso] Sync Success. Result:', JSON.stringify(result));
       return result;
     } catch (err) {
-      console.error('Turso DB Error:', err.message);
+      console.error('Cloud Database Error:', err.message);
       return null;
     }
 };
@@ -341,11 +342,22 @@ router.post('/sync-finalize', async (req, res) => {
         const [applicants] = await connection.query(`
             SELECT 
                 pe.id, pe.employee_id, pe.survey_id, pe.position_id, pe.assessment_remarks,
-                s.contract_start_date, s.contract_end_date, s.focal_person_id
+                DATE_FORMAT(s.contract_start_date, '%Y-%m-%d') AS contract_start_date, 
+                DATE_FORMAT(s.contract_end_date, '%Y-%m-%d') AS contract_end_date, 
+                s.focal_person_id,
+                CONCAT(pe.first_name, ' ', COALESCE(pe.middle_initial, ''), ' ', pe.last_name, ' ', COALESCE(pe.suffix, '')) AS employee_name,
+                p.title AS position_title,
+                s.name AS survey_name,
+                u.email_address AS focal_person_email,
+                CONCAT(u.first_name, ' ', u.last_name) AS focal_person_name
             FROM profile_entries pe
             JOIN surveys s ON pe.survey_id = s.id
+            JOIN positions p ON pe.position_id = p.id
+            LEFT JOIN users u ON s.focal_person_id = u.id
             WHERE pe.id IN (?)
         `, [applicantIds]);
+        
+        const tursoBatchArgs = [];
 
         for (const app of applicants) {
             if (!app.employee_id) {
@@ -366,8 +378,22 @@ router.post('/sync-finalize', async (req, res) => {
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 `, [app.employee_id, app.position_id, app.survey_id, app.focal_person_id, app.contract_start_date, app.contract_end_date, remarks]);
                 createdCount++;
+                
+                tursoBatchArgs.push({
+                    employee_name: app.employee_name.replace(/\s+/g, ' ').trim(),
+                    position_title: app.position_title,
+                    survey_name: app.survey_name,
+                    contract_start_date: app.contract_start_date,
+                    contract_end_date: app.contract_end_date,
+                    focal_person_email: app.focal_person_email || null,
+                    focal_person_name: app.focal_person_name || 'Focal Person',
+                    remarks: remarks
+                });
             }
         }
+
+        let cloudSyncSuccess = true;
+        let emailSuccess = true;
 
         if (createdCount > 0) {
             // Update status
@@ -376,10 +402,54 @@ router.post('/sync-finalize', async (req, res) => {
                 SET interview_status = 'Synced Employments' 
                 WHERE id IN (?)
             `, [applicantIds]);
+            
+            // --- Cloud Database BATCH SYNC & EMAIL ---
+            for (const arg of tursoBatchArgs) {
+                try {
+                    const sqlTurso = `INSERT INTO Employments (
+                        employee_name, position, survey_name, contract_start_date, contract_end_date, focal_person_email, rating, remarks
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
+                    await executeTurso(sqlTurso, [
+                        arg.employee_name, arg.position_title, arg.survey_name, 
+                        arg.contract_start_date, arg.contract_end_date, 
+                        arg.focal_person_email, null, arg.remarks
+                    ]);
+                } catch (tursoErr) {
+                    console.error('Cloud Database batch sync failed:', tursoErr);
+                    cloudSyncSuccess = false;
+                }
+
+                if (arg.focal_person_email) {
+                    try {
+                        await sendAssignmentEmail(
+                            arg.focal_person_email,
+                            arg.focal_person_name,
+                            arg.employee_name,
+                            arg.position_title,
+                            arg.survey_name
+                        );
+                    } catch (emailErr) {
+                        console.error('Failed to send assignment batch email:', emailErr);
+                        emailSuccess = false;
+                    }
+                }
+            }
         }
 
         await connection.commit();
-        res.json({ message: `Successfully created ${createdCount} employment records.`, createdCount });
+
+        let warning = null;
+        if (createdCount > 0) {
+            if (!cloudSyncSuccess && !emailSuccess) {
+                warning = `Created ${createdCount} employment records locally, but Cloud Sync and some Emails failed due to network issues.`;
+            } else if (!cloudSyncSuccess) {
+                warning = `Created ${createdCount} employment records locally, but Cloud Sync failed due to network issues.`;
+            } else if (!emailSuccess) {
+                warning = `Created ${createdCount} employment records, but some email notifications failed.`;
+            }
+        }
+
+        res.json({ message: `Successfully created ${createdCount} employment records.`, createdCount, warning });
 
     } catch (err) {
         await connection.rollback();
@@ -387,6 +457,98 @@ router.post('/sync-finalize', async (req, res) => {
         res.status(500).json({ error: 'Sync failed: ' + err.message });
     } finally {
         connection.release();
+    }
+});
+
+// POST /api/employments/sync-ratings
+router.post('/sync-ratings', async (req, res) => {
+    const { actingUserId } = req.body;
+    if (!actingUserId) return res.status(403).json({ error: 'Permission denied.' });
+
+    try {
+        const actingUser = await getUserWithRole(actingUserId);
+        if (!['Super_Admin', 'Admin', 'PACD'].includes(actingUser.role)) {
+            return res.status(403).json({ error: 'Permission denied.' });
+        }
+
+        // 1. Fetch all Turso records (as Turso acts as a queue for pending ratings)
+        const tursoRes = await executeTurso(`SELECT id, employee_name, position, survey_name, contract_start_date, contract_end_date, rating, remarks FROM Employments`);
+        if (!tursoRes || !tursoRes.results || !tursoRes.results[0] || !tursoRes.results[0].response || !tursoRes.results[0].response.result) {
+            return res.status(500).json({ error: 'Failed to fetch from Cloud Database.' });
+        }
+        
+        const rows = tursoRes.results[0].response.result.rows;
+        const cols = tursoRes.results[0].response.result.cols.map(c => c.name);
+        
+        const tursoRecords = rows.map(row => {
+            const obj = {};
+            row.forEach((val, i) => {
+                if (val && val.type === 'null') {
+                    obj[cols[i]] = null;
+                } else {
+                    obj[cols[i]] = val.value ?? val; 
+                }
+            });
+            return obj;
+        });
+
+        if (tursoRecords.length === 0) {
+            return res.json({ message: 'No records pending in Cloud Database.', syncedCount: 0 });
+        }
+
+        // 2. Fetch local employments
+        const [localRecords] = await dbPool.query(`
+            SELECT 
+                emp.id, 
+                DATE_FORMAT(emp.contract_start_date, '%Y-%m-%d') AS contract_start_date, 
+                DATE_FORMAT(emp.contract_end_date, '%Y-%m-%d') AS contract_end_date, 
+                emp.rating,
+                CONCAT(e.first_name, ' ', COALESCE(e.middle_initial, ''), ' ', e.last_name, ' ', COALESCE(e.suffix, '')) AS employee_name,
+                p.title AS position_title,
+                s.name AS survey_name
+            FROM employments emp
+            JOIN employees e ON emp.employee_id = e.id
+            JOIN positions p ON emp.position_id = p.id
+            JOIN surveys s ON emp.survey_id = s.id
+        `);
+
+        let syncedCount = 0;
+        let deletedFromTursoCount = 0;
+        
+        for (const tRec of tursoRecords) {
+            // Find local match
+            const match = localRecords.find(lRec => {
+                const cleanName = lRec.employee_name.replace(/\s+/g, ' ').trim();
+                return cleanName === tRec.employee_name &&
+                       lRec.position_title === tRec.position &&
+                       lRec.survey_name === tRec.survey_name &&
+                       lRec.contract_start_date === tRec.contract_start_date &&
+                       lRec.contract_end_date === tRec.contract_end_date;
+            });
+
+            if (match) {
+                const localIsRated = match.rating && match.rating.trim() !== '';
+                const tursoIsRated = tRec.rating && tRec.rating.trim() !== '';
+
+                if (localIsRated) {
+                    // Scenario A: Rated offline locally. We just need to clean up Turso.
+                    await executeTurso(`DELETE FROM Employments WHERE id = ?`, [tRec.id]);
+                    deletedFromTursoCount++;
+                } else if (tursoIsRated) {
+                    // Scenario B: Rated on Turso. Sync to local DB, then clean up Turso.
+                    await dbPool.query('UPDATE employments SET rating = ?, remarks = ? WHERE id = ?', [tRec.rating, tRec.remarks, match.id]);
+                    syncedCount++;
+                    await executeTurso(`DELETE FROM Employments WHERE id = ?`, [tRec.id]);
+                    deletedFromTursoCount++;
+                }
+                // Scenario C: Neither is rated yet. Do nothing, leave it in Cloud Database for later.
+            }
+        }
+
+        return res.json({ message: `Successfully synced ${syncedCount} ratings. Removed ${deletedFromTursoCount} from Cloud Database.`, syncedCount });
+    } catch (err) {
+        console.error('Cloud Database Sync Error:', err);
+        return res.status(500).json({ error: 'Failed to sync ratings.' });
     }
 });
 
@@ -425,7 +587,78 @@ router.post('/', async (req, res) => {
         const values = columns.map(col => employmentData[col] || null);
         const [result] = await dbPool.query(`INSERT INTO employments (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`, values);
         
-        res.status(201).json({ message: 'Employment record created successfully', employmentId: result.insertId });
+        // --- SYNC to Cloud Database and Send Email ---
+        let cloudSyncSuccess = true;
+        let emailSuccess = true;
+        
+        try {
+            const [details] = await dbPool.query(`
+                SELECT 
+                    CONCAT(e.first_name, ' ', COALESCE(e.middle_initial, ''), ' ', e.last_name, ' ', COALESCE(e.suffix, '')) AS employee_name,
+                    p.title AS position_title,
+                    s.name AS survey_name,
+                    u.email_address AS focal_person_email,
+                    CONCAT(u.first_name, ' ', u.last_name) AS focal_person_name
+                FROM employments emp
+                JOIN employees e ON emp.employee_id = e.id
+                JOIN positions p ON emp.position_id = p.id
+                JOIN surveys s ON emp.survey_id = s.id
+                LEFT JOIN users u ON emp.focal_person_id = u.id
+                WHERE emp.id = ?
+            `, [result.insertId]);
+            
+            const tRec = details[0];
+            
+            try {
+                await executeTurso(`
+                    INSERT INTO Employments (id, employee_name, position, survey_name, contract_start_date, contract_end_date, focal_person_email, rating, remarks)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `, [
+                    result.insertId,
+                    tRec.employee_name,
+                    tRec.position_title,
+                    tRec.survey_name,
+                    employmentData.contract_start_date,
+                    employmentData.contract_end_date,
+                    tRec.focal_person_email || null,
+                    employmentData.rating || null,
+                    employmentData.remarks || null
+                ]);
+            } catch (tursoErr) {
+                console.error('Failed to sync new employment to Cloud Database:', tursoErr);
+                cloudSyncSuccess = false;
+            }
+            
+            // Try to send email
+            if (tRec.focal_person_email) {
+                try {
+                    await sendAssignmentEmail(
+                        tRec.focal_person_email,
+                        tRec.focal_person_name || 'Focal Person',
+                        tRec.employee_name,
+                        tRec.position_title,
+                        tRec.survey_name
+                    );
+                } catch (emailErr) {
+                    console.error('Failed to send assignment email:', emailErr);
+                    emailSuccess = false;
+                }
+            }
+            
+        } catch (err) {
+            console.error('Error during post-creation sync/email:', err);
+        }
+
+        let warning = null;
+        if (!cloudSyncSuccess && !emailSuccess) {
+            warning = "Employment saved locally, but Cloud Sync and Email failed due to network issues.";
+        } else if (!cloudSyncSuccess) {
+            warning = "Employment saved locally, but Cloud Sync failed due to network issues.";
+        } else if (!emailSuccess) {
+            warning = "Employment saved, but the email notification to the focal person failed.";
+        }
+
+        res.json({ message: 'Employment record added successfully.', id: result.insertId, warning });
 
     } catch (dbErr) {
         console.error(`Database error during employment creation: ${dbErr.message}`);
@@ -543,6 +776,38 @@ router.put('/:id', async (req, res) => {
                 const { rating, remarks } = employmentData;
                 const [result] = await dbPool.query('UPDATE employments SET rating = ?, remarks = ? WHERE id = ?', [rating || null, remarks || null, id]);
                 if (result.affectedRows === 0) return res.status(404).json({ error: 'Record not found during update.' });
+                
+                // --- SYNC RATING to Cloud Database / DELETE ---
+                try {
+                    const [details] = await dbPool.query(`
+                        SELECT 
+                            CONCAT(e.first_name, ' ', COALESCE(e.middle_initial, ''), ' ', e.last_name, ' ', COALESCE(e.suffix, '')) AS employee_name,
+                            p.title AS position_title,
+                            s.name AS survey_name,
+                            emp.contract_start_date,
+                            emp.contract_end_date
+                        FROM employments emp
+                        JOIN employees e ON emp.employee_id = e.id
+                        JOIN positions p ON emp.position_id = p.id
+                        JOIN surveys s ON emp.survey_id = s.id
+                        WHERE emp.id = ?
+                    `, [id]);
+                    if (details.length > 0) {
+                        const info = details[0];
+                        const cleanEmployeeName = info.employee_name.replace(/\s+/g, ' ').trim();
+                        await executeTurso(`DELETE FROM Employments WHERE employee_name = ? AND position = ? AND survey_name = ? AND contract_start_date = ? AND contract_end_date = ?`, [
+                            cleanEmployeeName,
+                            info.position_title,
+                            info.survey_name,
+                            info.contract_start_date,
+                            info.contract_end_date
+                        ]);
+                    }
+                } catch(err) {
+                    console.error("Turso rating delete error:", err);
+                }
+                // --- END SYNC RATING ---
+
                 return res.json({ message: 'Performance rating submitted successfully.' });
             } else {
                 // Any other role trying to submit a rating.
@@ -580,6 +845,39 @@ router.put('/:id', async (req, res) => {
             const [result] = await dbPool.query(sqlQuery, [...values, id]);
             if (result.affectedRows === 0) return res.status(404).json({ error: 'Record not found during update.' });
             
+            // --- SYNC RATING to Cloud Database / DELETE ---
+            if (isRatingSubmission && !ratingIsLocked) {
+                try {
+                    const [details] = await dbPool.query(`
+                        SELECT 
+                            CONCAT(e.first_name, ' ', COALESCE(e.middle_initial, ''), ' ', e.last_name, ' ', COALESCE(e.suffix, '')) AS employee_name,
+                            p.title AS position_title,
+                            s.name AS survey_name,
+                            emp.contract_start_date,
+                            emp.contract_end_date
+                        FROM employments emp
+                        JOIN employees e ON emp.employee_id = e.id
+                        JOIN positions p ON emp.position_id = p.id
+                        JOIN surveys s ON emp.survey_id = s.id
+                        WHERE emp.id = ?
+                    `, [id]);
+                    if (details.length > 0) {
+                        const info = details[0];
+                        const cleanEmployeeName = info.employee_name.replace(/\s+/g, ' ').trim();
+                        await executeTurso(`DELETE FROM Employments WHERE employee_name = ? AND position = ? AND survey_name = ? AND contract_start_date = ? AND contract_end_date = ?`, [
+                            cleanEmployeeName,
+                            info.position_title,
+                            info.survey_name,
+                            info.contract_start_date,
+                            info.contract_end_date
+                        ]);
+                    }
+                } catch(err) {
+                    console.error("Turso rating delete error:", err);
+                }
+            }
+            // --- END SYNC RATING ---
+
             return res.json({ message: 'Employment record updated successfully.' });
         }
 
@@ -609,7 +907,20 @@ router.delete('/:id', async (req, res) => {
         const [result] = await dbPool.query('DELETE FROM employments WHERE id = ?', [id]);
         if (result.affectedRows === 0) return res.status(404).json({ error: 'Record not found during deletion.' });
 
-        res.json({ message: 'Employment record deleted successfully' });
+        let cloudSyncSuccess = true;
+        try {
+            await executeTurso(`DELETE FROM Employments WHERE id = ?`, [id]);
+        } catch (tursoErr) {
+            console.error('Failed to delete employment from Cloud Database:', tursoErr);
+            cloudSyncSuccess = false;
+        }
+
+        let warning = null;
+        if (!cloudSyncSuccess) {
+            warning = "Employment deleted locally, but Cloud Sync failed due to network issues.";
+        }
+
+        res.json({ message: 'Employment record deleted successfully', warning });
     } catch (err) {
         console.error(`Database error during employment deletion: ${err.message}`);
         return res.status(500).json({ error: 'Database error.' });
@@ -812,7 +1123,7 @@ router.post('/surveys', async (req, res) => {
             [name.trim(), contract_start_date || null, contract_end_date || null, focal_person_id || null, rating_criteria || null, hiring_date || null, positions ? JSON.stringify(positions) : null]
         );
         
-        // Sync to Turso only if we have hiring_date and positions (ongoing/upcoming surveys)
+        // Sync to Cloud Database only if we have hiring_date and positions (ongoing/upcoming surveys)
         if (hiring_date && positions && Array.isArray(positions) && positions.length > 0) {
             try {
                 const tursoSurveyName = JSON.stringify({ id: result.insertId, name: name.trim() });
@@ -917,13 +1228,13 @@ router.put('/surveys/:id', async (req, res) => {
             }
         }
         
-        // Sync to Turso
+        // Sync to Cloud Database
         if (hiring_date && positions && Array.isArray(positions) && positions.length > 0) {
             try {
                 const tursoSurveyName = JSON.stringify({ id: Number(id), name: trimmedName });
                 const positionsJson = JSON.stringify(positions);
                 
-                // Use survey id to update exactly the matching record (json_extract works in Turso/SQLite)
+                // Use survey id to update exactly the matching record (json_extract works in Cloud Database/SQLite)
                 // We'll try to update first. If rows affected = 0, we can insert.
                 const tursoResult = await executeTurso(
                     "UPDATE name_of_surveys SET survey_name = ?, hiring_end_date = ?, position = ? WHERE json_extract(survey_name, '$.id') = ?",

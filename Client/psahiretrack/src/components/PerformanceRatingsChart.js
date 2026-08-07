@@ -20,7 +20,7 @@ const PerformanceRatingsChart = ({ data, isDarkMode }) => {
     }))
     .sort((a, b) => RATING_ORDER.indexOf(a.name) - RATING_ORDER.indexOf(b.name));
 
-    const tickColor = isDarkMode ? '#A0AEC0' : '#4A5568';
+    const tickColor = isDarkMode ? '#FFFFFF' : '#4A5568';
     const gridStrokeColor = isDarkMode ? '#A0AEC0' : '#E2E8F0';
 
     return (

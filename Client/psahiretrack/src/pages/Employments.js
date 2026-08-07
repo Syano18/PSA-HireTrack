@@ -160,6 +160,7 @@ const Employments = () => {
   const [surveys, setSurveys] = useState([]);
   const [focalPersons, setFocalPersons] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
   const [filters, setFilters] = useState({ query: '' });
 
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -183,6 +184,7 @@ const Employments = () => {
   const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
   const [syncModalStep, setSyncModalStep] = useState('filter');
   const [isSyncLoading, setIsSyncLoading] = useState(false);
+  const [isSyncingRatings, setIsSyncingRatings] = useState(false);
   const [syncSelectedSurveyName, setSyncSelectedSurveyName] = useState('');
   const [syncSelectedPosition, setSyncSelectedPosition] = useState('');
   const [syncAvailableSurveys, setSyncAvailableSurveys] = useState([]);
@@ -634,14 +636,22 @@ const Employments = () => {
     const endpoint = editingRecord ? `employments/${editingRecord.id}` : 'employments';
     const method = editingRecord ? 'PUT' : 'POST';
 
+    setIsSaving(true);
+    if (!editingRecord) {
+        showToast('Saving record and sending email to focal person...', 'info');
+    }
+
     try {
-      await apiFetch(endpoint, serverIp, { // 3. PASS serverIp
+      const response = await apiFetch(endpoint, serverIp, { // 3. PASS serverIp
         method,
         body: JSON.stringify(body)
       });
       handleCloseAddEditModal();
       fetchData();
-      showToast(editingRecord ? 'Employment record updated successfully.' : 'Employment record added successfully.', 'success');
+      showToast(response.message || (editingRecord ? 'Employment record updated successfully.' : 'Employment record added successfully.'), 'success');
+      if (response.warning) {
+          showToast(response.warning, 'warning');
+      }
     } catch (err) {
           try {
               const parsedError = JSON.parse(err.message);
@@ -649,6 +659,8 @@ const Employments = () => {
           } catch (e) {
               showToast(err.message, 'error');
           }
+        } finally {
+            setIsSaving(false);
         }
     };
 
@@ -660,13 +672,16 @@ const Employments = () => {
   const confirmDelete = async () => {
     if (!recordToDelete || !sessionState) return;
     try {
-      await apiFetch(`employments/${recordToDelete.id}`, serverIp, { // 3. PASS serverIp
+      const response = await apiFetch(`employments/${recordToDelete.id}`, serverIp, { // 3. PASS serverIp
         method: 'DELETE',
         body: JSON.stringify({ actingUserId: sessionState.user.id })
       });
       setRecordToDelete(null);
       fetchData();
-      showToast('Employment record deleted successfully.', 'success');
+      showToast(response.message || 'Employment record deleted successfully.', 'success');
+      if (response.warning) {
+          showToast(response.warning, 'warning');
+      }
     } catch (err) {
       showToast(err.message, 'error');
       setRecordToDelete(null);
@@ -742,6 +757,9 @@ const Employments = () => {
             body: JSON.stringify({ applicantIds, actingUserId: sessionState?.user?.id })
         });
         showToast(result.message, 'success');
+        if (result.warning) {
+            showToast(result.warning, 'warning');
+        }
         handleCloseSyncModal();
         setTimeout(() => {
             window.location.reload();
@@ -750,6 +768,25 @@ const Employments = () => {
         showToast(err.message, 'error');
     } finally {
         setIsSyncLoading(false);
+    }
+  };
+
+  const handleSyncRatingsClick = async () => {
+    if (!sessionState) return;
+    setIsSyncingRatings(true);
+    try {
+        const response = await apiFetch('employments/sync-ratings', serverIp, {
+            method: 'POST',
+            body: JSON.stringify({ actingUserId: sessionState.user.id })
+        });
+        showToast(response.message, 'success');
+        if (response.syncedCount > 0) {
+            fetchData();
+        }
+    } catch (err) {
+        showToast(err.message || 'Failed to sync ratings from Cloud Database.', 'error');
+    } finally {
+        setIsSyncingRatings(false);
     }
   };
 
@@ -863,6 +900,13 @@ const Employments = () => {
               className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-purple-600 rounded-lg hover:bg-purple-700 dark:bg-purple-700 dark:hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <FiDownload className="w-5 h-5" />{isSyncLoading ? 'Loading...' : `Assign Employment to Hired (${syncPendingCount})`}
+            </button>
+            <button 
+              onClick={handleSyncRatingsClick} 
+              disabled={isSyncingRatings} 
+              className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <FiDownload className="w-5 h-5" />{isSyncingRatings ? 'Syncing...' : 'Sync Ratings from Cloud'}
             </button>
             <button onClick={handleBatchEditClick} disabled={selectedRecords.size <= 1} title={selectedRecords.size <= 1 ? 'Select at least 2 records to batch edit' : `Batch edit ${selectedRecords.size} records`} className="px-4 py-2.5 text-sm font-semibold text-white bg-purple-600 rounded-lg hover:bg-purple-700 dark:bg-purple-700 dark:hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed">Batch Edit ({selectedRecords.size})</button>
           </>
@@ -1007,11 +1051,23 @@ const Employments = () => {
               <button 
                   type="submit" 
                   form="employmentForm" 
-                  disabled={!formData.employee_id || !formData.position_id || !formData.survey_id || (editingRecord && !hasChanges)}
+                  disabled={!formData.employee_id || !formData.position_id || !formData.survey_id || (editingRecord && !hasChanges) || isSaving}
                   title={!formData.employee_id || !formData.position_id || !formData.survey_id ? 'Please fill in all required fields' : (editingRecord && !hasChanges) ? 'No changes made' : 'Save record'}
                   className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                  <FiSave className="w-4 h-4" />Save Record
+                  {isSaving ? (
+                      <>
+                          <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                          Saving...
+                      </>
+                  ) : (
+                      <>
+                          <FiSave className="w-4 h-4" />Save Record
+                      </>
+                  )}
               </button>
             </div>
           </div>

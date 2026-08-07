@@ -8,10 +8,12 @@ import { apiFetch } from '../components/API';
 import ToastContainer from '../components/ToastContainer';
 import useToast from '../hooks/useToast';
 import { useSettings } from '../context/SettingsContext';
+import { useTheme } from '../context/ThemeContext';
 
 const Cover = require('../assets/cover.jpg');
 
-const Dashboard = ({ user, isDarkMode }) => {
+const Dashboard = () => {
+    const { isDarkMode } = useTheme();
     const { serverIp, isLoading: isSettingsLoading } = useSettings();
     const { toasts, showToast, removeToast } = useToast();
     const [isLoading, setIsLoading] = useState(true);
@@ -93,13 +95,13 @@ const Dashboard = ({ user, isDarkMode }) => {
         <div className="bg-gray-100 dark:bg-gray-900 flex-1 w-full flex flex-col min-h-0">
             <ToastContainer toasts={toasts} onClose={removeToast} />
             <h1 className="text-2xl lg:text-3xl font-bold text-gray-900 dark:text-white mb-2">Dashboard Overview</h1>
-            <div className="mb-4 lg:mb-6 h-28 sm:h-32 lg:h-48 flex-shrink-0">
+            <div className="mb-4 lg:mb-6 h-40 sm:h-48 lg:h-64 flex-shrink-0">
                 <motion.div
                     className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-2 lg:p-4 h-full"
                     whileHover={{ scale: 1.01 }}
                     transition={{ type: "spring", stiffness: 300 }}
                 >
-                    <img src={Cover} alt="System Icon" className="h-full w-full object-contain rounded-lg" />
+                    <img src={Cover} alt="System Icon" className="h-full w-full object-cover rounded-lg" />
                 </motion.div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-6 mb-4 lg:mb-6 flex-shrink-0">

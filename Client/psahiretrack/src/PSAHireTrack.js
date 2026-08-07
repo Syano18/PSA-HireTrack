@@ -102,9 +102,23 @@ const ClerkWithRoutes = ({ children }) => {
 
 // --- Final Exported Component ---
 // This is what you import in index.js
+
+const MobileBlocker = () => (
+    <div className="md:hidden fixed inset-0 z-[9999] bg-white dark:bg-gray-900 flex flex-col items-center justify-center p-6 text-center">
+        <svg className="w-20 h-20 text-blue-600 dark:text-blue-500 mb-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path>
+        </svg>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-4">Screen Too Small</h1>
+        <p className="text-gray-600 dark:text-gray-400 text-lg">
+            PSA HireTrack is optimized for laptops and desktop computers. Please open this application on a larger screen to continue.
+        </p>
+    </div>
+);
+
 const PSAHireTrack = () => {
     return (
         <Router>
+            <MobileBlocker />
             <ClerkWithRoutes>
                 <ThemeProvider>
                     <SettingsProvider>

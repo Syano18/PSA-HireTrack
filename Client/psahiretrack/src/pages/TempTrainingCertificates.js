@@ -220,7 +220,9 @@ const TempTrainingCertificates = () => {
     try {
       const payload = { certificates: data, transmitterName, encodedBy, certType: finalCertType };
       
-      const response = await fetch(`http://${serverIp}:80/api/generate-batch-training-certificate`, {
+      const protocol = window.location.protocol;
+      const port = protocol === 'https:' ? 443 : 80;
+      const response = await fetch(`${protocol}//${serverIp}:${port}/api/generate-batch-training-certificate`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
